@@ -13,7 +13,9 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies with better caching
-RUN npm ci --omit=dev --no-cache --prefer-offline
+# Note: --no-cache is invalid for npm ci and causes build failures
+# Using --prefer-offline for better Docker layer caching
+RUN npm ci --omit=dev --prefer-offline --no-audit
 
 # Copy source code
 COPY . .
