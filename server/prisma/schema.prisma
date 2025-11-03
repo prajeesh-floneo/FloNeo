@@ -1,0 +1,499 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            Int             @id @default(autoincrement())
+  email         String          @unique
+  password      String
+  createdAt     DateTime        @default(now())
+  role          String          @default("developer") // Simplified to developer-only
+  updatedAt     DateTime        @default(now()) @updatedAt
+  verified      Boolean         @default(true) // Developers are pre-verified
+  apps          App[]
+  // ownedProjects Project[]       @relation("ProjectOwner") // REMOVED: Project table dropped
+  notifications Notification[]
+  canvasHistory CanvasHistory[]
+  mediaFiles    MediaFile[]
+  publications  AppPublication[]
+}
+
+model App {
+  id          Int         @id @default(autoincrement())
+  name        String
+  description String?
+  status      AppStatus   @default(Draft)
+  archived    Boolean     @default(false)
+  ownerId     Int
+  templateId  Int?        // Optional: if created from template
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  // Publishing fields
+  isPublished Boolean     @default(false)
+  publishedVersion String?
+  publishedAt DateTime?
+  owner       User        @relation(fields: [ownerId], references: [id])
+  template    Template?   @relation(fields: [templateId], references: [id])
+  components  Component[]
+  workflows   Workflow[]
+  schemas     AppSchema[]
+  metrics     AppMetric[]
+  issues      AppIssue[]
+  warnings    AppWarning[]
+  canvas      Canvas?
+  mediaFiles  MediaFile[]
+  userTables  UserTable[]
+  queryPerformance QueryPerformance[]
+  publications AppPublication[]
+
+  @@index([ownerId])
+  @@index([status])
+  @@index([templateId])
+  @@index([isPublished])
+}
+
+model Template {
+  id           Int      @id @default(autoincrement())
+  name         String
+  description  String
+  preview_image String? // URL to preview image
+  app_schema   Json     // Template structure/configuration
+  category     String   @default("General") // e.g., "Form", "Dashboard", "E-commerce"
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  apps         App[]    // Apps created from this template
+
+  @@index([category])
+}
+
+model Component {
+  id         Int    @id @default(autoincrement())
+  name       String
+  type       String
+  appId      Int
+  properties Json
+  app        App    @relation(fields: [appId], references: [id])
+}
+
+model Workflow {
+  id        Int      @id @default(autoincrement())
+  name      String
+  appId     Int
+  pageId    String?  // Page ID this workflow belongs to
+  elementId String?  // Canvas element ID this workflow is linked to
+  nodes     Json     // Workflow nodes array
+  edges     Json     // Workflow edges/connectors array
+  metadata  Json?    // Additional workflow metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  app       App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@unique([appId, elementId])  // Ensure one workflow per element per app
+  @@index([appId])
+  @@index([pageId])
+  @@index([elementId])
+}
+
+model Otp {
+  id        Int      @id @default(autoincrement())
+  email     String
+  otp       String
+  type      String
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([email, type])
+}
+
+// model Project {
+//   id             Int             @id @default(autoincrement())
+//   name           String
+//   description    String?
+//   ownerId        Int
+//   createdAt      DateTime        @default(now())
+//   updatedAt      DateTime        @updatedAt
+//   deletedAt      DateTime?
+//   activationDate DateTime?
+//   favorite       Boolean?        @default(false)
+//   status         String          @default("Inactive")
+//   owner          User            @relation("ProjectOwner", fields: [ownerId], references: [id])
+//
+//   @@index([ownerId])
+//   @@index([status])
+//   @@index([deletedAt])
+//   @@index([activationDate])
+//   @@index([deletedAt], map: "idx_project_deleted")
+//   @@index([ownerId], map: "idx_project_owner")
+// }
+// REMOVED: Project table dropped from database
+
+model AppSchema {
+  id            Int        @id @default(autoincrement())
+  appId         Int
+  name          String
+  createdAt     DateTime   @default(now())
+  data          AppData[]
+  relatedFields AppField[] @relation("FieldRelation")
+  fields        AppField[]
+  app           App        @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@index([appId])
+}
+
+model AppField {
+  id              Int        @id @default(autoincrement())
+  schemaId        Int
+  name            String
+  type            FieldType
+  constraints     Json       @default("{}")
+  relatedSchemaId Int?
+  createdAt       DateTime   @default(now())
+  relatedSchema   AppSchema? @relation("FieldRelation", fields: [relatedSchemaId], references: [id])
+  schema          AppSchema  @relation(fields: [schemaId], references: [id], onDelete: Cascade)
+
+  @@index([schemaId])
+}
+
+model AppData {
+  id        Int       @id @default(autoincrement())
+  schemaId  Int
+  data      Json
+  createdAt DateTime  @default(now())
+  schema    AppSchema @relation(fields: [schemaId], references: [id], onDelete: Cascade)
+
+  @@index([schemaId])
+}
+
+model Video {
+  id        Int      @id @default(autoincrement())
+  title     String
+  url       String
+  category  String
+  createdAt DateTime @default(now())
+
+  @@index([category])
+}
+
+model AppMetric {
+  id         Int      @id @default(autoincrement())
+  appId      Int
+  activeDays Int
+  downtime   Float
+  totalUsers Int
+  traffic    Int
+  createdAt  DateTime @default(now())
+  app        App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@index([appId])
+  @@index([createdAt])
+}
+
+model AppIssue {
+  id          Int           @id @default(autoincrement())
+  appId       Int
+  severity    IssueSeverity
+  description String
+  status      IssueStatus   @default(open)
+  createdAt   DateTime      @default(now())
+  app         App           @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@index([appId])
+  @@index([severity])
+  @@index([status])
+}
+
+model AppWarning {
+  id        Int      @id @default(autoincrement())
+  appId     Int
+  message   String
+  createdAt DateTime @default(now())
+  app       App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@index([appId])
+  @@index([createdAt])
+}
+
+model Notification {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  type      String
+  message   String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([read])
+  @@index([createdAt])
+}
+
+model BlacklistedToken {
+  id        Int      @id @default(autoincrement())
+  token     String   @unique
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([token])
+  @@index([expiresAt])
+}
+
+// model backup_users_20250916 {
+//   id        Int      @id @default(autoincrement())
+//   email     String   @unique
+//   password  String
+//   createdAt DateTime @default(now())
+//   role      String   @default("user")
+//   updatedAt DateTime @default(now()) @updatedAt
+//   verified  Boolean  @default(false)
+//
+//   @@map("backup_users_20250916")
+// }
+// REMOVED: Backup table dropped from database
+
+// model backup_notifications_20250916 {
+//   id        Int      @id @default(autoincrement())
+//   userId    Int
+//   type      String
+//   message   String
+//   read      Boolean  @default(false)
+//   createdAt DateTime @default(now())
+//
+//   @@map("backup_notifications_20250916")
+// }
+// REMOVED: Backup table dropped from database
+
+// ProjectInvite, ProjectMember and RefreshToken models removed - simplified single-developer ownership and authentication
+
+enum FieldType {
+  text
+  number
+  date
+}
+
+enum IssueSeverity {
+  severe
+  mild
+  low
+}
+
+enum IssueStatus {
+  open
+  resolved
+}
+
+enum AppStatus {
+  Draft
+  Published
+  Active
+}
+
+// ===== DRAG-AND-DROP CANVAS MODELS =====
+
+model Canvas {
+  id          Int             @id @default(autoincrement())
+  appId       Int             @unique
+  name        String          @default("Untitled Canvas")
+  description String?
+  width       Int             @default(1200)
+  height      Int             @default(800)
+  background  Json            @default("{\"color\": \"#ffffff\", \"opacity\": 100}")
+  canvasState Json?           // Store full pages array and multi-page state
+  gridEnabled Boolean         @default(true)
+  snapEnabled Boolean         @default(true)
+  zoomLevel   Float           @default(1.0)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  app         App             @relation(fields: [appId], references: [id], onDelete: Cascade)
+  elements    CanvasElement[]
+  history     CanvasHistory[]
+
+  @@index([appId])
+}
+
+model CanvasElement {
+  id            Int                    @id @default(autoincrement())
+  canvasId      Int
+  elementId     String                 @unique // UUID for frontend reference
+  type          ElementType
+  name          String                 @default("Untitled Element")
+  x             Float                  @default(0)
+  y             Float                  @default(0)
+  width         Float                  @default(100)
+  height        Float                  @default(50)
+  rotation      Float                  @default(0)
+  zIndex        Int                    @default(0)
+  locked        Boolean                @default(false)
+  visible       Boolean                @default(true)
+  groupId       String?                // For grouping elements
+  parentId      Int?                   // For nested elements
+  properties    Json                   @default("{}")
+  styles        Json                   @default("{}")
+  constraints   Json                   @default("{}")
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
+  canvas        Canvas                 @relation(fields: [canvasId], references: [id], onDelete: Cascade)
+  parent        CanvasElement?         @relation("ElementHierarchy", fields: [parentId], references: [id])
+  children      CanvasElement[]        @relation("ElementHierarchy")
+  interactions  ElementInteraction[]
+  validations   ElementValidation[]
+
+  @@index([canvasId])
+  @@index([elementId])
+  @@index([type])
+  @@index([groupId])
+  @@index([zIndex])
+}
+
+model ElementInteraction {
+  id        Int           @id @default(autoincrement())
+  elementId Int
+  event     String        // click, hover, focus, blur, change, etc.
+  action    Json          // Action configuration
+  createdAt DateTime      @default(now())
+  element   CanvasElement @relation(fields: [elementId], references: [id], onDelete: Cascade)
+
+  @@index([elementId])
+}
+
+model ElementValidation {
+  id        Int           @id @default(autoincrement())
+  elementId Int
+  rule      String        // required, minLength, maxLength, pattern, etc.
+  value     Json          // Validation configuration
+  message   String        // Error message
+  createdAt DateTime      @default(now())
+  element   CanvasElement @relation(fields: [elementId], references: [id], onDelete: Cascade)
+
+  @@index([elementId])
+}
+
+model CanvasHistory {
+  id        Int      @id @default(autoincrement())
+  canvasId  Int
+  action    String   // create, update, delete, move, resize, etc.
+  elementId String?  // Element affected (null for canvas-wide changes)
+  oldState  Json?    // Previous state
+  newState  Json?    // New state
+  userId    Int      // User who made the change
+  createdAt DateTime @default(now())
+  canvas    Canvas   @relation(fields: [canvasId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@index([canvasId])
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model MediaFile {
+  id              Int      @id @default(autoincrement())
+  filename        String
+  originalName    String
+  mimeType        String
+  size            Int      // File size in bytes
+  url             String   // Storage URL/path
+  path            String?  // Local file path
+  thumbnail       String?  // Thumbnail URL for images/videos
+  userId          Int      // Owner of the file
+  appId           Int?     // Associated app (optional)
+  elementId       String?  // Canvas element ID for OnDrop files
+  workflowId      Int?     // Workflow that processed this file
+  dropPosition    Json?    // Drop position coordinates
+  validationResult Json?   // File validation results
+  metadata        Json     @default("{}")
+  createdAt       DateTime @default(now())
+  user            User     @relation(fields: [userId], references: [id])
+  app             App?     @relation(fields: [appId], references: [id])
+
+  @@index([userId])
+  @@index([appId])
+  @@index([mimeType])
+  @@index([elementId])
+  @@index([workflowId])
+}
+
+enum ElementType {
+  TEXT_FIELD
+  TEXT_AREA
+  DROPDOWN
+  CHECKBOX
+  RADIO_BUTTON
+  PHONE_FIELD
+  TOGGLE
+  DATE_PICKER
+  IMAGE
+  BUTTON
+  UPLOAD_MEDIA
+  ADD_MEDIA
+  SHAPE
+  ICON_MINIMIZE
+  ICON_MAXIMIZE
+  ICON_CLOSE
+  ICON_SETTINGS
+  ICON_REFRESH
+  ICON_INFO
+  ICON_HELP
+  ICON_SEARCH
+}
+
+// UserTable model to track dynamically created tables by db.create blocks
+model UserTable {
+  id          Int      @id @default(autoincrement())
+  appId       Int
+  tableName   String   // Name of the dynamically created table
+  columns     Json     // Column definitions with types and metadata
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  app         App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@unique([appId, tableName]) // Ensure unique table names per app
+  @@index([appId])
+  @@index([tableName])
+}
+
+// QueryPerformance model to track database query performance
+model QueryPerformance {
+  id              Int      @id @default(autoincrement())
+  appId           Int
+  tableName       String
+  queryType       String   // 'find', 'update', 'create', 'delete'
+  executionTimeMs Int      // Query execution time in milliseconds
+  rowCount        Int      // Number of rows affected/returned
+  createdAt       DateTime @default(now())
+  app             App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@index([appId])
+  @@index([tableName])
+  @@index([queryType])
+  @@index([createdAt])
+}
+
+// AppPublication model to track published versions of apps
+model AppPublication {
+  id              Int      @id @default(autoincrement())
+  appId           Int
+  name            String   // Published app name (can be different from app name)
+  description     String   // Published app description
+  version         String   // Version number (e.g., "1.0.0")
+  isPublic        Boolean  @default(false) // Whether the app is publicly discoverable
+  publishedAt     DateTime @default(now())
+  canvasSnapshot  String?  // JSON snapshot of canvas state at time of publishing
+  publishedBy     Int      // User ID who published this version
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  app             App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  user            User     @relation(fields: [publishedBy], references: [id])
+
+  @@unique([appId, version]) // Ensure unique versions per app
+  @@index([appId])
+  @@index([isPublic])
+  @@index([publishedAt])
+  @@index([publishedBy])
+}

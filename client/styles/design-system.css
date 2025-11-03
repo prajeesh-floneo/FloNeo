@@ -1,0 +1,306 @@
+/**
+ * Floneo Design System
+ * Single source of truth for all colors, tokens, and theme variables
+ * Import this file once in your app root - all pages/components read from these variables
+ */
+
+/* ============================================================================
+   SHARED TOKENS (theme-independent)
+   ============================================================================ */
+:root {
+  /* Radius tokens */
+  --radius-xs: 6px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+
+  /* Shadow tokens */
+  --shadow-1: 0 4px 16px rgba(3, 10, 28, 0.08);
+  --shadow-2: 0 10px 30px rgba(3, 10, 28, 0.22);
+
+  /* Glass tokens */
+  --glass-bg: rgba(255, 255, 255, 0.55);
+  --glass-bg-dark: rgba(18, 21, 34, 0.55);
+  --glass-blur: 14px;
+
+  /* Focus outline */
+  --focus-outline: 3px solid var(--accent);
+}
+
+/* ============================================================================
+   LIGHT THEME
+   ============================================================================ */
+:root[data-theme="light"] {
+  /* Brand colors */
+  --brand-blue: #0066FF;
+  --brand-pink: #FF4FCB;
+  --brand-green: #2ECC71;
+  --brand-yellow: #FFC107;
+
+  /* Neutrals */
+  --bg-0: #ffffff;
+  --bg-1: #F7F8FA;
+  --bg-2: #EDF0F5;
+  --text-1: #0F1222;
+  --text-2: #42465A;
+  --border-1: #E3E6ED;
+
+  /* Derived surfaces */
+  --app-bg: linear-gradient(180deg, #F8FBFF 0%, #F2F5FA 100%);
+  --surface: var(--bg-0);
+  --panel: color-mix(in oklab, var(--bg-0) 84%, var(--brand-blue) 6%);
+  --panel-glass: var(--glass-bg);
+
+  /* Accents & semantic */
+  --accent: var(--brand-blue);
+  --accent-2: var(--brand-pink);
+  --success: var(--brand-green);
+  --warn: var(--brand-yellow);
+  --danger: #FF4D4F;
+
+  /* Shape */
+  --radius: 14px;
+  --shadow: var(--shadow-1);
+  --ring: 0 0 0 3px color-mix(in oklab, var(--accent) 28%, transparent);
+}
+
+/* ============================================================================
+   DARK THEME
+   ============================================================================ */
+:root[data-theme="dark"] {
+  /* Brand colors (slightly brighter for dark backgrounds) */
+  --brand-blue: #4D8DFF;
+  --brand-pink: #FF74DA;
+  --brand-green: #45DB9A;
+  --brand-yellow: #FFD250;
+
+  /* Neutrals */
+  --bg-0: #0D0F16;
+  --bg-1: #121522;
+  --bg-2: #171A2A;
+  --text-1: #E9ECF8;
+  --text-2: #ABB1C6;
+  --border-1: #24283A;
+
+  /* Derived surfaces */
+  --app-bg: radial-gradient(1200px 800px at 70% 0%, #151A2B 0%, #0D0F16 65%);
+  --surface: var(--bg-1);
+  --panel: color-mix(in oklab, var(--bg-1) 88%, var(--brand-pink) 6%);
+  --panel-glass: var(--glass-bg-dark);
+
+  /* Accents & semantic */
+  --accent: var(--brand-blue);
+  --accent-2: var(--brand-pink);
+  --success: var(--brand-green);
+  --warn: var(--brand-yellow);
+  --danger: #FF6163;
+
+  /* Shape */
+  --radius: 14px;
+  --shadow: var(--shadow-2);
+  --ring: 0 0 0 3px color-mix(in oklab, var(--accent) 28%, transparent);
+}
+
+/* ============================================================================
+   PRIMITIVE UTILITY CLASSES
+   ============================================================================ */
+
+/* Layout backgrounds */
+.app-bg {
+  background: var(--app-bg);
+}
+
+.surface {
+  background: var(--surface);
+  color: var(--text-1);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.panel--glass {
+  background: var(--panel-glass);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid color-mix(in oklab, var(--border-1) 70%, transparent);
+  border-radius: var(--radius);
+}
+
+/* Text utilities */
+.text-1 {
+  color: var(--text-1);
+}
+
+.text-2 {
+  color: var(--text-2);
+}
+
+.link {
+  color: var(--accent);
+}
+
+.muted {
+  color: var(--text-2);
+}
+
+/* Button primitives */
+.btn {
+  --btn-bg: color-mix(in oklab, var(--accent) 94%, #ffffff 0%);
+  --btn-fg: white;
+  background: var(--btn-bg);
+  color: var(--btn-fg);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  border: 0;
+  box-shadow: var(--shadow);
+  transition: transform 0.12s ease, box-shadow 0.2s ease, filter 0.2s ease;
+  cursor: pointer;
+}
+
+.btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.03);
+}
+
+.btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 35%, transparent);
+}
+
+.btn--ghost {
+  background: transparent;
+  color: var(--text-1);
+  border: 1px solid var(--border-1);
+}
+
+.btn--ghost:hover {
+  background: color-mix(in oklab, var(--surface) 95%, var(--accent) 5%);
+}
+
+/* Input primitives */
+.input,
+.select,
+.textarea {
+  background: var(--surface);
+  color: var(--text-1);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  box-shadow: 0 0 0 0 transparent;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.input:focus,
+.select:focus,
+.textarea:focus {
+  outline: none;
+  border-color: color-mix(in oklab, var(--accent) 40%, var(--border-1));
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 24%, transparent);
+}
+
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--text-2);
+  opacity: 0.6;
+}
+
+/* Chips / tabs */
+.tab {
+  background: var(--surface);
+  color: var(--text-2);
+  border: 1px solid var(--border-1);
+  border-radius: 999px;
+  padding: 6px 12px;
+  transition: all 0.15s ease;
+  cursor: pointer;
+}
+
+.tab:hover {
+  border-color: color-mix(in oklab, var(--accent) 30%, var(--border-1));
+}
+
+.tab--active {
+  color: var(--text-1);
+  border-color: color-mix(in oklab, var(--accent) 45%, var(--border-1));
+  background: color-mix(in oklab, var(--accent) 8%, var(--surface));
+}
+
+/* Focus utility for custom focus rings */
+.focusable:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: 2px;
+  border-radius: inherit;
+}
+
+/* ============================================================================
+   ADDITIONAL COMPONENT UTILITIES
+   ============================================================================ */
+
+/* Card component */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow);
+  padding: 16px;
+}
+
+/* Divider */
+.divider {
+  border: 0;
+  border-top: 1px solid var(--border-1);
+  margin: 16px 0;
+}
+
+/* Badge */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: var(--radius-xs);
+  font-size: 12px;
+  font-weight: 500;
+  background: color-mix(in oklab, var(--accent) 12%, var(--surface));
+  color: var(--accent);
+}
+
+.badge--success {
+  background: color-mix(in oklab, var(--success) 12%, var(--surface));
+  color: var(--success);
+}
+
+.badge--warn {
+  background: color-mix(in oklab, var(--warn) 12%, var(--surface));
+  color: var(--warn);
+}
+
+.badge--danger {
+  background: color-mix(in oklab, var(--danger) 12%, var(--surface));
+  color: var(--danger);
+}
+
+/* Scrollbar styling */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: var(--bg-1);
+  border-radius: var(--radius-xs);
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, var(--accent) 30%, var(--bg-2));
+  border-radius: var(--radius-xs);
+  transition: background 0.2s ease;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--accent) 50%, var(--bg-2));
+}
+

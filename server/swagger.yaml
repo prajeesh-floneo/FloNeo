@@ -1,0 +1,1962 @@
+openapi: 3.0.0
+info:
+  title: FloNeo LCNC Platform API
+  description: RESTful API for the FloNeo Low-Code No-Code Platform
+  version: 1.0.0
+  contact:
+    name: FloNeo Team
+    email: support@floneo.com
+
+servers:
+  - url: http://localhost:5000
+    description: Development server
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [user, developer, admin]
+        verified:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    App:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [Draft, Published, Active]
+        ownerId:
+          type: integer
+        templateId:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        template:
+          $ref: '#/components/schemas/Template'
+          nullable: true
+
+    Template:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        preview_image:
+          type: string
+        category:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    AppMetrics:
+      type: object
+      properties:
+        activeDays:
+          type: integer
+        downtime:
+          type: object
+          properties:
+            total:
+              type: number
+            incidents:
+              type: array
+              items:
+                type: object
+        users:
+          type: object
+          properties:
+            total:
+              type: integer
+            active:
+              type: integer
+            new:
+              type: integer
+        traffic:
+          type: object
+          properties:
+            requests:
+              type: integer
+            bandwidth:
+              type: integer
+            avgResponseTime:
+              type: integer
+        issues:
+          type: integer
+        warnings:
+          type: integer
+
+    Project:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [DRAFT, RUNNING, COMPLETED, PENDING, ARCHIVED]
+        ownerId:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        owner:
+          $ref: '#/components/schemas/User'
+
+    ProjectMember:
+      type: object
+      properties:
+        id:
+          type: integer
+        userId:
+          type: integer
+        role:
+          type: string
+          enum: [owner, admin, member, viewer]
+        joinedAt:
+          type: string
+          format: date-time
+        user:
+          $ref: '#/components/schemas/User'
+
+    Error:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+
+    Success:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+        data:
+          type: object
+
+    # ===== CANVAS SCHEMAS =====
+    Canvas:
+      type: object
+      properties:
+        id:
+          type: integer
+        appId:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        width:
+          type: integer
+        height:
+          type: integer
+        background:
+          type: object
+          properties:
+            color:
+              type: string
+            opacity:
+              type: integer
+        gridEnabled:
+          type: boolean
+        snapEnabled:
+          type: boolean
+        zoomLevel:
+          type: number
+        elements:
+          type: array
+          items:
+            $ref: '#/components/schemas/CanvasElement'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CanvasElement:
+      type: object
+      properties:
+        id:
+          type: integer
+        elementId:
+          type: string
+        type:
+          type: string
+          enum: [TEXT_FIELD, TEXT_AREA, DROPDOWN, CHECKBOX, RADIO_BUTTON, PHONE_FIELD, TOGGLE, DATE_PICKER, IMAGE, BUTTON, UPLOAD_MEDIA, ADD_MEDIA, SHAPE]
+        name:
+          type: string
+        x:
+          type: number
+        y:
+          type: number
+        width:
+          type: number
+        height:
+          type: number
+        rotation:
+          type: number
+        zIndex:
+          type: integer
+        locked:
+          type: boolean
+        visible:
+          type: boolean
+        groupId:
+          type: string
+          nullable: true
+        parentId:
+          type: integer
+          nullable: true
+        properties:
+          type: object
+        styles:
+          type: object
+        constraints:
+          type: object
+        interactions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ElementInteraction'
+        validations:
+          type: array
+          items:
+            $ref: '#/components/schemas/ElementValidation'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CanvasElementCreate:
+      type: object
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          enum: [TEXT_FIELD, TEXT_AREA, DROPDOWN, CHECKBOX, RADIO_BUTTON, PHONE_FIELD, TOGGLE, DATE_PICKER, IMAGE, BUTTON, UPLOAD_MEDIA, ADD_MEDIA, SHAPE]
+        name:
+          type: string
+        x:
+          type: number
+          default: 0
+        y:
+          type: number
+          default: 0
+        width:
+          type: number
+          default: 100
+        height:
+          type: number
+          default: 50
+        rotation:
+          type: number
+          default: 0
+        zIndex:
+          type: integer
+          default: 0
+        groupId:
+          type: string
+        parentId:
+          type: integer
+        properties:
+          type: object
+          default: {}
+        styles:
+          type: object
+          default: {}
+        constraints:
+          type: object
+          default: {}
+
+    CanvasElementUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        x:
+          type: number
+        y:
+          type: number
+        width:
+          type: number
+        height:
+          type: number
+        rotation:
+          type: number
+        zIndex:
+          type: integer
+        locked:
+          type: boolean
+        visible:
+          type: boolean
+        groupId:
+          type: string
+        parentId:
+          type: integer
+        properties:
+          type: object
+        styles:
+          type: object
+        constraints:
+          type: object
+
+    ElementInteraction:
+      type: object
+      properties:
+        id:
+          type: integer
+        elementId:
+          type: integer
+        event:
+          type: string
+        action:
+          type: object
+        createdAt:
+          type: string
+          format: date-time
+
+    ElementValidation:
+      type: object
+      properties:
+        id:
+          type: integer
+        elementId:
+          type: integer
+        rule:
+          type: string
+        value:
+          type: object
+        message:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    MediaFile:
+      type: object
+      properties:
+        id:
+          type: integer
+        filename:
+          type: string
+        originalName:
+          type: string
+        mimeType:
+          type: string
+        size:
+          type: integer
+        url:
+          type: string
+        thumbnail:
+          type: string
+          nullable: true
+        userId:
+          type: integer
+        appId:
+          type: integer
+          nullable: true
+        metadata:
+          type: object
+        createdAt:
+          type: string
+          format: date-time
+
+paths:
+  /health:
+    get:
+      summary: Health check endpoint
+      responses:
+        '200':
+          description: API is running
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  timestamp:
+                    type: string
+                  version:
+                    type: string
+
+  /auth/signup:
+    post:
+      summary: Register a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 8
+                role:
+                  type: string
+                  enum: [user, developer, admin]
+                  default: user
+      responses:
+        '201':
+          description: User created successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Success'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          userId:
+                            type: integer
+                          email:
+                            type: string
+        '400':
+          description: Validation error or user already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/verify-otp:
+    post:
+      summary: Verify email with OTP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - otp
+              properties:
+                email:
+                  type: string
+                  format: email
+                otp:
+                  type: string
+                  pattern: '^[0-9]{6}$'
+      responses:
+        '200':
+          description: Email verified successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Success'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          user:
+                            $ref: '#/components/schemas/User'
+                          accessToken:
+                            type: string
+                          refreshToken:
+                            type: string
+        '400':
+          description: Invalid or expired OTP
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/login:
+    post:
+      summary: Login user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                rememberMe:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Success'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          user:
+                            $ref: '#/components/schemas/User'
+                          accessToken:
+                            type: string
+                          refreshToken:
+                            type: string
+        '401':
+          description: Invalid credentials or unverified email
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/forgot-password:
+    post:
+      summary: Request password reset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Password reset OTP sent (if email exists)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+
+  /auth/reset-password:
+    post:
+      summary: Reset password with OTP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - otp
+                - newPassword
+              properties:
+                email:
+                  type: string
+                  format: email
+                otp:
+                  type: string
+                  pattern: '^[0-9]{6}$'
+                newPassword:
+                  type: string
+                  minLength: 8
+      responses:
+        '200':
+          description: Password reset successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+        '400':
+          description: Invalid or expired OTP
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/refresh:
+    post:
+      summary: Refresh access token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - refreshToken
+              properties:
+                refreshToken:
+                  type: string
+      responses:
+        '200':
+          description: Token refreshed successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Success'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          accessToken:
+                            type: string
+        '401':
+          description: Invalid or expired refresh token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/logout:
+    post:
+      summary: Logout user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refreshToken:
+                  type: string
+      responses:
+        '200':
+          description: Logged out successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+
+  /api/apps:
+    get:
+      summary: List user's apps
+      description: Retrieve apps owned by the authenticated developer with pagination and filtering
+      tags:
+        - Apps
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [Draft, Published, Active]
+        - name: search
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Apps retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      apps:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/App'
+                      pagination:
+                        type: object
+    post:
+      summary: Create new app
+      description: Create a new app for the authenticated developer
+      tags:
+        - Apps
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  type: string
+                  example: "My Dashboard App"
+                description:
+                  type: string
+                  example: "A custom dashboard application"
+                templateId:
+                  type: integer
+                  example: 2
+                  description: "Optional template ID to create app from template"
+            examples:
+              custom_app:
+                summary: "Custom App (no template)"
+                value:
+                  name: "Custom Business App"
+                  description: "A custom application built from scratch"
+              template_app:
+                summary: "App from Template"
+                value:
+                  name: "My Dashboard"
+                  description: "Dashboard created from template"
+                  templateId: 2
+      responses:
+        '201':
+          description: App created successfully
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized
+
+  /api/apps/{id}/status:
+    get:
+      summary: Get app status and metrics
+      description: Retrieve app status and production metrics for dashboard
+      tags:
+        - Apps
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: App status retrieved successfully
+        '404':
+          description: App not found
+        '401':
+          description: Unauthorized
+    put:
+      summary: Update app status
+      description: Update app status (Draft → Published → Active)
+      tags:
+        - Apps
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Draft, Published, Active]
+      responses:
+        '200':
+          description: App status updated successfully
+        '400':
+          description: Invalid status value
+        '404':
+          description: App not found
+        '401':
+          description: Unauthorized
+
+  /api/templates:
+    get:
+      summary: List available templates
+      description: Retrieve all available templates for app creation
+      tags:
+        - Templates
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Templates retrieved successfully
+        '401':
+          description: Unauthorized
+
+  /api/projects:
+    get:
+      summary: List user's projects
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [DRAFT, RUNNING, COMPLETED, PENDING, ARCHIVED]
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: search
+          in: query
+          schema:
+            type: string
+            maxLength: 100
+      responses:
+        '200':
+          description: Projects retrieved successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Success'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          projects:
+                            type: array
+                            items:
+                              $ref: '#/components/schemas/Project'
+                          pagination:
+                            type: object
+                            properties:
+                              page:
+                                type: integer
+                              limit:
+                                type: integer
+                              total:
+                                type: integer
+                              pages:
+                                type: integer
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    post:
+      summary: Create new project
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                description:
+                  type: string
+                  maxLength: 500
+                status:
+                  type: string
+                  enum: [DRAFT, RUNNING, COMPLETED, PENDING, ARCHIVED]
+                  default: DRAFT
+      responses:
+        '201':
+          description: Project created successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Success'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          project:
+                            $ref: '#/components/schemas/Project'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/projects/{id}:
+    get:
+      summary: Get project details
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Project retrieved successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Success'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          project:
+                            allOf:
+                              - $ref: '#/components/schemas/Project'
+                              - type: object
+                                properties:
+                                  members:
+                                    type: array
+                                    items:
+                                      $ref: '#/components/schemas/ProjectMember'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Project not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    put:
+      summary: Update project
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                description:
+                  type: string
+                  maxLength: 500
+                status:
+                  type: string
+                  enum: [DRAFT, RUNNING, COMPLETED, PENDING, ARCHIVED]
+      responses:
+        '200':
+          description: Project updated successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Success'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          project:
+                            $ref: '#/components/schemas/Project'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Access denied - owner or admin required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Project not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    delete:
+      summary: Delete project
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '204':
+          description: Project deleted successfully
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Access denied - owner or admin required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Project not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/projects/{id}/schemas:
+    post:
+      summary: Create schema for project
+      tags:
+        - Projects
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Project ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                  example: "Customer"
+      responses:
+        '201':
+          description: Schema created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Schema created successfully"
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                        example: 1
+                      name:
+                        type: string
+                        example: "Customer"
+                      projectId:
+                        type: integer
+                        example: 35
+                      createdAt:
+                        type: string
+                        format: date-time
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    get:
+      summary: List schemas for project
+      tags:
+        - Projects
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Project ID
+      responses:
+        '200':
+          description: Schemas retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                          example: 1
+                        name:
+                          type: string
+                          example: "Customer"
+                        createdAt:
+                          type: string
+                          format: date-time
+
+  /api/schemas/{id}/data:
+    post:
+      summary: Store data for schema
+      tags:
+        - Schemas
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Schema ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - data
+              properties:
+                data:
+                  type: object
+                  example: {"email": "user@example.com", "name": "John Doe"}
+      responses:
+        '201':
+          description: Data stored successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Data stored successfully"
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                        example: 1
+                      schemaId:
+                        type: integer
+                        example: 1
+                      data:
+                        type: object
+                        example: {"email": "user@example.com"}
+                      createdAt:
+                        type: string
+                        format: date-time
+
+  /api/videos:
+    get:
+      summary: List videos
+      tags:
+        - Videos
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: category
+          in: query
+          schema:
+            type: string
+          description: Filter by category (e.g., "SOP")
+      responses:
+        '200':
+          description: Videos retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                          example: 1
+                        title:
+                          type: string
+                          example: "SOP1"
+                        url:
+                          type: string
+                          example: "https://example.com/sop1"
+                        category:
+                          type: string
+                          example: "SOP"
+                        createdAt:
+                          type: string
+                          format: date-time
+
+  /api/projects/{id}/metrics:
+    get:
+      summary: Get project metrics
+      tags:
+        - Projects
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Project ID
+      responses:
+        '200':
+          description: Metrics retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      activeDays:
+                        type: integer
+                        example: 5
+                      downtime:
+                        type: number
+                        format: float
+                        example: 2.5
+                      totalUsers:
+                        type: integer
+                        example: 100
+                      traffic:
+                        type: integer
+                        example: 1000
+                      createdAt:
+                        type: string
+                        format: date-time
+        '401':
+          description: Authentication required
+        '403':
+          description: Access denied
+        '404':
+          description: Project not found
+
+  /api/projects/{id}/issues:
+    get:
+      summary: Get project issues
+      tags:
+        - Projects
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Project ID
+      responses:
+        '200':
+          description: Issues retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                          example: 1
+                        severity:
+                          type: string
+                          enum: [severe, mild, low]
+                          example: "severe"
+                        description:
+                          type: string
+                          example: "Database connection timeout"
+                        status:
+                          type: string
+                          enum: [open, resolved]
+                          example: "open"
+                        createdAt:
+                          type: string
+                          format: date-time
+        '401':
+          description: Authentication required
+        '403':
+          description: Access denied
+        '404':
+          description: Project not found
+
+  /api/projects/{id}/warnings:
+    get:
+      summary: Get project warnings
+      tags:
+        - Projects
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Project ID
+      responses:
+        '200':
+          description: Warnings retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                          example: 1
+                        message:
+                          type: string
+                          example: "High traffic detected"
+                        createdAt:
+                          type: string
+                          format: date-time
+        '401':
+          description: Authentication required
+        '403':
+          description: Access denied
+        '404':
+          description: Project not found
+
+  /api/stats:
+    get:
+      summary: Get platform statistics
+      description: Retrieve platform-wide statistics including project counts and timeline data
+      tags:
+        - Stats
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Statistics retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      totalProjects:
+                        type: integer
+                        example: 25
+                      draftProjects:
+                        type: integer
+                        example: 10
+                      activeProjects:
+                        type: integer
+                        example: 15
+                      timelines:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            date:
+                              type: string
+                              format: date
+                              example: "2025-09-15"
+                            count:
+                              type: integer
+                              example: 3
+                  cached:
+                    type: boolean
+                    example: false
+                  responseTime:
+                    type: integer
+                    example: 45
+        '401':
+          description: Authentication required
+
+  # Admin notification sending removed - developer-only platform
+
+  /api/notifications/read:
+    get:
+      summary: Mark notifications as read
+      description: Mark all unread notifications for the authenticated user as read and return them
+      tags:
+        - Notifications
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Notifications marked as read successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "2 notifications marked as read"
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                          example: 1
+                        type:
+                          type: string
+                          example: "invite"
+                        message:
+                          type: string
+                          example: "You have been invited to a project"
+                        read:
+                          type: boolean
+                          example: true
+                        createdAt:
+                          type: string
+                          format: date-time
+        '401':
+          description: Authentication required
+
+  /api/notifications:
+    get:
+      summary: Get user notifications
+      description: Retrieve notifications for the authenticated user with pagination
+      tags:
+        - Notifications
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          description: Page number
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          description: Number of notifications per page
+          schema:
+            type: integer
+            default: 10
+        - name: unreadOnly
+          in: query
+          description: Filter to show only unread notifications
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Notifications retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                        type:
+                          type: string
+                        message:
+                          type: string
+                        read:
+                          type: boolean
+                        createdAt:
+                          type: string
+                          format: date-time
+                  pagination:
+                    type: object
+                    properties:
+                      page:
+                        type: integer
+                      limit:
+                        type: integer
+                      total:
+                        type: integer
+                      pages:
+                        type: integer
+        '401':
+          description: Authentication required
+
+  /api/floneo-ai/status:
+    get:
+      summary: Get Floneo AI system status
+      description: Returns the current status and capabilities of the Floneo AI system
+      tags:
+        - Floneo AI
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: AI system status retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                        example: "active"
+                      version:
+                        type: string
+                        example: "1.0.0"
+                      totalIdeas:
+                        type: integer
+                        example: 5
+        '401':
+          description: Unauthorized
+
+  /api/floneo-ai/ideas:
+    get:
+      summary: Get AI-generated app ideas
+      description: Returns AI-suggested app ideas with recommended templates
+      tags:
+        - Floneo AI
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: category
+          schema:
+            type: string
+            enum: [Insurance, CRM, Forms, E-commerce, Dashboards]
+          description: Filter ideas by category
+        - in: query
+          name: complexity
+          schema:
+            type: string
+            enum: [Low, Medium, High]
+          description: Filter ideas by complexity level
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10
+            default: 5
+          description: Number of ideas to return
+      responses:
+        '200':
+          description: AI ideas retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      ideas:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: integer
+                            name:
+                              type: string
+                            description:
+                              type: string
+                            suggestedTemplate:
+                              type: string
+                            templateId:
+                              type: integer
+                            category:
+                              type: string
+                            complexity:
+                              type: string
+                      totalIdeas:
+                        type: integer
+        '401':
+          description: Unauthorized
+
+  # ===== CANVAS APIS =====
+  /api/canvas/{appId}:
+    get:
+      summary: Get canvas for app
+      tags:
+        - Canvas
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: appId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Canvas retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Canvas'
+        '404':
+          description: App not found
+        '401':
+          description: Unauthorized
+    put:
+      summary: Update canvas properties
+      tags:
+        - Canvas
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: appId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                width:
+                  type: integer
+                height:
+                  type: integer
+                background:
+                  type: object
+                gridEnabled:
+                  type: boolean
+                snapEnabled:
+                  type: boolean
+                zoomLevel:
+                  type: number
+      responses:
+        '200':
+          description: Canvas updated successfully
+        '404':
+          description: App not found
+        '401':
+          description: Unauthorized
+
+  /api/canvas/{appId}/elements:
+    post:
+      summary: Create new canvas element
+      tags:
+        - Canvas Elements
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: appId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CanvasElementCreate'
+      responses:
+        '201':
+          description: Element created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/CanvasElement'
+        '400':
+          description: Invalid element data
+        '404':
+          description: App not found
+        '401':
+          description: Unauthorized
+
+  /api/canvas/{appId}/elements/{elementId}:
+    put:
+      summary: Update canvas element
+      tags:
+        - Canvas Elements
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: appId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: elementId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CanvasElementUpdate'
+      responses:
+        '200':
+          description: Element updated successfully
+        '404':
+          description: Element not found
+        '401':
+          description: Unauthorized
+    delete:
+      summary: Delete canvas element
+      tags:
+        - Canvas Elements
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: appId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: elementId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Element deleted successfully
+        '404':
+          description: Element not found
+        '401':
+          description: Unauthorized
+
+  /api/media/upload:
+    post:
+      summary: Upload media files
+      tags:
+        - Media
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                appId:
+                  type: integer
+      responses:
+        '200':
+          description: Files uploaded successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MediaFile'
+        '400':
+          description: No files uploaded or invalid file type
+        '401':
+          description: Unauthorized
