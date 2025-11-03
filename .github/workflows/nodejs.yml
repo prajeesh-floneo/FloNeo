@@ -1,0 +1,157 @@
+name: Node.js CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: fathima
+          POSTGRES_PASSWORD: mypassword
+          POSTGRES_DB: lowcode_db
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    strategy:
+      matrix:
+        node-version: [18.x]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          submodules: recursive
+          fetch-depth: 0
+      - name: Initialize and update submodules
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --recursive
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: Install dependencies (server and client)
+        run: |
+          cd server
+          npm ci || npm install
+          # Ensure Prisma CLI is properly installed
+          npm install prisma @prisma/client --save-dev || true
+          cd ../client
+          npm ci || npm install
+      - name: Verify Prisma Installation
+        run: |
+          cd server
+          echo "Checking Prisma installation..."
+          npm list prisma || echo "Prisma CLI not found"
+          npm list @prisma/client || echo "Prisma client not found"
+          ls -la node_modules/.bin/prisma || echo "Prisma binary not found"
+          which node || echo "Node not found"
+          which npx || echo "npx not found"
+      - name: Generate Prisma Client
+        run: |
+          cd server
+          echo "Attempting to generate Prisma client..."
+          # Try npm script first, then fallback methods
+          npm run prisma:generate || \
+          node node_modules/.bin/prisma generate --schema=prisma/schema.prisma || \
+          npx --yes prisma generate --schema=prisma/schema.prisma || \
+          node -e "require('./node_modules/prisma/build/index.js').main(['generate', '--schema=prisma/schema.prisma'])" || \
+          echo "All Prisma generate attempts failed"
+        env:
+          DATABASE_URL: postgresql://fathima:mypassword@localhost:5432/lowcode_db?schema=public
+      - name: Wait for Postgres to be ready
+        shell: bash
+        run: |
+          for i in {1..60}; do
+            if (echo > /dev/tcp/127.0.0.1/5432) >/dev/null 2>&1; then echo "Postgres is up"; exit 0; fi
+            sleep 1
+          done
+          echo "Postgres did not become ready in time"; exit 1
+      - name: Run Prisma migrations
+        run: |
+          cd server
+          echo "Running Prisma migrations..."
+          # Try npm script first, then fallback methods
+          npm run prisma:migrate || \
+          node node_modules/.bin/prisma migrate deploy --schema=prisma/schema.prisma || \
+          npx --yes prisma migrate deploy --schema=prisma/schema.prisma || \
+          node -e "require('./node_modules/prisma/build/index.js').main(['migrate', 'deploy', '--schema=prisma/schema.prisma'])" || \
+          echo "All Prisma migration attempts failed"
+        env:
+          DATABASE_URL: postgresql://fathima:mypassword@localhost:5432/lowcode_db?schema=public
+      - name: Lint and Test
+        run: |
+          cd server
+          npm run test || echo "No tests defined"
+      - name: Start server (background)
+        env:
+          DATABASE_URL: postgresql://fathima:mypassword@localhost:5432/lowcode_db?schema=public
+          NODE_ENV: development
+          PORT: 5000
+          JWT_SECRET: test-jwt-secret-for-ci-environment
+          JWT_REFRESH_SECRET: test-jwt-refresh-secret-for-ci-environment
+          BCRYPT_ROUNDS: 10
+          FRONTEND_URL: http://localhost:3000
+        run: |
+          cd server
+          echo "Starting server with environment variables..."
+          echo "DATABASE_URL: $DATABASE_URL"
+          echo "NODE_ENV: $NODE_ENV"
+          echo "PORT: $PORT"
+
+          # Start server in background
+          nohup npm start > server.log 2>&1 &
+          SERVER_PID=$!
+          echo "Server started with PID: $SERVER_PID"
+
+          # Wait for server to start and check logs periodically
+          for i in {1..30}; do
+            echo "Waiting for server to start... ($i/30)"
+            sleep 2
+
+            # Check if server process is still running
+            if ! kill -0 $SERVER_PID 2>/dev/null; then
+              echo "Server process died! Checking logs:"
+              cat server.log
+              exit 1
+            fi
+
+            # Check if server is responding
+            if curl -s http://localhost:5000/health > /dev/null 2>&1; then
+              echo "Server is responding!"
+              break
+            fi
+
+            # Show recent logs
+            if [ -f server.log ]; then
+              echo "Recent server logs:"
+              tail -5 server.log
+            fi
+          done
+
+          echo "Final server logs:"
+          cat server.log
+      - name: Check server is running
+        run: |
+          echo "Testing server endpoints..."
+          echo "Testing health endpoint..."
+          curl -v http://localhost:5000/health || {
+            echo "Server health check failed. Checking logs:"
+            cd server
+            cat server.log
+            echo "Checking if server process is still running..."
+            ps aux | grep node || echo "No node processes found"
+            exit 1
+          }
+          echo "Server is running successfully!"

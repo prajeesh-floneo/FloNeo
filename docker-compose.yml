@@ -1,0 +1,69 @@
+version: "3.8"
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:14-alpine
+    container_name: floneo-postgres
+    environment:
+      POSTGRES_USER: floneo
+      POSTGRES_PASSWORD: floneo123
+      POSTGRES_DB: floneo
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - floneo-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U floneo"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Backend API Server
+  backend:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: floneo-backend
+    environment:
+      DATABASE_URL: postgresql://floneo:floneo123@postgres:5432/floneo?schema=public
+      JWT_SECRET: floneo-docker-jwt-secret-key
+      JWT_REFRESH_SECRET: floneo-docker-refresh-secret-key
+      NODE_ENV: production
+      PORT: 5000
+    ports:
+      - "5000:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./server/uploads:/app/uploads
+    networks:
+      - floneo-network
+
+  # Frontend Next.js Application
+  frontend:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: floneo-frontend
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:5000
+      NEXT_PUBLIC_SOCKET_URL: http://localhost:5000
+      BACKEND_URL: http://backend:5000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - floneo-network
+
+volumes:
+  postgres_data:
+
+networks:
+  floneo-network:
+    driver: bridge
