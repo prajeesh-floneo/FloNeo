@@ -5,7 +5,8 @@ RUN apk add --no-cache \
     python3 \
     make \
     g++ \
-    libc6-compat
+    libc6-compat \
+    curl
 
 WORKDIR /app
 
@@ -34,8 +35,8 @@ RUN mkdir -p uploads/thumbnails
 EXPOSE 5000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:5000/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })" || exit 1
+HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=5 \
+  CMD curl -f http://localhost:5000/health || exit 1
 
 # Start the application with migrations
 CMD ["/bin/sh", "/app/start.sh"]

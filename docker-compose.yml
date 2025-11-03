@@ -41,18 +41,6 @@ services:
       - ./server/uploads:/app/uploads
     networks:
       - floneo-network
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "require('http').get('http://localhost:5000/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
 
   # Frontend Next.js Application
   frontend:
@@ -67,8 +55,7 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      backend:
-        condition: service_healthy
+      - backend
     networks:
       - floneo-network
 
