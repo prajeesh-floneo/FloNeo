@@ -6,7 +6,8 @@ RUN apk add --no-cache \
     make \
     g++ \
     libc6-compat \
-    curl
+    curl \
+    postgresql-client
 
 WORKDIR /app
 

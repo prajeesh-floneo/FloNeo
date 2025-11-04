@@ -8,12 +8,16 @@ RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 echo "${YELLOW}[FloNeo] Waiting for database server to be ready...${NC}"
-# Wait for database to be ready by attempting migrations
+
+# Wait for database to be ready using pg_isready
 for i in $(seq 1 30); do
-  echo "${YELLOW}[FloNeo] Attempt $i/30: Checking database connection...${NC}"
+  if pg_isready -h postgres -U floneo > /dev/null 2>&1; then
+    echo "${GREEN}[FloNeo] Database is ready!${NC}"
+    break
+  fi
+  echo "${YELLOW}[FloNeo] Attempt $i/30: Waiting for database...${NC}"
   sleep 2
 done
-echo "${GREEN}[FloNeo] Database server is ready!${NC}"
 
 # Run migrations
 echo "${YELLOW}[FloNeo] Running database migrations...${NC}"
@@ -38,4 +42,3 @@ npx prisma generate
 # Start the application
 echo "${GREEN}[FloNeo] Starting FloNeo application...${NC}"
 npm start
-
