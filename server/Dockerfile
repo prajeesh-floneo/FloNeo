@@ -21,8 +21,7 @@ RUN npm ci --omit=dev --prefer-offline --no-audit
 # Copy source code
 COPY . .
 
-# Copy startup script
-COPY start.sh /app/start.sh
+# Ensure start.sh has execute permissions
 RUN chmod +x /app/start.sh
 
 # Generate Prisma client
