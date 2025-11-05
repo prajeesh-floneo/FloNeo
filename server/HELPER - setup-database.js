@@ -2,21 +2,41 @@
 
 /**
  * Script to create all database tables from Prisma schema
- * Database: floneo
- * DATABASE_URL: postgresql://postgres:123@localhost:5432/floneo?schema=public
+ * 
+ * Usage:
+ *   node setup-database.js                    # Uses Docker database (default)
+ *   node setup-database.js --local            # Uses local database
+ *   DATABASE_URL="..." node setup-database.js # Uses custom DATABASE_URL
  */
 
 const { execSync } = require("child_process");
 const path = require("path");
 
+// Determine which database to use
+let databaseUrl;
+const args = process.argv.slice(2);
+
+if (process.env.DATABASE_URL) {
+  // Use custom DATABASE_URL if provided
+  databaseUrl = process.env.DATABASE_URL;
+  console.log("📋 Using custom DATABASE_URL from environment\n");
+} else if (args.includes("--local")) {
+  // Use local database
+  databaseUrl = "postgresql://postgres:123@localhost:5432/floneo?schema=public";
+  console.log("📋 Using local database: floneo\n");
+} else {
+  // Default: Use Docker database
+  databaseUrl = "postgresql://floneo:floneo123@localhost:5432/floneo_db?schema=public";
+  console.log("📋 Using Docker database: floneo_db (default)\n");
+  console.log("💡 Tip: Use --local flag for local database, or set DATABASE_URL env var\n");
+}
+
 // Set the DATABASE_URL environment variable
-process.env.DATABASE_URL =
-  "postgresql://postgres:123@localhost:5432/floneo?schema=public";
+process.env.DATABASE_URL = databaseUrl;
 
 const schemaPath = path.join(__dirname, "prisma", "schema.prisma");
 
 console.log("🚀 Setting up database tables...\n");
-console.log(`📋 Database: floneo`);
 console.log(`📋 Schema: ${schemaPath}\n`);
 
 try {
