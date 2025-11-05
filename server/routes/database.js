@@ -2,8 +2,19 @@ const express = require("express");
 const router = express.Router();
 const { PrismaClient } = require("@prisma/client");
 const { authenticateToken } = require("../middleware/auth");
+const { exportTableData } = require("../utils/exporters");
 
 const prisma = new PrismaClient();
+
+// Helper function to validate table name
+const isValidTableName = (tableName) => {
+  if (!tableName || typeof tableName !== "string") return false;
+  // Check for SQL injection patterns
+  if (/['";\\]/.test(tableName)) return false;
+  // Check length
+  if (tableName.length > 63) return false; // PostgreSQL identifier limit
+  return true;
+};
 
 /**
  * @route   GET /api/database/:appId/tables
@@ -316,10 +327,39 @@ router.post("/:appId/tables/:tableName/export", authenticateToken, async (req, r
     if (!userTable)
       return res.status(404).json({ success: false, message: "Table not found in metadata" });
 
+    // ✅ Check if table actually exists in database
+    const escapedTableName = tableName.replace(/"/g, '""');
+    const tableExistsResult = await prisma.$queryRawUnsafe(
+      `SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_schema = 'public' 
+        AND table_name = '${escapedTableName}'
+      ) as exists`
+    );
+
+    const exists = tableExistsResult[0]?.exists || false;
+    if (!exists) {
+      return res.status(404).json({
+        success: false,
+        message: `Table "${tableName}" is registered but does not exist in database`,
+      });
+    }
+
     // ✅ Fetch table data
     const data = await prisma.$queryRawUnsafe(`SELECT * FROM "${tableName}" ORDER BY id DESC`);
-    const columns =
-      typeof userTable.columns === "string" ? JSON.parse(userTable.columns) : userTable.columns;
+    
+    // ✅ Parse and transform columns format
+    let columnsObj = typeof userTable.columns === "string" 
+      ? JSON.parse(userTable.columns) 
+      : userTable.columns;
+    
+    // Transform from object format to array format expected by exportTableData
+    // Input: { id: {...}, firstName: {...}, ... }
+    // Output: [{ name: 'id', ... }, { name: 'firstName', ... }, ... ]
+    const columns = Object.entries(columnsObj).map(([name, def]) => ({
+      name,
+      ...def,
+    }));
 
     // ✅ Generate export file
     const buffer = await exportTableData(data, columns, format);
