@@ -13,7 +13,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies with better caching
-RUN npm ci --only=production --no-cache --prefer-offline
+RUN npm install --only=production --no-cache --prefer-offline
 
 # Copy source code
 COPY . .

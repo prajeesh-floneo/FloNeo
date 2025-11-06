@@ -1,0 +1,17 @@
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Install dependencies
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Copy all source files
+COPY . .
+
+EXPOSE 3000
+
+# Run in development mode
+CMD ["npm", "run", "dev"]

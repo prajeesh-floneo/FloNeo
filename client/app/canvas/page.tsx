@@ -55,9 +55,11 @@ import {
   Trash2,
   Download,
   Home,
+  LayoutGrid 
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { PublishModal } from "@/components/publish-modal";
+import DatabaseTab from "@/components/canvas/database-tab";
 
 interface CanvasElement {
   id: string;
@@ -213,6 +215,8 @@ function CanvasPageContent() {
   const [isDragOverCanvas, setIsDragOverCanvas] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
   const canvasContainerRef = useRef<HTMLDivElement>(null);
+  const [currentView, setCurrentView] = useState<'canvas' | 'database'>('canvas');
+
 
   // Auto-save state management
   const [autoSaveStatus, setAutoSaveStatus] = useState<
@@ -5972,7 +5976,7 @@ function CanvasPageContent() {
       {!isPreviewMode && (
         <div className="flex flex-1 overflow-hidden min-h-0">
           {/* Element toolbar */}
-          {!isLeftPanelHidden && (
+          {currentView === "canvas" && !isLeftPanelHidden && (
             <ElementToolbar
               onDragStart={handleDragStart}
               canvasElements={canvasElements}
@@ -5993,10 +5997,47 @@ function CanvasPageContent() {
           )}
 
           {/* Canvas area */}
-          <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+          <div className="flex-1 flex flex-col min-w-0 overflow-hidden ">
+            {/* VIEW SWITCHER - placed inside canvas column so it doesn't steal horizontal space */}
+            <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-900 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
+              <div className="flex items-center gap-2">
+                {/* Canvas View Button */}
+                <button
+                  onClick={() => setCurrentView("canvas")}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all ${
+                    currentView === "canvas"
+                      ? "bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-sm"
+                      : "text-gray-600 dark:text-gray-400 hover:bg-white/50 dark:hover:bg-gray-700/50"
+                  }`}
+                >
+                  <LayoutGrid className="w-4 h-4" />
+                  Canvas View
+                </button>
+
+                {/* Database View Button */}
+                <button
+                  onClick={() => setCurrentView("database")}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all ${
+                    currentView === "database"
+                      ? "bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-sm"
+                      : "text-gray-600 dark:text-gray-400 hover:bg-white/50 dark:hover:bg-gray-700/50"
+                  }`}
+                >
+                  <Database className="w-4 h-4" />
+                  Database View
+                </button>
+              </div>
+            </div>
+          {currentView === "database" ? (
+            <div className="flex-1 overflow-hidden">
+              <DatabaseTab />
+            </div>
+          ) : null}
+            {currentView === "canvas" && (
+            <>
             {/* Page tabs */}
             <div className="flex items-center px-4 py-2 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
-              <div className="flex items-center space-x-2 overflow-x-auto">
+              <div className="flex items-center space-x-2 overflow-x-auto ">
                 {pages.map((page, index) => (
                   <div
                     key={page.id}
@@ -6732,10 +6773,12 @@ function CanvasPageContent() {
                   )}
               </div>
             </div>
+            </>
+            )}
           </div>
 
           {/* Properties panel */}
-          {!isRightPanelHidden && (
+          {currentView === "canvas" && !isRightPanelHidden && (
             <PropertiesPanel
               selectedElement={selectedElement}
               currentPage={currentPage || null}

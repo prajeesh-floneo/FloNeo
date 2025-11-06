@@ -12,9 +12,15 @@ for i in $(seq 1 30); do
 done
 
 # Run migrations
-echo "Running database migrations..."
-npx prisma migrate deploy || {
-  echo "Migration failed, but continuing..."
+# echo "Running database migrations..."
+# npx prisma migrate deploy || {
+#   echo "Migration failed, but continuing..."
+# }
+
+# Push schema to database
+echo "Pushing Prisma schema to database..."
+npx prisma db push --accept-data-loss --skip-generate || {
+  echo "Schema push failed, but continuing..."
 }
 
 # Seed the database with test data
