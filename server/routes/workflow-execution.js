@@ -11,6 +11,7 @@ const emailService = require("../utils/email");
 
 const router = express.Router();
 const prisma = new PrismaClient();
+const { enqueueWorkflow } = require("../utils/workflow-queue");
 
 // Initialize utility classes
 const dbUtils = new DatabaseUtils(prisma);
@@ -3063,6 +3064,38 @@ const substituteContextVariables = (value, context) => {
   });
 };
 
+// Verify HMAC signature helper (uses JSON.stringify(payload) as canonical representation)
+const verifyHmacSignature = (payload, providedSignature, secret) => {
+  try {
+    if (!providedSignature || !secret) return false;
+
+    const crypto = require('crypto');
+    const payloadString = typeof payload === 'string' ? payload : JSON.stringify(payload);
+
+    // Allow headers like 'sha256=...' or raw hex
+    let expectedPrefix = 'sha256=';
+    let provided = providedSignature;
+    if (provided.startsWith('sha256=')) provided = provided.slice(7);
+
+    const hmac = crypto.createHmac('sha256', secret).update(payloadString).digest('hex');
+
+    const a = Buffer.from(hmac, 'hex');
+    let b;
+    try {
+      b = Buffer.from(provided, 'hex');
+    } catch (e) {
+      // Provided signature not hex - fail
+      return false;
+    }
+
+    if (a.length !== b.length) return false;
+
+    return crypto.timingSafeEqual(a, b);
+  } catch (e) {
+    return false;
+  }
+};
+
 // Role checking block handler
 const executeRoleIs = async (node, context, appId, userId) => {
   try {
@@ -4000,6 +4033,312 @@ const executeOnLogin = async (node, context, appId) => {
   }
 };
 
+
+// OnWebhook trigger handler
+const executeOnWebhook = async (node, context, appId, userId = 1) => {
+  try {
+    console.log("📬 [ON-WEBHOOK] Processing webhook trigger for app:", appId);
+
+    // Validate app access (don't strictly require userId for public webhooks, but keep check for owner-scoped triggers)
+    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
+    if (!hasAccess) {
+      // If access denied because no user context, still allow if node.data.allowPublic === true
+      if (!node.data || node.data.allowPublic !== true) {
+        throw new Error("Access denied to this app for webhook trigger");
+      }
+    }
+
+    const cfg = node.data || {};
+
+    // Expect payload to be available in context under common keys
+    const payload =
+      context.webhookPayload || context.payload || context.body || context.requestBody || context.event || null;
+
+    const headers = context.headers || context.requestHeaders || context.httpHeaders || {};
+
+    console.log("📬 [ON-WEBHOOK] Payload present:", !!payload);
+
+    // Optional secret/header validation configured on the block
+    if (cfg.secretHeader && cfg.secretValue) {
+      const provided = headers[cfg.secretHeader.toLowerCase()] || headers[cfg.secretHeader];
+      const expected = substituteContextVariables(cfg.secretValue, context);
+      if (!provided || provided !== expected) {
+        console.warn("❌ [ON-WEBHOOK] Secret header validation failed for header:", cfg.secretHeader);
+        return {
+          success: false,
+          triggered: false,
+          error: "Invalid webhook secret",
+          context: { ...context, webhookRejected: true },
+        };
+      }
+    }
+
+    // Optional filter: allow matching by event type or path
+    let matched = true;
+    if (cfg.matchPath && payload) {
+      // Extract nested value from payload using dot-path
+      const parts = cfg.matchPath.split('.');
+      let v = payload;
+      for (const p of parts) {
+        v = v?.[p];
+        if (v === undefined) break;
+      }
+      if (cfg.matchValue !== undefined && String(v) !== String(substituteContextVariables(cfg.matchValue, context))) {
+        matched = false;
+      }
+    }
+
+    if (!payload) {
+      console.warn('⚠️ [ON-WEBHOOK] No payload found in context for webhook trigger');
+      return {
+        success: false,
+        triggered: false,
+        error: 'No webhook payload provided',
+        context,
+      };
+    }
+
+    if (!matched) {
+      console.log('ℹ️ [ON-WEBHOOK] Payload did not match configured filter, skipping trigger');
+      return {
+        success: true,
+        triggered: false,
+        matched: false,
+        context: { ...context, webhookMatched: false },
+      };
+    }
+
+    // Optionally persist webhook payload to an app-scoped table if configured
+    if (cfg.saveToTable) {
+      try {
+        const tableName = generateTableName(appId, cfg.saveToTable || 'webhooks');
+        const exists = await dbUtils.tableExists(tableName);
+        if (!exists) {
+          await prisma.$executeRawUnsafe(
+            `CREATE TABLE "${tableName}" (id SERIAL PRIMARY KEY, data JSONB, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW());`
+          );
+        }
+
+        await prisma.$queryRawUnsafe(`INSERT INTO "${tableName}" (data) VALUES ($1)`, JSON.stringify(payload));
+        console.log(`✅ [ON-WEBHOOK] Saved webhook payload to ${tableName}`);
+      } catch (e) {
+        console.warn('⚠️ [ON-WEBHOOK] Failed to save webhook payload:', e.message);
+      }
+    }
+
+    // Add webhook data to context for downstream blocks
+    const updatedContext = {
+      ...context,
+      webhookResult: {
+        receivedAt: new Date().toISOString(),
+        payload,
+        headers,
+        matched: true,
+      },
+    };
+
+    console.log('✅ [ON-WEBHOOK] Webhook trigger processed');
+
+    return {
+      success: true,
+      triggered: true,
+      matched: true,
+      context: updatedContext,
+      message: 'Webhook processed',
+    };
+  } catch (error) {
+    console.error('❌ [ON-WEBHOOK] Error processing webhook trigger:', error);
+    return {
+      success: false,
+      triggered: false,
+      error: error.message,
+      context,
+    };
+  }
+};
+
+// Run a workflow given nodes/edges and an initial context
+const runWorkflow = async (nodes, edges, initialContext = {}, appId, userId = 1) => {
+  try {
+    const results = [];
+    let currentContext = initialContext || {};
+
+    // Build edge map
+    const edgeMap = {};
+    if (edges && Array.isArray(edges)) {
+      edges.forEach((edge) => {
+        const connectorLabel = edge.label || edge.sourceHandle || "next";
+        const key = `${edge.source}:${connectorLabel}`;
+        edgeMap[key] = edge.target;
+      });
+    }
+
+    // Build node map
+    const nodeMap = {};
+    nodes.forEach((node) => {
+      nodeMap[node.id] = node;
+    });
+
+    // Find starting trigger node
+    let currentNodeId = null;
+    for (const node of nodes) {
+      if (node.data && node.data.category === "Triggers") {
+        // Prefer explicit onWebhook trigger when webhook context present
+        if (currentContext.webhookPayload && node.data.label === "onWebhook") {
+          currentNodeId = node.id;
+          break;
+        }
+        if (!currentNodeId) currentNodeId = node.id;
+      }
+    }
+
+    if (!currentNodeId) {
+      return { success: false, message: "No trigger node found in workflow", results: [] };
+    }
+
+    const executedNodeIds = new Set();
+    let maxIterations = 200;
+    let iteration = 0;
+
+    while (currentNodeId && iteration < maxIterations) {
+      iteration++;
+      const node = nodeMap[currentNodeId];
+
+      if (!node) break;
+      if (executedNodeIds.has(currentNodeId)) break;
+      executedNodeIds.add(currentNodeId);
+
+      try {
+        let result = null;
+
+        // Actions
+        if (node.data.category === "Actions") {
+          switch (node.data.label) {
+            case "db.create":
+              result = await executeDbCreate(node, currentContext, appId, userId);
+              break;
+            case "db.find":
+              result = await executeDbFind(node, currentContext, appId, userId);
+              break;
+            case "db.update":
+              result = await executeDbUpdate(node, currentContext, appId, userId);
+              break;
+            case "db.upsert":
+              result = await executeDbUpsert(node, currentContext, appId, userId);
+              break;
+            case "email.send":
+              result = await executeEmailSend(node, currentContext, appId, userId);
+              break;
+            case "http.request":
+              result = await executeHttpRequest(node, currentContext, appId, userId);
+              break;
+            case "ai.summarize":
+              result = await executeAiSummarize(node, currentContext, appId, userId);
+              break;
+            default:
+              result = { success: true, message: `${node.data.label} executed (placeholder)` };
+          }
+        } else if (node.data.category === "Conditions") {
+          switch (node.data.label) {
+            case "isFilled":
+              result = await executeIsFilled(node, currentContext, appId);
+              break;
+            case "dateValid":
+              result = await executeDateValid(node, currentContext, appId);
+              break;
+            case "match":
+              result = await executeMatch(node, currentContext, appId, userId);
+              break;
+            case "roleIs":
+              result = await executeRoleIs(node, currentContext, appId, userId);
+              break;
+            case "switch":
+              result = await executeSwitch(node, currentContext, appId, userId);
+              break;
+            case "expr":
+              result = await executeExpr(node, currentContext, appId, userId);
+              break;
+            default:
+              result = { success: true, isFilled: true, message: `${node.data.label} processed (placeholder)` };
+          }
+        } else if (node.data.category === "Triggers") {
+          switch (node.data.label) {
+            case "onClick":
+              result = await executeOnClick(node, currentContext, appId);
+              break;
+            case "onPageLoad":
+              result = await executeOnPageLoad(node, currentContext, appId);
+              break;
+            case "onSubmit":
+              result = await executeOnSubmit(node, currentContext, appId);
+              break;
+            case "onDrop":
+              result = await executeOnDrop(node, currentContext, appId, userId);
+              break;
+            case "onLogin":
+              result = await executeOnLogin(node, currentContext, appId);
+              break;
+            case "onSchedule":
+              result = await executeOnSchedule(node, currentContext, appId, userId);
+              break;
+            case "onRecordCreate":
+              result = await executeOnRecordCreate(node, currentContext, appId, userId);
+              break;
+            case "onRecordUpdate":
+              result = await executeOnRecordUpdate(node, currentContext, appId, userId);
+              break;
+            case "onWebhook":
+              result = await executeOnWebhook(node, currentContext, appId, userId);
+              break;
+            default:
+              result = { success: true, message: `${node.data.label} triggered (placeholder)` };
+          }
+        } else {
+          result = { success: true, message: `${node.data.label} processed` };
+        }
+
+        results.push({ nodeId: node.id, nodeLabel: node.data.label, result });
+
+        if (result && typeof result === "object") {
+          currentContext = { ...currentContext, ...result.context, ...result };
+        }
+
+        // Determine next node
+        let nextNodeId = null;
+        if (node.data.category === "Conditions") {
+          if (node.data.label === "switch") {
+            const matchedCase = result?.matchedCase || "default";
+            const edgeKey = `${node.id}:${matchedCase}`;
+            nextNodeId = edgeMap[edgeKey];
+          } else if (node.data.label === "expr") {
+            const conditionResult = result?.result || false;
+            const connectorLabel = conditionResult ? "yes" : "no";
+            const edgeKey = `${node.id}:${connectorLabel}`;
+            nextNodeId = edgeMap[edgeKey];
+          } else {
+            const conditionResult = result?.isFilled || result?.isValid || result?.match || false;
+            const connectorLabel = conditionResult ? "yes" : "no";
+            const edgeKey = `${node.id}:${connectorLabel}`;
+            nextNodeId = edgeMap[edgeKey];
+          }
+        } else {
+          const edgeKey = `${node.id}:next`;
+          nextNodeId = edgeMap[edgeKey];
+        }
+
+        currentNodeId = nextNodeId;
+      } catch (err) {
+        results.push({ nodeId: currentNodeId, nodeLabel: nodeMap[currentNodeId]?.data?.label, error: err.message });
+        break;
+      }
+    }
+
+    return { success: true, results, context: currentContext };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+};
+
 // File validation helper
 const validateDroppedFile = (file, config) => {
   const errors = [];
@@ -4452,6 +4791,10 @@ router.post("/execute", authenticateToken, async (req, res) => {
               result = await executeOnLogin(node, currentContext, appId);
               break;
 
+            case "onWebhook":
+              result = await executeOnWebhook(node, currentContext, appId, userId);
+              break;
+
             case "onSchedule":
               result = await executeOnSchedule(
                 node,
@@ -4615,4 +4958,631 @@ router.post("/execute", authenticateToken, async (req, res) => {
   }
 });
 
+
+
+
+
+/**
+ * @route   POST /api/webhook/algorithm
+ * @desc    Public webhook endpoint for Algorithm to push applicant + quote data
+ * @access  Public (secured by shared secret header)
+ */
+router.post("/webhook/algorithm", async (req, res) => {
+  try {
+    // Expect a shared secret in header 'x-algo-secret' or Authorization: Bearer <secret>
+    const headerSecret = req.header("x-algo-secret") || req.header("authorization");
+
+    if (!process.env.ALGORITHM_WEBHOOK_SECRET) {
+      console.warn("⚠️ ALGORTHM webhook secret is not configured (ALGORITHM_WEBHOOK_SECRET)");
+      return res.status(500).json({ success: false, message: "Server misconfiguration" });
+    }
+
+    let provided = headerSecret || "";
+    if (provided.startsWith("Bearer ")) provided = provided.slice(7).trim();
+
+    // If the simple header secret is provided, verify it first
+    if (!provided || provided !== process.env.ALGORITHM_WEBHOOK_SECRET) {
+      console.warn("❌ [WEBHOOK] Invalid or missing webhook secret");
+      return res.status(403).json({ success: false, message: "Invalid webhook secret" });
+    }
+
+    // Additionally support HMAC signature verification when signature header present
+    const sigHeader = req.header('x-hub-signature-256') || req.header('x-hub-signature') || req.header('x-signature') || req.header('x-signature-256');
+    if (sigHeader) {
+      const secretForHmac = process.env.ALGORITHM_WEBHOOK_SECRET;
+      const ok = verifyHmacSignature(req.body, sigHeader, secretForHmac);
+      if (!ok) {
+        console.warn('❌ [WEBHOOK] HMAC signature verification failed');
+        return res.status(403).json({ success: false, message: 'Invalid webhook signature' });
+      }
+    }
+
+    const payload = req.body;
+    if (!payload || Object.keys(payload).length === 0) {
+      return res.status(400).json({ success: false, message: "Empty payload" });
+    }
+
+    // Determine target appId: prefer payload.appId, then query param, then env LOS_APP_ID
+    const appId = payload.appId || req.query.appId || process.env.LOS_APP_ID;
+    if (!appId) {
+      return res.status(400).json({ success: false, message: "appId is required either in payload or query param" });
+    }
+
+    // Use a standard table base name for storing applications inside each app namespace
+    const baseTableName = "applications";
+    const tableName = generateTableName(appId, baseTableName);
+
+    // Ensure table exists. If missing, create a simple JSONB-backed table to store payloads.
+    const exists = await dbUtils.tableExists(tableName);
+    if (!exists) {
+      console.log(`🛠️ [WEBHOOK] Creating table ${tableName} to store incoming applications`);
+      await prisma.$executeRawUnsafe(
+        `CREATE TABLE "${tableName}" (
+          id SERIAL PRIMARY KEY,
+          data JSONB,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );`
+      );
+    }
+
+    // We'll try to upsert by applicant email if available, otherwise insert
+    const applicantEmail =
+      payload.applicant?.email || payload.applicantEmail || payload.email || null;
+
+    if (applicantEmail) {
+      // Check several possible JSON paths for applicant email to support different payload shapes
+      const selectQuery = `SELECT id FROM "${tableName}" WHERE (data->'applicant'->>'email' = $1) OR (data->>'applicantEmail' = $1) OR (data->>'email' = $1) LIMIT 1`;
+      const existing = await prisma.$queryRawUnsafe(selectQuery, applicantEmail);
+
+      if (existing && existing.length > 0) {
+        // Update existing record
+        const updateQuery = `UPDATE "${tableName}" SET data = $1, updated_at = NOW() WHERE id = $2 RETURNING *`;
+        const updated = await prisma.$queryRawUnsafe(updateQuery, JSON.stringify(payload), existing[0].id);
+        console.log(`✅ [WEBHOOK] Updated record id=${existing[0].id} in ${tableName}`);
+
+        // Trigger workflows after update (async)
+        try {
+          const workflows = await prisma.workflow.findMany({ where: { appId: parseInt(appId) } });
+          for (const wf of workflows) {
+            let nodes = wf.nodes;
+            let edges = wf.edges;
+            if (typeof nodes === 'string') {
+              try { nodes = JSON.parse(nodes); } catch (e) { nodes = []; }
+            }
+            if (typeof edges === 'string') {
+              try { edges = JSON.parse(edges); } catch (e) { edges = []; }
+            }
+
+            const initialContext = {
+              webhookPayload: payload,
+              payload,
+              body: payload,
+              headers: req.headers,
+              requestBody: payload,
+              workflowId: wf.id,
+              updatedRecordId: updated[0].id,
+            };
+
+            // enqueue job for processing by the workflow queue
+            enqueueWorkflow(nodes || [], edges || [], initialContext, appId);
+          }
+        } catch (e) {
+          console.warn('⚠️ [WEBHOOK] Failed to trigger workflows after update:', e.message || e);
+        }
+
+        return res.json({ success: true, operation: "update", record: updated[0] });
+      } else {
+        // Insert new
+        const insertQuery = `INSERT INTO "${tableName}" (data) VALUES ($1) RETURNING *`;
+        const inserted = await prisma.$queryRawUnsafe(insertQuery, JSON.stringify(payload));
+        console.log(`✅ [WEBHOOK] Inserted new record id=${inserted[0].id} in ${tableName}`);
+
+        // Trigger workflows after insert (async)
+        try {
+          const workflows = await prisma.workflow.findMany({ where: { appId: parseInt(appId) } });
+          for (const wf of workflows) {
+            let nodes = wf.nodes;
+            let edges = wf.edges;
+            if (typeof nodes === 'string') {
+              try { nodes = JSON.parse(nodes); } catch (e) { nodes = []; }
+            }
+            if (typeof edges === 'string') {
+              try { edges = JSON.parse(edges); } catch (e) { edges = []; }
+            }
+
+            const initialContext = {
+              webhookPayload: payload,
+              payload,
+              body: payload,
+              headers: req.headers,
+              requestBody: payload,
+              workflowId: wf.id,
+              insertedRecordId: inserted[0].id,
+            };
+
+            // enqueue job for processing by the workflow queue
+            enqueueWorkflow(nodes || [], edges || [], initialContext, appId);
+          }
+        } catch (e) {
+          console.warn('⚠️ [WEBHOOK] Failed to trigger workflows after insert:', e.message || e);
+        }
+
+        return res.json({ success: true, operation: "insert", record: inserted[0] });
+      }
+    } else {
+      // No unique key available; perform blind insert
+      const insertQuery = `INSERT INTO "${tableName}" (data) VALUES ($1) RETURNING *`;
+      const inserted = await prisma.$queryRawUnsafe(insertQuery, JSON.stringify(payload));
+      console.log(`✅ [WEBHOOK] Inserted new record id=${inserted[0].id} in ${tableName} (no unique key)`);
+
+      // After storing, optionally trigger workflows configured for this app
+      try {
+        const workflows = await prisma.workflow.findMany({ where: { appId: parseInt(appId) } });
+        for (const wf of workflows) {
+          let nodes = wf.nodes;
+          let edges = wf.edges;
+          if (typeof nodes === 'string') {
+            try { nodes = JSON.parse(nodes); } catch (e) { nodes = []; }
+          }
+          if (typeof edges === 'string') {
+            try { edges = JSON.parse(edges); } catch (e) { edges = []; }
+          }
+
+          const initialContext = {
+            webhookPayload: payload,
+            payload,
+            body: payload,
+            headers: req.headers,
+            requestBody: payload,
+            workflowId: wf.id,
+          };
+
+          // enqueue job for processing by the workflow queue
+          enqueueWorkflow(nodes || [], edges || [], initialContext, appId);
+        }
+      } catch (e) {
+        console.warn('⚠️ [WEBHOOK] Failed to trigger workflows after insert:', e.message || e);
+      }
+
+      return res.json({ success: true, operation: "insert", record: inserted[0] });
+    }
+  } catch (error) {
+    console.error("❌ [WEBHOOK] Error processing algorithm webhook:", error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * @route POST /api/workflow/fetch-quote
+ * @desc  Fetch latest quote from external Algorithm API for a specific record and update DB
+ * @access Private (banker)
+ */
+router.post("/fetch-quote", authenticateToken, async (req, res) => {
+  try {
+    const { appId, recordId, url, authType, authConfig } = req.body;
+    const userId = req.user.id;
+
+    if (!appId || !recordId || !url) {
+      return res.status(400).json({ success: false, message: "appId, recordId and url are required" });
+    }
+
+    // Verify user has access to this app
+    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
+    if (!hasAccess) return res.status(403).json({ success: false, message: "Access denied to this app" });
+
+    const tableName = generateTableName(appId, "applications");
+    const exists = await dbUtils.tableExists(tableName);
+    if (!exists) return res.status(404).json({ success: false, message: "Applications table not found for this app" });
+
+    // Fetch record
+    const selectQuery = `SELECT id, data FROM "${tableName}" WHERE id = $1 LIMIT 1`;
+    const rows = await prisma.$queryRawUnsafe(selectQuery, recordId);
+    if (!rows || rows.length === 0) return res.status(404).json({ success: false, message: "Record not found" });
+
+    const record = rows[0];
+
+    // Prepare HTTP request using executeHttpRequest helper
+    const node = {
+      data: {
+        url,
+        method: "POST",
+        headers: [],
+        bodyType: "json",
+        body: JSON.stringify({ applicant: record.data?.applicant || record.data?.applicant || {} }),
+        authType: authType || "bearer",
+        authConfig: authConfig || {},
+        timeout: 30000,
+        saveResponseTo: "httpResponse",
+      },
+    };
+
+    const httpResult = await executeHttpRequest(node, { token: req.header("authorization") }, appId, userId);
+
+    if (!httpResult || !httpResult.context || !httpResult.context.httpResponse) {
+      return res.status(500).json({ success: false, message: "Failed to fetch quote" });
+    }
+
+    const responseData = httpResult.context.httpResponse.data;
+
+    // Merge quote into record.data.quote (replace existing quote)
+    const updateQuery = `UPDATE "${tableName}" SET data = jsonb_set(coalesce(data, '{}'::jsonb), '{quote}', $1::jsonb, true), updated_at = NOW() WHERE id = $2 RETURNING *`;
+    const updated = await prisma.$queryRawUnsafe(updateQuery, JSON.stringify(responseData), record.id);
+
+    // Audit log
+    try {
+      const fs = require('fs');
+      const logDir = 'server/logs';
+      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+      const logEntry = `${new Date().toISOString()}: FETCH_QUOTE app:${appId} record:${recordId} user:${userId} status:success\n`;
+      fs.appendFileSync(`${logDir}/audit.log`, logEntry);
+    } catch (e) {
+      console.warn('⚠️ Audit log write failed', e.message);
+    }
+
+    // Notify app owner
+    try {
+      const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+      if (app && app.ownerId) {
+        const message = `Latest quote fetched for record ${recordId}`;
+        await prisma.notification.create({ data: { userId: app.ownerId, type: 'system', message } });
+        if (global.emitNotification) {
+          global.emitNotification({ userId: app.ownerId, type: 'system', message, id: Date.now(), createdAt: new Date() });
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ Notification failed', e.message);
+    }
+
+    return res.json({ success: true, updated: updated[0] });
+  } catch (error) {
+    console.error('❌ [FETCH-QUOTE] Error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+/**
+ * @route POST /api/workflow/update-status
+ * @desc  Update application status (Completed / Rejected) and record audit & notify
+ * @access Private (banker)
+ */
+router.post("/update-status", authenticateToken, async (req, res) => {
+  try {
+    const { appId, recordId, status } = req.body;
+    const userId = req.user.id;
+    if (!appId || !recordId || !status) return res.status(400).json({ success: false, message: 'appId, recordId and status required' });
+
+    const allowed = ['Completed', 'Rejected', 'Pending'];
+    if (!allowed.includes(status)) return res.status(400).json({ success: false, message: 'Invalid status' });
+
+    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
+    if (!hasAccess) return res.status(403).json({ success: false, message: 'Access denied' });
+
+    const tableName = generateTableName(appId, 'applications');
+    const exists = await dbUtils.tableExists(tableName);
+    if (!exists) return res.status(404).json({ success: false, message: 'Applications table not found' });
+
+    const updateQuery = `UPDATE "${tableName}" SET data = jsonb_set(coalesce(data, '{}'::jsonb), '{status}', to_jsonb($1::text), true), updated_at = NOW() WHERE id = $2 RETURNING *`;
+    const updated = await prisma.$queryRawUnsafe(updateQuery, status, recordId);
+
+    // Write audit log
+    try {
+      const fs = require('fs');
+      const logDir = 'server/logs';
+      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+      const logEntry = `${new Date().toISOString()}: UPDATE_STATUS app:${appId} record:${recordId} user:${userId} status:${status}\n`;
+      fs.appendFileSync(`${logDir}/audit.log`, logEntry);
+    } catch (e) {
+      console.warn('⚠️ Audit log write failed', e.message);
+    }
+
+    // Notify owner
+    try {
+      const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+      if (app && app.ownerId) {
+        const message = `Application ${recordId} marked ${status}`;
+        await prisma.notification.create({ data: { userId: app.ownerId, type: 'system', message } });
+        if (global.emitNotification) {
+          global.emitNotification({ userId: app.ownerId, type: 'system', message, id: Date.now(), createdAt: new Date() });
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ Notification failed', e.message);
+    }
+
+    return res.json({ success: true, updated: updated[0] });
+  } catch (error) {
+    console.error('❌ [UPDATE-STATUS] Error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+/**
+ * @route POST /api/workflow/send-daily-summary
+ * @desc  Send daily summary email to app owner (records in last 24h)
+ * @access Private (banker or scheduled system user)
+ */
+router.post('/send-daily-summary', authenticateToken, async (req, res) => {
+  try {
+    const { appId } = req.body;
+    const userId = req.user.id;
+    if (!appId) return res.status(400).json({ success: false, message: 'appId required' });
+
+    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
+    if (!hasAccess) return res.status(403).json({ success: false, message: 'Access denied' });
+
+    const tableName = generateTableName(appId, 'applications');
+    const exists = await dbUtils.tableExists(tableName);
+    if (!exists) return res.status(404).json({ success: false, message: 'Applications table not found' });
+
+    // Fetch records from last 24 hours
+    const selectQuery = `SELECT id, data, created_at FROM "${tableName}" WHERE created_at >= NOW() - INTERVAL '24 hours' ORDER BY created_at DESC`;
+    const recent = await prisma.$queryRawUnsafe(selectQuery);
+
+    const count = recent ? recent.length : 0;
+
+    // Build summary
+    let message = `Daily summary for app ${appId}: ${count} new application(s) in last 24 hours.`;
+    if (count > 0) {
+      const rows = recent.slice(0, 10).map(r => {
+        const applicantName = (r.data && (r.data.applicant?.name || r.data.applicantName || r.data.name)) || 'Unknown';
+        const email = (r.data && (r.data.applicant?.email || r.data.applicantEmail || r.data.email)) || 'Unknown';
+        return `#${r.id} - ${applicantName} <${email}>`;
+      });
+      message += '\n\nRecent applications:\n' + rows.join('\n');
+    }
+
+    // Find app owner email
+    const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+    if (!app || !app.ownerId) return res.status(404).json({ success: false, message: 'App owner not found' });
+
+    const owner = await prisma.user.findUnique({ where: { id: app.ownerId }, select: { email: true, id: true, role: true } });
+    if (!owner || !owner.email) return res.status(404).json({ success: false, message: 'Owner email not found' });
+
+    // Send email (emailService handles console fallback in dev)
+    const emailResult = await emailService.sendNotificationEmail(owner.email, 'system', message, owner.email.split('@')[0]);
+
+    // Log and notify
+    try {
+      const fs = require('fs');
+      const logDir = 'server/logs';
+      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+      const logEntry = `${new Date().toISOString()}: DAILY_SUMMARY app:${appId} user:${userId} emailsent:${emailResult.success}\n`;
+      fs.appendFileSync(`${logDir}/audit.log`, logEntry);
+    } catch (e) {
+      console.warn('⚠️ Audit log write failed', e.message);
+    }
+
+    if (global.emitNotification) {
+      global.emitNotification({ userId: app.ownerId, type: 'system', message: `Daily summary: ${count} new application(s)`, id: Date.now(), createdAt: new Date() });
+    }
+
+    return res.json({ success: true, emailed: emailResult.success, details: emailResult });
+  } catch (error) {
+    console.error('❌ [DAILY-SUMMARY] Error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * @route POST /api/workflow/fetch-quote
+ * @desc  Fetch latest quote from external Algorithm API for a specific record and update DB
+ * @access Private (banker)
+ */
+router.post("/workflow/fetch-quote", authenticateToken, async (req, res) => {
+  try {
+    const { appId, recordId, url, authType, authConfig } = req.body;
+    const userId = req.user.id;
+
+    if (!appId || !recordId || !url) {
+      return res.status(400).json({ success: false, message: "appId, recordId and url are required" });
+    }
+
+    // Verify user has access to this app
+    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
+    if (!hasAccess) return res.status(403).json({ success: false, message: "Access denied to this app" });
+
+    const tableName = generateTableName(appId, "applications");
+    const exists = await dbUtils.tableExists(tableName);
+    if (!exists) return res.status(404).json({ success: false, message: "Applications table not found for this app" });
+
+    // Fetch record
+    const selectQuery = `SELECT id, data FROM "${tableName}" WHERE id = $1 LIMIT 1`;
+    const rows = await prisma.$queryRawUnsafe(selectQuery, recordId);
+    if (!rows || rows.length === 0) return res.status(404).json({ success: false, message: "Record not found" });
+
+    const record = rows[0];
+
+    // Build HTTP request node and execute using existing HTTP handler
+    const node = {
+      data: {
+        url,
+        method: "POST",
+        headers: [],
+        bodyType: "json",
+        body: JSON.stringify({ applicant: record.data?.applicant || record.data?.applicant || {} }),
+        authType: authType || "bearer",
+        authConfig: authConfig || {},
+        timeout: 30000,
+        saveResponseTo: "httpResponse",
+      },
+    };
+
+    const httpResult = await executeHttpRequest(node, { token: req.header("authorization") }, appId, userId);
+
+    if (!httpResult || !httpResult.context || !httpResult.context.httpResponse) {
+      return res.status(500).json({ success: false, message: "Failed to fetch quote" });
+    }
+
+    const responseData = httpResult.context.httpResponse.data;
+
+    // Merge quote into record.data.quote (replace existing quote)
+    const updateQuery = `UPDATE "${tableName}" SET data = jsonb_set(coalesce(data, '{}'::jsonb), '{quote}', $1::jsonb, true), updated_at = NOW() WHERE id = $2 RETURNING *`;
+    const updated = await prisma.$queryRawUnsafe(updateQuery, JSON.stringify(responseData), record.id);
+
+    // Audit log (file)
+    try {
+      const fs = require('fs');
+      const logDir = 'server/logs';
+      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+      const logEntry = `${new Date().toISOString()}: FETCH_QUOTE app:${appId} record:${recordId} user:${userId} status:success\n`;
+      fs.appendFileSync(`${logDir}/audit.log`, logEntry);
+    } catch (e) {
+      console.warn('⚠️ Audit log write failed', e.message);
+    }
+
+    // Notify app owner
+    try {
+      const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+      if (app && app.ownerId) {
+        const message = `Latest quote fetched for record ${recordId}`;
+        await prisma.notification.create({ data: { userId: app.ownerId, type: 'system', message } });
+        if (global.emitNotification) {
+          global.emitNotification({ userId: app.ownerId, type: 'system', message, id: Date.now(), createdAt: new Date() });
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ Notification failed', e.message);
+    }
+
+    return res.json({ success: true, updated: updated[0] });
+  } catch (error) {
+    console.error('❌ [FETCH-QUOTE] Error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+/**
+ * @route POST /api/workflow/update-status
+ * @desc  Update application status (Completed / Rejected) and record audit & notify
+ * @access Private (banker)
+ */
+router.post("/workflow/update-status", authenticateToken, async (req, res) => {
+  try {
+    const { appId, recordId, status } = req.body;
+    const userId = req.user.id;
+    if (!appId || !recordId || !status) return res.status(400).json({ success: false, message: 'appId, recordId and status required' });
+
+    const allowed = ['Completed', 'Rejected', 'Pending'];
+    if (!allowed.includes(status)) return res.status(400).json({ success: false, message: 'Invalid status' });
+
+    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
+    if (!hasAccess) return res.status(403).json({ success: false, message: 'Access denied' });
+
+    const tableName = generateTableName(appId, 'applications');
+    const exists = await dbUtils.tableExists(tableName);
+    if (!exists) return res.status(404).json({ success: false, message: 'Applications table not found' });
+
+    const updateQuery = `UPDATE "${tableName}" SET data = jsonb_set(coalesce(data, '{}'::jsonb), '{status}', to_jsonb($1::text), true), updated_at = NOW() WHERE id = $2 RETURNING *`;
+    const updated = await prisma.$queryRawUnsafe(updateQuery, status, recordId);
+
+    // Write audit log
+    try {
+      const fs = require('fs');
+      const logDir = 'server/logs';
+      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+      const logEntry = `${new Date().toISOString()}: UPDATE_STATUS app:${appId} record:${recordId} user:${userId} status:${status}\n`;
+      fs.appendFileSync(`${logDir}/audit.log`, logEntry);
+    } catch (e) {
+      console.warn('⚠️ Audit log write failed', e.message);
+    }
+
+    // Notify owner
+    try {
+      const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+      if (app && app.ownerId) {
+        const message = `Application ${recordId} marked ${status}`;
+        await prisma.notification.create({ data: { userId: app.ownerId, type: 'system', message } });
+        if (global.emitNotification) {
+          global.emitNotification({ userId: app.ownerId, type: 'system', message, id: Date.now(), createdAt: new Date() });
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ Notification failed', e.message);
+    }
+
+    return res.json({ success: true, updated: updated[0] });
+  } catch (error) {
+    console.error('❌ [UPDATE-STATUS] Error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+/**
+ * @route POST /api/workflow/send-daily-summary
+ * @desc  Send daily summary email to app owner (records in last 24h)
+ * @access Private (banker or scheduled system user)
+ */
+router.post('/workflow/send-daily-summary', authenticateToken, async (req, res) => {
+  try {
+    const { appId } = req.body;
+    const userId = req.user.id;
+    if (!appId) return res.status(400).json({ success: false, message: 'appId required' });
+
+    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
+    if (!hasAccess) return res.status(403).json({ success: false, message: 'Access denied' });
+
+    const tableName = generateTableName(appId, 'applications');
+    const exists = await dbUtils.tableExists(tableName);
+    if (!exists) return res.status(404).json({ success: false, message: 'Applications table not found' });
+
+    // Fetch records from last 24 hours
+    const selectQuery = `SELECT id, data, created_at FROM "${tableName}" WHERE created_at >= NOW() - INTERVAL '24 hours' ORDER BY created_at DESC`;
+    const recent = await prisma.$queryRawUnsafe(selectQuery);
+
+    const count = recent ? recent.length : 0;
+
+    // Build summary
+    let message = `Daily summary for app ${appId}: ${count} new application(s) in last 24 hours.`;
+    if (count > 0) {
+      const rows = recent.slice(0, 10).map(r => {
+        const applicantName = (r.data && (r.data.applicant?.name || r.data.applicantName || r.data.name)) || 'Unknown';
+        const email = (r.data && (r.data.applicant?.email || r.data.applicantEmail || r.data.email)) || 'Unknown';
+        return `#${r.id} - ${applicantName} <${email}>`;
+      });
+      message += '\n\nRecent applications:\n' + rows.join('\n');
+    }
+
+    // Find app owner email
+    const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+    if (!app || !app.ownerId) return res.status(404).json({ success: false, message: 'App owner not found' });
+
+    const owner = await prisma.user.findUnique({ where: { id: app.ownerId }, select: { email: true, id: true, role: true } });
+    if (!owner || !owner.email) return res.status(404).json({ success: false, message: 'Owner email not found' });
+
+    // Send email (emailService handles console fallback in dev)
+    const emailResult = await emailService.sendNotificationEmail(owner.email, 'system', message, owner.email.split('@')[0]);
+
+    // Log and notify
+    try {
+      const fs = require('fs');
+      const logDir = 'server/logs';
+      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+      const logEntry = `${new Date().toISOString()}: DAILY_SUMMARY app:${appId} user:${userId} emailsent:${emailResult.success}\n`;
+      fs.appendFileSync(`${logDir}/audit.log`, logEntry);
+    } catch (e) {
+      console.warn('⚠️ Audit log write failed', e.message);
+    }
+
+    if (global.emitNotification) {
+      global.emitNotification({ userId: app.ownerId, type: 'system', message: `Daily summary: ${count} new application(s)`, id: Date.now(), createdAt: new Date() });
+    }
+
+    return res.json({ success: true, emailed: emailResult.success, details: emailResult });
+  } catch (error) {
+    console.error('❌ [DAILY-SUMMARY] Error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 module.exports = router;
+// Export runWorkflow for background worker to invoke
+try {
+  module.exports.runWorkflow = runWorkflow;
+} catch (e) {
+  // If runWorkflow is not defined (shouldn't happen), skip export
+}
