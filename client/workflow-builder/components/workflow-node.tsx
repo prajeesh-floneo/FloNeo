@@ -46,6 +46,241 @@ import {
   useVariableSuggestions,
 } from "../hooks/use-workflow-suggestions";
 
+// ============================================================================
+// DB.FIND SIMPLE MODE - TRANSLATION LAYER
+// ============================================================================
+
+// Simple mode template types
+type DbFindTemplate = "all" | "findById" | "search" | "latest" | "custom";
+
+// Simple mode UI state interface
+interface DbFindSimpleState {
+  mode: "simple" | "advanced";
+  template: DbFindTemplate;
+  tableName: string;
+
+  // For 'findById' template
+  idField?: string;
+  idValue?: string;
+
+  // For 'search' template
+  searchField?: string;
+  searchOperator?: string;
+  searchValue?: string;
+  resultLimit?: "all" | "first10" | "first50" | "custom";
+  customLimit?: number;
+  customOffset?: number;
+
+  // For 'latest' template
+  sortField?: string;
+  sortDirection?: "newest" | "oldest";
+  latestLimit?: number;
+}
+
+// Operator mapping: Plain language → SQL
+const OPERATOR_MAP: Record<string, string> = {
+  equals: "=",
+  "not equals": "!=",
+  "greater than": ">",
+  "less than": "<",
+  "greater than or equal to": ">=",
+  "less than or equal to": "<=",
+  contains: "LIKE",
+  "does not contain": "NOT LIKE",
+  "is one of": "IN",
+  "is not one of": "NOT IN",
+  "is empty": "IS NULL",
+  "is not empty": "IS NOT NULL",
+};
+
+// Reverse mapping: SQL → Plain language
+const OPERATOR_REVERSE_MAP: Record<string, string> = Object.fromEntries(
+  Object.entries(OPERATOR_MAP).map(([k, v]) => [v, k])
+);
+
+// Convert simple mode state to backend format
+function convertSimpleModeToBackend(simple: DbFindSimpleState): any {
+  const config: any = {
+    tableName: simple.tableName,
+    conditions: [],
+    orderBy: [],
+    limit: 100,
+    offset: 0,
+    columns: ["*"],
+  };
+
+  switch (simple.template) {
+    case "all":
+      // Get all records - just defaults with sorting by newest
+      config.orderBy = [{ field: "createdAt", direction: "DESC" }];
+      config.limit = 100;
+      break;
+
+    case "findById":
+      // Find one record by ID
+      if (simple.idField && simple.idValue) {
+        config.conditions = [
+          {
+            field: simple.idField,
+            operator: "=",
+            value: simple.idValue,
+            logic: "AND",
+          },
+        ];
+      }
+      config.limit = 1;
+      break;
+
+    case "search":
+      // Search with filters
+      if (
+        simple.searchField &&
+        simple.searchOperator &&
+        simple.searchValue !== undefined
+      ) {
+        const sqlOperator = OPERATOR_MAP[simple.searchOperator] || "=";
+        config.conditions = [
+          {
+            field: simple.searchField,
+            operator: sqlOperator,
+            value: simple.searchValue,
+            logic: "AND",
+          },
+        ];
+      }
+
+      // Apply result limit
+      if (simple.resultLimit === "first10") {
+        config.limit = 10;
+      } else if (simple.resultLimit === "first50") {
+        config.limit = 50;
+      } else if (simple.resultLimit === "all") {
+        config.limit = 1000; // Max limit
+      } else if (simple.resultLimit === "custom") {
+        config.limit = simple.customLimit || 100;
+        config.offset = simple.customOffset || 0;
+      }
+
+      config.orderBy = [{ field: "createdAt", direction: "DESC" }];
+      break;
+
+    case "latest":
+      // Get latest records with sorting
+      if (simple.sortField) {
+        const direction = simple.sortDirection === "newest" ? "DESC" : "ASC";
+        config.orderBy = [{ field: simple.sortField, direction }];
+      }
+      config.limit = simple.latestLimit || 10;
+      break;
+
+    case "custom":
+      // Custom mode - should not reach here, handled by advanced mode
+      break;
+  }
+
+  return config;
+}
+
+// Detect if backend config matches a simple template
+function detectTemplateFromBackend(data: any): DbFindTemplate {
+  const hasConditions =
+    data.conditions &&
+    Array.isArray(data.conditions) &&
+    data.conditions.length > 0;
+  const hasOrderBy =
+    data.orderBy && Array.isArray(data.orderBy) && data.orderBy.length > 0;
+
+  // Check for 'findById' pattern: single condition with = operator, limit 1
+  if (hasConditions && data.conditions.length === 1 && data.limit === 1) {
+    const condition = data.conditions[0];
+    if (condition.operator === "=") {
+      return "findById";
+    }
+  }
+
+  // Check for 'search' pattern: single condition with any operator
+  if (
+    (hasConditions && data.conditions.length === 1 && !data.limit) ||
+    data.limit > 1
+  ) {
+    return "search";
+  }
+
+  // Check for 'latest' pattern: no conditions, has orderBy
+  if (!hasConditions && hasOrderBy) {
+    return "latest";
+  }
+
+  // Check for 'all' pattern: no conditions, default limit
+  if (!hasConditions && (!data.limit || data.limit >= 100)) {
+    return "all";
+  }
+
+  // Complex query - use custom/advanced mode
+  return "custom";
+}
+
+// Convert backend format to simple mode state
+function convertBackendToSimpleMode(data: any): DbFindSimpleState {
+  const template = detectTemplateFromBackend(data);
+
+  const simple: DbFindSimpleState = {
+    mode: template === "custom" ? "advanced" : "simple",
+    template,
+    tableName: data.tableName || "",
+  };
+
+  switch (template) {
+    case "findById":
+      if (data.conditions && data.conditions[0]) {
+        simple.idField = data.conditions[0].field;
+        simple.idValue = data.conditions[0].value;
+      }
+      break;
+
+    case "search":
+      if (data.conditions && data.conditions[0]) {
+        simple.searchField = data.conditions[0].field;
+        simple.searchOperator =
+          OPERATOR_REVERSE_MAP[data.conditions[0].operator] || "equals";
+        simple.searchValue = data.conditions[0].value;
+      }
+
+      // Detect result limit
+      if (data.limit === 10) {
+        simple.resultLimit = "first10";
+      } else if (data.limit === 50) {
+        simple.resultLimit = "first50";
+      } else if (data.limit >= 1000) {
+        simple.resultLimit = "all";
+      } else {
+        simple.resultLimit = "custom";
+        simple.customLimit = data.limit;
+        simple.customOffset = data.offset || 0;
+      }
+      break;
+
+    case "latest":
+      if (data.orderBy && data.orderBy[0]) {
+        simple.sortField = data.orderBy[0].field;
+        simple.sortDirection =
+          data.orderBy[0].direction === "DESC" ? "newest" : "oldest";
+      }
+      simple.latestLimit = data.limit || 10;
+      break;
+
+    case "all":
+      // No additional config needed
+      break;
+  }
+
+  return simple;
+}
+
+// ============================================================================
+// END OF TRANSLATION LAYER
+// ============================================================================
+
 // Get icon component for each block type
 const getBlockIcon = (label: string) => {
   const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -406,6 +641,22 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
       pageName: string;
     }>
   >([]);
+
+  // State for db.find simple mode
+  const [dbFindSimpleState, setDbFindSimpleState] = useState<DbFindSimpleState>(
+    () => {
+      // Initialize from existing data if available
+      if (data.label === "db.find" && data.tableName) {
+        return convertBackendToSimpleMode(data);
+      }
+      // Default state for new db.find blocks
+      return {
+        mode: "simple",
+        template: "all",
+        tableName: "",
+      };
+    }
+  );
 
   // Helper function to update node data
   const updateNodeData = (key: string, value: any) => {
@@ -1681,137 +1932,530 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
         );
 
       case "db.find":
+        // Helper function to update simple state and sync to backend
+        const updateDbFindSimpleState = (
+          updates: Partial<DbFindSimpleState>
+        ) => {
+          const newState = { ...dbFindSimpleState, ...updates };
+          setDbFindSimpleState(newState);
+
+          // Convert to backend format and update node data
+          const backendConfig = convertSimpleModeToBackend(newState);
+          setNodes((nodes) =>
+            nodes.map((node) =>
+              node.id === id
+                ? {
+                    ...node,
+                    data: { ...node.data, ...backendConfig },
+                  }
+                : node
+            )
+          );
+        };
+
         return (
           <div className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Table Name:</label>
-              {tableSuggestions.length > 0 ? (
-                <select
-                  value={data.tableName || ""}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    setNodes((nodes) =>
-                      nodes.map((node) =>
-                        node.id === id
-                          ? {
-                              ...node,
-                              data: { ...node.data, tableName: value },
-                            }
-                          : node
-                      )
-                    );
-                  }}
-                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+            {/* Mode Toggle */}
+            <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+              <div className="text-sm font-medium">Configuration Mode:</div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => updateDbFindSimpleState({ mode: "simple" })}
+                  className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                    dbFindSimpleState.mode === "simple"
+                      ? "bg-blue-500 text-white"
+                      : "bg-background border hover:bg-muted"
+                  }`}
                 >
-                  <option value="">Select table...</option>
-                  {tableSuggestions.map((table) => (
-                    <option key={table.value} value={table.value}>
-                      {table.label}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  type="text"
-                  placeholder="Enter table name..."
-                  value={data.tableName || ""}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    setNodes((nodes) =>
-                      nodes.map((node) =>
-                        node.id === id
-                          ? {
-                              ...node,
-                              data: { ...node.data, tableName: value },
-                            }
-                          : node
-                      )
-                    );
-                  }}
-                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              )}
+                  Simple
+                </button>
+                <button
+                  onClick={() => updateDbFindSimpleState({ mode: "advanced" })}
+                  className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                    dbFindSimpleState.mode === "advanced"
+                      ? "bg-blue-500 text-white"
+                      : "bg-background border hover:bg-muted"
+                  }`}
+                >
+                  Advanced
+                </button>
+              </div>
             </div>
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium">
-                Conditions (Optional):
-              </label>
-              <textarea
-                placeholder='{"status": "active", "age": {"$gt": 18}}'
-                value={
-                  typeof data.conditions === "string"
-                    ? data.conditions
-                    : JSON.stringify(data.conditions || {}, null, 2)
-                }
-                onChange={(e) => {
-                  const value = e.target.value;
-                  setNodes((nodes) =>
-                    nodes.map((node) =>
-                      node.id === id
-                        ? {
-                            ...node,
-                            data: { ...node.data, conditions: value },
+            {/* Simple Mode UI */}
+            {dbFindSimpleState.mode === "simple" && (
+              <div className="space-y-4">
+                {/* Table Selection */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">📊 From table:</label>
+                  {tableSuggestions.length > 0 ? (
+                    <select
+                      value={dbFindSimpleState.tableName || ""}
+                      onChange={(e) => {
+                        updateDbFindSimpleState({ tableName: e.target.value });
+                      }}
+                      className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">Select table...</option>
+                      {tableSuggestions.map((table) => (
+                        <option key={table.value} value={table.value}>
+                          {table.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      placeholder="Enter table name..."
+                      value={dbFindSimpleState.tableName || ""}
+                      onChange={(e) => {
+                        updateDbFindSimpleState({ tableName: e.target.value });
+                      }}
+                      className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  )}
+                </div>
+
+                {/* Template Selection */}
+                <div className="space-y-3">
+                  <label className="text-sm font-medium">
+                    🎯 What data do you want to get?
+                  </label>
+                  <div className="grid grid-cols-1 gap-2">
+                    <button
+                      onClick={() =>
+                        updateDbFindSimpleState({ template: "all" })
+                      }
+                      className={`p-3 text-left rounded-lg border-2 transition-all ${
+                        dbFindSimpleState.template === "all"
+                          ? "border-blue-500 bg-blue-500/10"
+                          : "border-border hover:border-blue-300 hover:bg-muted"
+                      }`}
+                    >
+                      <div className="font-medium text-sm">
+                        📋 Get all records
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        Returns all records from the table (up to 100)
+                      </div>
+                    </button>
+
+                    <button
+                      onClick={() =>
+                        updateDbFindSimpleState({ template: "findById" })
+                      }
+                      className={`p-3 text-left rounded-lg border-2 transition-all ${
+                        dbFindSimpleState.template === "findById"
+                          ? "border-blue-500 bg-blue-500/10"
+                          : "border-border hover:border-blue-300 hover:bg-muted"
+                      }`}
+                    >
+                      <div className="font-medium text-sm">
+                        🔍 Find one record by ID
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        Find a specific record using its ID or unique field
+                      </div>
+                    </button>
+
+                    <button
+                      onClick={() =>
+                        updateDbFindSimpleState({ template: "search" })
+                      }
+                      className={`p-3 text-left rounded-lg border-2 transition-all ${
+                        dbFindSimpleState.template === "search"
+                          ? "border-blue-500 bg-blue-500/10"
+                          : "border-border hover:border-blue-300 hover:bg-muted"
+                      }`}
+                    >
+                      <div className="font-medium text-sm">
+                        🔎 Search by field value
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        Find records that match specific criteria
+                      </div>
+                    </button>
+
+                    <button
+                      onClick={() =>
+                        updateDbFindSimpleState({ template: "latest" })
+                      }
+                      className={`p-3 text-left rounded-lg border-2 transition-all ${
+                        dbFindSimpleState.template === "latest"
+                          ? "border-blue-500 bg-blue-500/10"
+                          : "border-border hover:border-blue-300 hover:bg-muted"
+                      }`}
+                    >
+                      <div className="font-medium text-sm">
+                        📅 Get latest records
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        Get the most recent records sorted by date
+                      </div>
+                    </button>
+
+                    <button
+                      onClick={() =>
+                        updateDbFindSimpleState({
+                          mode: "advanced",
+                          template: "custom",
+                        })
+                      }
+                      className="p-3 text-left rounded-lg border-2 border-dashed border-border hover:border-blue-300 hover:bg-muted transition-all"
+                    >
+                      <div className="font-medium text-sm">
+                        ⚙️ Custom query (Advanced)
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        Full control with advanced options
+                      </div>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Template-specific configuration */}
+                {dbFindSimpleState.template === "findById" && (
+                  <div className="space-y-3 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                    <div className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                      🔍 Find record where:
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm">Field:</label>
+                      <input
+                        type="text"
+                        placeholder="id"
+                        value={dbFindSimpleState.idField || ""}
+                        onChange={(e) =>
+                          updateDbFindSimpleState({ idField: e.target.value })
+                        }
+                        className="w-full px-3 py-2 text-sm border rounded-md bg-background"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm">Equals:</label>
+                      <input
+                        type="text"
+                        placeholder="{{formData.recordId}}"
+                        value={dbFindSimpleState.idValue || ""}
+                        onChange={(e) =>
+                          updateDbFindSimpleState({ idValue: e.target.value })
+                        }
+                        className="w-full px-3 py-2 text-sm border rounded-md bg-background font-mono"
+                      />
+                      <div className="text-xs text-blue-700 dark:text-blue-300">
+                        💡 Tip: Use {`{{formData.fieldName}}`} to insert dynamic
+                        values
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Search template configuration */}
+                {dbFindSimpleState.template === "search" && (
+                  <div className="space-y-3 p-4 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
+                    <div className="text-sm font-medium text-green-900 dark:text-green-100">
+                      🔎 Find records where:
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-2">
+                        <label className="text-sm">Field:</label>
+                        <input
+                          type="text"
+                          placeholder="status"
+                          value={dbFindSimpleState.searchField || ""}
+                          onChange={(e) =>
+                            updateDbFindSimpleState({
+                              searchField: e.target.value,
+                            })
                           }
-                        : node
-                    )
-                  );
-                }}
-                rows={3}
-                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
-              />
-              <div className="text-xs text-muted-foreground">
-                JSON format for query conditions
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Limit:</label>
-                <input
-                  type="number"
-                  placeholder="10"
-                  value={data.limit || ""}
-                  onChange={(e) => {
-                    const value = parseInt(e.target.value) || undefined;
-                    setNodes((nodes) =>
-                      nodes.map((node) =>
-                        node.id === id
-                          ? {
-                              ...node,
-                              data: { ...node.data, limit: value },
+                          className="w-full px-3 py-2 text-sm border rounded-md bg-background"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-sm">Condition:</label>
+                        <select
+                          value={dbFindSimpleState.searchOperator || "equals"}
+                          onChange={(e) =>
+                            updateDbFindSimpleState({
+                              searchOperator: e.target.value,
+                            })
+                          }
+                          className="w-full px-3 py-2 text-sm border rounded-md bg-background"
+                        >
+                          <option value="equals">equals</option>
+                          <option value="not equals">not equals</option>
+                          <option value="greater than">greater than</option>
+                          <option value="less than">less than</option>
+                          <option value="greater than or equal to">
+                            greater than or equal to
+                          </option>
+                          <option value="less than or equal to">
+                            less than or equal to
+                          </option>
+                          <option value="contains">contains</option>
+                          <option value="does not contain">
+                            does not contain
+                          </option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm">Value:</label>
+                      <input
+                        type="text"
+                        placeholder="active"
+                        value={dbFindSimpleState.searchValue || ""}
+                        onChange={(e) =>
+                          updateDbFindSimpleState({
+                            searchValue: e.target.value,
+                          })
+                        }
+                        className="w-full px-3 py-2 text-sm border rounded-md bg-background font-mono"
+                      />
+                      <div className="text-xs text-green-700 dark:text-green-300">
+                        💡 Tip: Use {`{{formData.fieldName}}`} to insert dynamic
+                        values
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm">How many results?</label>
+                      <select
+                        value={dbFindSimpleState.resultLimit || "first10"}
+                        onChange={(e) =>
+                          updateDbFindSimpleState({
+                            resultLimit: e.target.value as any,
+                          })
+                        }
+                        className="w-full px-3 py-2 text-sm border rounded-md bg-background"
+                      >
+                        <option value="first10">First 10 results</option>
+                        <option value="first50">First 50 results</option>
+                        <option value="all">All results (up to 1000)</option>
+                        <option value="custom">Custom...</option>
+                      </select>
+                    </div>
+                    {dbFindSimpleState.resultLimit === "custom" && (
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-2">
+                          <label className="text-sm">Limit:</label>
+                          <input
+                            type="number"
+                            placeholder="100"
+                            value={dbFindSimpleState.customLimit || ""}
+                            onChange={(e) =>
+                              updateDbFindSimpleState({
+                                customLimit: parseInt(e.target.value) || 100,
+                              })
                             }
-                          : node
-                      )
-                    );
-                  }}
-                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Offset:</label>
-                <input
-                  type="number"
-                  placeholder="0"
-                  value={data.offset || ""}
-                  onChange={(e) => {
-                    const value = parseInt(e.target.value) || undefined;
-                    setNodes((nodes) =>
-                      nodes.map((node) =>
-                        node.id === id
-                          ? {
-                              ...node,
-                              data: { ...node.data, offset: value },
+                            className="w-full px-3 py-2 text-sm border rounded-md bg-background"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-sm">Skip (Offset):</label>
+                          <input
+                            type="number"
+                            placeholder="0"
+                            value={dbFindSimpleState.customOffset || ""}
+                            onChange={(e) =>
+                              updateDbFindSimpleState({
+                                customOffset: parseInt(e.target.value) || 0,
+                              })
                             }
-                          : node
-                      )
-                    );
-                  }}
-                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                            className="w-full px-3 py-2 text-sm border rounded-md bg-background"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Latest template configuration */}
+                {dbFindSimpleState.template === "latest" && (
+                  <div className="space-y-3 p-4 bg-purple-50 dark:bg-purple-900/20 rounded-lg border border-purple-200 dark:border-purple-800">
+                    <div className="text-sm font-medium text-purple-900 dark:text-purple-100">
+                      📅 Get latest records:
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm">Sort by field:</label>
+                      <input
+                        type="text"
+                        placeholder="createdAt"
+                        value={dbFindSimpleState.sortField || ""}
+                        onChange={(e) =>
+                          updateDbFindSimpleState({ sortField: e.target.value })
+                        }
+                        className="w-full px-3 py-2 text-sm border rounded-md bg-background"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm">Order:</label>
+                      <select
+                        value={dbFindSimpleState.sortDirection || "newest"}
+                        onChange={(e) =>
+                          updateDbFindSimpleState({
+                            sortDirection: e.target.value as any,
+                          })
+                        }
+                        className="w-full px-3 py-2 text-sm border rounded-md bg-background"
+                      >
+                        <option value="newest">Newest first (DESC)</option>
+                        <option value="oldest">Oldest first (ASC)</option>
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm">How many records?</label>
+                      <input
+                        type="number"
+                        placeholder="10"
+                        value={dbFindSimpleState.latestLimit || ""}
+                        onChange={(e) =>
+                          updateDbFindSimpleState({
+                            latestLimit: parseInt(e.target.value) || 10,
+                          })
+                        }
+                        className="w-full px-3 py-2 text-sm border rounded-md bg-background"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
-            </div>
+            )}
+
+            {/* Advanced Mode UI - Original implementation */}
+            {dbFindSimpleState.mode === "advanced" && (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Table Name:</label>
+                  {tableSuggestions.length > 0 ? (
+                    <select
+                      value={data.tableName || ""}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setNodes((nodes) =>
+                          nodes.map((node) =>
+                            node.id === id
+                              ? {
+                                  ...node,
+                                  data: { ...node.data, tableName: value },
+                                }
+                              : node
+                          )
+                        );
+                      }}
+                      className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">Select table...</option>
+                      {tableSuggestions.map((table) => (
+                        <option key={table.value} value={table.value}>
+                          {table.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      placeholder="Enter table name..."
+                      value={data.tableName || ""}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setNodes((nodes) =>
+                          nodes.map((node) =>
+                            node.id === id
+                              ? {
+                                  ...node,
+                                  data: { ...node.data, tableName: value },
+                                }
+                              : node
+                          )
+                        );
+                      }}
+                      className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">
+                    Conditions (Optional):
+                  </label>
+                  <textarea
+                    placeholder='[{"field": "status", "operator": "=", "value": "active"}]'
+                    value={
+                      typeof data.conditions === "string"
+                        ? data.conditions
+                        : JSON.stringify(data.conditions || [], null, 2)
+                    }
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setNodes((nodes) =>
+                        nodes.map((node) =>
+                          node.id === id
+                            ? {
+                                ...node,
+                                data: { ...node.data, conditions: value },
+                              }
+                            : node
+                        )
+                      );
+                    }}
+                    rows={3}
+                    className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                  />
+                  <div className="text-xs text-muted-foreground">
+                    Array of condition objects with field, operator, value,
+                    logic
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Limit:</label>
+                    <input
+                      type="number"
+                      placeholder="10"
+                      value={data.limit || ""}
+                      onChange={(e) => {
+                        const value = parseInt(e.target.value) || undefined;
+                        setNodes((nodes) =>
+                          nodes.map((node) =>
+                            node.id === id
+                              ? {
+                                  ...node,
+                                  data: { ...node.data, limit: value },
+                                }
+                              : node
+                          )
+                        );
+                      }}
+                      className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Offset:</label>
+                    <input
+                      type="number"
+                      placeholder="0"
+                      value={data.offset || ""}
+                      onChange={(e) => {
+                        const value = parseInt(e.target.value) || undefined;
+                        setNodes((nodes) =>
+                          nodes.map((node) =>
+                            node.id === id
+                              ? {
+                                  ...node,
+                                  data: { ...node.data, offset: value },
+                                }
+                              : node
+                          )
+                        );
+                      }}
+                      className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         );
 
