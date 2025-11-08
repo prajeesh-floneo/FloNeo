@@ -1078,6 +1078,7 @@ const executeDbFind = async (node, context, appId, userId) => {
 
     return {
       success: true,
+      type: "dbFind",
       data: results,
       count: results.length,
       tableName,
@@ -4501,7 +4502,12 @@ router.post("/execute", authenticateToken, async (req, res) => {
 
         // Update context with result data
         if (result && typeof result === "object") {
-          currentContext = { ...currentContext, ...result };
+          // If result has a context property, merge it separately
+          if (result.context) {
+            currentContext = { ...currentContext, ...result.context };
+          } else {
+            currentContext = { ...currentContext, ...result };
+          }
         }
 
         // Determine next node based on condition result or edge label
