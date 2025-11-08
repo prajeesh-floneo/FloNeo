@@ -1179,6 +1179,130 @@ export function DatabaseScreen() {
           )}
         </div>
       </div>
+
+      {/* Create Table Modal */}
+      <Dialog
+        open={showCreateTableModal}
+        onOpenChange={setShowCreateTableModal}
+      >
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Create New Table</DialogTitle>
+            <DialogDescription>
+              Define your table structure with columns and data types
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            {/* Table Name */}
+            <div className="space-y-2">
+              <Label htmlFor="tableName">Table Name</Label>
+              <Input
+                id="tableName"
+                placeholder="demo"
+                value={newTableName}
+                onChange={(e) => setNewTableName(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Final table: app_{appId}_
+                {newTableName.toLowerCase().replace(/\s+/g, "_")}
+              </p>
+            </div>
+
+            {/* Columns */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label>Columns</Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={addColumn}
+                  className="gap-2"
+                >
+                  <Plus className="w-4 h-4" />
+                  Add Column
+                </Button>
+              </div>
+
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {newTableColumns.map((column, index) => (
+                  <div
+                    key={index}
+                    className="flex items-center gap-2 p-3 border rounded-lg"
+                  >
+                    <div className="flex-1">
+                      <Input
+                        placeholder="Column name"
+                        value={column.name}
+                        onChange={(e) =>
+                          updateColumn(index, "name", e.target.value)
+                        }
+                      />
+                    </div>
+                    <div className="w-32">
+                      <Select
+                        value={column.type}
+                        onValueChange={(value) =>
+                          updateColumn(index, "type", value)
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="Text">Text</SelectItem>
+                          <SelectItem value="Number">Number</SelectItem>
+                          <SelectItem value="Boolean">Boolean</SelectItem>
+                          <SelectItem value="Date">Date</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        checked={column.required}
+                        onCheckedChange={(checked) =>
+                          updateColumn(index, "required", checked as boolean)
+                        }
+                      />
+                      <Label className="text-xs">Required</Label>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => removeColumn(index)}
+                      disabled={newTableColumns.length <= 1}
+                    >
+                      <Trash className="w-4 h-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowCreateTableModal(false)}
+              disabled={creatingTable}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleCreateTable} disabled={creatingTable}>
+              {creatingTable ? (
+                <>
+                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                "Create Table"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

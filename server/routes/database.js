@@ -208,6 +208,14 @@ router.post("/:appId/tables/create", authenticateToken, async (req, res) => {
     columns.forEach((col) => {
       const columnName = col.name;
 
+      // Skip 'id' column as it's already added as SERIAL PRIMARY KEY
+      if (columnName.toLowerCase() === "id") {
+        console.log(
+          "⚠️  [DATABASE] Skipping 'id' column from user input - already added as PRIMARY KEY"
+        );
+        return;
+      }
+
       // Validate column name
       if (!isValidTableName(columnName)) {
         throw new Error(`Invalid column name: ${columnName}`);
@@ -423,12 +431,10 @@ router.post(
           .json({ success: false, message: "Invalid table name" });
       }
       if (!["csv", "excel"].includes(format)) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message: "Invalid format (use csv or excel)",
-          });
+        return res.status(400).json({
+          success: false,
+          message: "Invalid format (use csv or excel)",
+        });
       }
 
       // strict app access
