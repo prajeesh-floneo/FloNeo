@@ -268,6 +268,15 @@ export function ElementToolbar({
       description: "Heart shape",
     },
 
+    // Dashboard Elements
+    {
+      type: "TEXT_DISPLAY",
+      icon: FileText,
+      label: "Text Display",
+      category: "dashboard",
+      description: "Display dynamic data from workflows",
+    },
+
     // Layout Elements
     {
       type: "frame",
@@ -447,7 +456,7 @@ export function ElementToolbar({
       id: "dashboard" as const,
       label: "Dashboard",
       icon: Settings,
-      description: "Dashboard components (coming soon)",
+      description: "Data display and dashboard components",
     },
   ];
 

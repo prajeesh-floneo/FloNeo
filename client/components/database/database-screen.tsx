@@ -29,9 +29,28 @@ import {
   ArrowLeft,
   Table as TableIcon,
   HardDrive,
+  Plus,
+  Trash,
 } from "lucide-react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useToast } from "@/hooks/use-toast";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 
 interface DatabaseTable {
   name: string;
@@ -53,6 +72,21 @@ export function DatabaseScreen() {
   const [totalPages, setTotalPages] = useState(1);
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+
+  // Create Table Modal State
+  const [showCreateTableModal, setShowCreateTableModal] = useState(false);
+  const [newTableName, setNewTableName] = useState("");
+  const [newTableColumns, setNewTableColumns] = useState<
+    Array<{
+      name: string;
+      type: string;
+      required: boolean;
+    }>
+  >([
+    { name: "id", type: "Number", required: true },
+    { name: "Name", type: "Text", required: true },
+  ]);
+  const [creatingTable, setCreatingTable] = useState(false);
 
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -145,6 +179,127 @@ export function DatabaseScreen() {
         variant: "destructive",
       });
     }
+  };
+
+  const handleCreateTable = async () => {
+    if (!newTableName.trim()) {
+      toast({
+        title: "Error",
+        description: "Please enter a table name",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (newTableColumns.length === 0) {
+      toast({
+        title: "Error",
+        description: "Please add at least one column",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Validate column names
+    const emptyColumns = newTableColumns.filter((col) => !col.name.trim());
+    if (emptyColumns.length > 0) {
+      toast({
+        title: "Error",
+        description: "All columns must have a name",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setCreatingTable(true);
+
+    try {
+      const token = localStorage.getItem("authToken");
+      if (!token) {
+        throw new Error("Authentication token not found");
+      }
+
+      // Map column types to database types
+      const columnTypeMap: Record<string, string> = {
+        Text: "TEXT",
+        Number: "INTEGER",
+        Boolean: "BOOLEAN",
+        Date: "TIMESTAMP",
+      };
+
+      const columns = newTableColumns.map((col) => ({
+        name: col.name.toLowerCase().replace(/\s+/g, "_"),
+        type: columnTypeMap[col.type] || "TEXT",
+        required: col.required,
+        elementId: col.name.toLowerCase().replace(/\s+/g, "_"),
+        originalName: col.name,
+      }));
+
+      const response = await fetch(`/api/database/${appId}/tables/create`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          tableName: newTableName.toLowerCase().replace(/\s+/g, "_"),
+          columns,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to create table");
+      }
+
+      toast({
+        title: "Success",
+        description: `Table "${newTableName}" created successfully`,
+      });
+
+      // Reset form
+      setShowCreateTableModal(false);
+      setNewTableName("");
+      setNewTableColumns([
+        { name: "id", type: "Number", required: true },
+        { name: "Name", type: "Text", required: true },
+      ]);
+
+      // Reload tables
+      loadTables();
+    } catch (err) {
+      console.error("❌ [DATABASE] Error creating table:", err);
+      toast({
+        title: "Error",
+        description:
+          err instanceof Error ? err.message : "Failed to create table",
+        variant: "destructive",
+      });
+    } finally {
+      setCreatingTable(false);
+    }
+  };
+
+  const addColumn = () => {
+    setNewTableColumns([
+      ...newTableColumns,
+      { name: "", type: "Text", required: false },
+    ]);
+  };
+
+  const removeColumn = (index: number) => {
+    setNewTableColumns(newTableColumns.filter((_, i) => i !== index));
+  };
+
+  const updateColumn = (
+    index: number,
+    field: "name" | "type" | "required",
+    value: string | boolean
+  ) => {
+    const updated = [...newTableColumns];
+    updated[index] = { ...updated[index], [field]: value };
+    setNewTableColumns(updated);
   };
 
   // Helper function to format cell values based on type
@@ -335,14 +490,20 @@ export function DatabaseScreen() {
             No Tables Found
           </h3>
           <p className="text-gray-600 dark:text-gray-400 mt-1">
-            Create your first table by submitting a form with a db.create
-            workflow block.
+            Create your first table manually or by submitting a form with a
+            db.create workflow block.
           </p>
         </div>
-        <Button onClick={loadTables} variant="outline">
-          <RefreshCw className="w-4 h-4 mr-2" />
-          Refresh
-        </Button>
+        <div className="flex gap-2">
+          <Button onClick={() => setShowCreateTableModal(true)}>
+            <Plus className="w-4 h-4 mr-2" />
+            Create Table
+          </Button>
+          <Button onClick={loadTables} variant="outline">
+            <RefreshCw className="w-4 h-4 mr-2" />
+            Refresh
+          </Button>
+        </div>
       </div>
     );
   }
@@ -396,6 +557,19 @@ export function DatabaseScreen() {
                   </p>
                 </div>
               </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                onClick={() => setShowCreateTableModal(true)}
+                className="gap-2"
+              >
+                <Plus className="w-4 h-4" />
+                Create Table
+              </Button>
+              <Button onClick={loadTables} variant="outline" size="sm">
+                <RefreshCw className="w-4 h-4 mr-2" />
+                Refresh
+              </Button>
             </div>
           </div>
 
@@ -627,6 +801,136 @@ export function DatabaseScreen() {
           )}
         </div>
       </div>
+
+      {/* Create Table Modal */}
+      <Dialog
+        open={showCreateTableModal}
+        onOpenChange={setShowCreateTableModal}
+      >
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Create New Table</DialogTitle>
+            <DialogDescription>
+              Define your table structure with columns and data types
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            {/* Table Name */}
+            <div className="space-y-2">
+              <Label htmlFor="tableName">Table Name</Label>
+              <Input
+                id="tableName"
+                placeholder="demo"
+                value={newTableName}
+                onChange={(e) => setNewTableName(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Final table: app_{appId}_
+                {newTableName.toLowerCase().replace(/\s+/g, "_")}
+              </p>
+            </div>
+
+            {/* Columns */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label>Columns</Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={addColumn}
+                  className="gap-2"
+                >
+                  <Plus className="w-4 h-4" />
+                  Add Column
+                </Button>
+              </div>
+
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {newTableColumns.map((column, index) => (
+                  <div
+                    key={index}
+                    className="flex items-center gap-2 p-3 border rounded-lg"
+                  >
+                    <div className="flex-1 space-y-2">
+                      <Input
+                        placeholder="Column name"
+                        value={column.name}
+                        onChange={(e) =>
+                          updateColumn(index, "name", e.target.value)
+                        }
+                      />
+                    </div>
+                    <div className="w-32">
+                      <Select
+                        value={column.type}
+                        onValueChange={(value) =>
+                          updateColumn(index, "type", value)
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="Text">Text</SelectItem>
+                          <SelectItem value="Number">Number</SelectItem>
+                          <SelectItem value="Boolean">Boolean</SelectItem>
+                          <SelectItem value="Date">Date</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        id={`required-${index}`}
+                        checked={column.required}
+                        onCheckedChange={(checked) =>
+                          updateColumn(index, "required", checked === true)
+                        }
+                      />
+                      <Label
+                        htmlFor={`required-${index}`}
+                        className="text-xs cursor-pointer"
+                      >
+                        Required
+                      </Label>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => removeColumn(index)}
+                      disabled={newTableColumns.length === 1}
+                    >
+                      <Trash className="w-4 h-4 text-red-600" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowCreateTableModal(false)}
+              disabled={creatingTable}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleCreateTable} disabled={creatingTable}>
+              {creatingTable ? (
+                <>
+                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                "Create Table"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
