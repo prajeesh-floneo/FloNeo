@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, Suspense } from "react";
+import { useEffect, useState, Suspense, useCallback, useMemo } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { CanvasRenderer } from "@/components/canvas/CanvasRenderer";
 import { CanvasElement } from "@/components/canvas/ElementManager";
@@ -10,9 +10,41 @@ import {
   PreviewPage as PreviewPageType,
 } from "@/lib/utils";
 import { mapPageStyle, getPageStyleHash } from "@/runtime/pageStyle";
+import { authenticatedFetch } from "@/lib/auth";
 
 // Force no caching
 export const dynamic = "force-dynamic";
+
+// Workflow types
+interface WorkflowNode {
+  id: string;
+  type: string;
+  position: { x: number; y: number };
+  data: any;
+}
+
+interface WorkflowEdge {
+  id: string;
+  source: string;
+  target: string;
+  type?: string;
+  label?: string;
+  sourceHandle?: string;
+  targetHandle?: string;
+  data?: any;
+}
+
+interface Workflow {
+  elementId: string;
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+  metadata?: any;
+}
+
+type TriggerKey =
+  | `${string}:${"click" | "change" | "submit" | "drop"}`
+  | `formGroup:${string}:submit`
+  | `page:${string}:load`;
 
 interface PreviewContentProps {
   appId: string;
@@ -24,6 +56,12 @@ function PreviewContent({ appId, pageId }: PreviewContentProps) {
   const [currentPageId, setCurrentPageId] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Workflow state
+  const [workflows, setWorkflows] = useState<Map<string, Workflow>>(new Map());
+  const [workflowContext, setWorkflowContext] = useState<Record<string, any>>(
+    {}
+  );
 
   // Load preview data
   useEffect(() => {
@@ -79,6 +117,43 @@ function PreviewContent({ appId, pageId }: PreviewContentProps) {
               h: el.height,
             })),
         });
+
+        // Load workflows
+        console.log("🔄 PREVIEW: Fetching workflows for appId:", appId);
+        const token = localStorage.getItem("authToken") || "";
+        const workflowResponse = await fetch(
+          `/api/canvas/workflows/${appId}?preview=true`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+            cache: "no-store",
+          }
+        );
+
+        if (workflowResponse.ok) {
+          const workflowData = await workflowResponse.json();
+          console.log("🔄 PREVIEW: Workflow response:", {
+            success: workflowData.success,
+            workflowsCount: workflowData.data?.workflows?.length || 0,
+          });
+
+          if (workflowData.success && workflowData.data?.workflows) {
+            const workflowMap = new Map<string, Workflow>();
+            workflowData.data.workflows.forEach((wf: Workflow) => {
+              workflowMap.set(wf.elementId, wf);
+              console.log(
+                "📋 PREVIEW: Loaded workflow for element:",
+                wf.elementId
+              );
+            });
+            setWorkflows(workflowMap);
+            console.log("✅ PREVIEW: Workflows loaded:", workflowMap.size);
+          }
+        } else {
+          console.warn(
+            "⚠️ PREVIEW: Failed to load workflows:",
+            workflowResponse.status
+          );
+        }
       } catch (err) {
         console.error("❌ PREVIEW: Failed to load preview data", err);
         setError(err instanceof Error ? err.message : "Failed to load preview");
@@ -140,24 +215,166 @@ function PreviewContent({ appId, pageId }: PreviewContentProps) {
 
   const currentPage = snapshot.pages.find((page) => page.id === currentPageId);
 
+  // Build workflow index for fast lookup
+  const workflowIndex = useMemo(() => {
+    const index = new Map<TriggerKey, Workflow[]>();
+
+    workflows.forEach((workflow) => {
+      // Find trigger nodes in the workflow
+      workflow.nodes.forEach((node) => {
+        const label = node.data.label?.toLowerCase();
+
+        if (label === "onclick") {
+          const key = `${workflow.elementId}:click` as TriggerKey;
+          if (!index.has(key)) index.set(key, []);
+          index.get(key)!.push(workflow);
+          console.log(
+            `[WF-INDEX] Registered onClick workflow for ${workflow.elementId}`
+          );
+        } else if (label === "onchange") {
+          const key = `${workflow.elementId}:change` as TriggerKey;
+          if (!index.has(key)) index.set(key, []);
+          index.get(key)!.push(workflow);
+        } else if (label === "onsubmit") {
+          const formGroupId = node.data.selectedFormGroup;
+          if (formGroupId) {
+            const key = `formGroup:${formGroupId}:submit` as TriggerKey;
+            if (!index.has(key)) index.set(key, []);
+            index.get(key)!.push(workflow);
+          }
+        } else if (label === "onpageload") {
+          const targetPageId = node.data.selectedPage || currentPageId;
+          const key = `page:${targetPageId}:load` as TriggerKey;
+          if (!index.has(key)) index.set(key, []);
+          index.get(key)!.push(workflow);
+        }
+      });
+    });
+
+    console.log("[WF-INDEX] Workflow index built:", {
+      totalKeys: index.size,
+      keys: Array.from(index.keys()),
+    });
+
+    return index;
+  }, [workflows, currentPageId]);
+
+  // Execute workflow
+  const runWorkflow = useCallback(
+    async (workflow: Workflow, initialContext?: any) => {
+      console.log("[WF-RUN] Starting workflow execution:", {
+        elementId: workflow.elementId,
+        nodesCount: workflow.nodes.length,
+        nodeLabels: workflow.nodes.map((n) => n.data.label),
+      });
+
+      try {
+        // Send workflow to backend for execution
+        const response = await authenticatedFetch("/api/workflow/execute", {
+          method: "POST",
+          body: JSON.stringify({
+            appId: appId,
+            nodes: workflow.nodes,
+            edges: workflow.edges || [],
+            context: initialContext || {},
+          }),
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+          console.error("[WF-RUN] Backend execution failed:", result);
+          throw new Error(result.message || "Backend execution failed");
+        }
+
+        console.log("[WF-RUN] Backend execution completed:", {
+          resultsCount: result.results?.length,
+          success: result.success,
+        });
+
+        // Update workflow context with results
+        if (result.results && Array.isArray(result.results)) {
+          const newContext: Record<string, any> = { ...workflowContext };
+
+          for (const resultItem of result.results) {
+            if (!resultItem.result) continue;
+
+            const blockResult = resultItem.result;
+            const nodeLabel = resultItem.nodeLabel || "unknown";
+
+            console.log(`[WF-RUN] Processing result for ${nodeLabel}:`, {
+              success: blockResult.success,
+              type: blockResult.type,
+            });
+
+            // Store db.find results in context
+            if (blockResult.type === "dbFind" && blockResult.success) {
+              newContext.dbFindResult = blockResult.data;
+              console.log(
+                "[WF-RUN] Stored dbFindResult in context:",
+                blockResult.data
+              );
+            }
+
+            // Store other results as needed
+            if (blockResult.data) {
+              newContext[nodeLabel] = blockResult.data;
+            }
+          }
+
+          setWorkflowContext(newContext);
+          console.log("[WF-RUN] Updated workflow context:", newContext);
+        }
+
+        console.log("[WF-RUN] Workflow execution completed successfully");
+      } catch (error) {
+        console.error("[WF-RUN] Workflow execution error:", error);
+      }
+    },
+    [appId, workflowContext]
+  );
+
   // Runtime event handler for preview mode
-  const handleRuntimeEvent = (
-    elementId: string,
-    eventType: string,
-    data?: any
-  ) => {
-    switch (eventType) {
-      case "click":
-        console.log("🎯 PREVIEW: Element clicked:", elementId);
-        // Add workflow execution logic here if needed
-        break;
-      case "change":
-        console.log("🔄 PREVIEW: Input changed:", elementId, data?.value);
-        break;
-      default:
-        console.log("🎯 PREVIEW: Event:", eventType, elementId, data);
-    }
-  };
+  const handleRuntimeEvent = useCallback(
+    (elementId: string, eventType: string, data?: any) => {
+      console.log("[EVENT] Runtime event:", { elementId, eventType, data });
+
+      // Sanitize data to remove circular references
+      const sanitizedData = data
+        ? {
+            elementId: data.elementId || elementId,
+            value: data.value,
+            // Don't include 'element' or 'event' objects - they contain circular references
+          }
+        : {};
+
+      if (eventType === "click") {
+        const key = `${elementId}:click` as TriggerKey;
+        const workflowList = workflowIndex.get(key);
+
+        if (workflowList && workflowList.length > 0) {
+          console.log(
+            `[EVENT] Found ${workflowList.length} workflow(s) for ${key}`
+          );
+          workflowList.forEach((wf) =>
+            runWorkflow(wf, { elementId, ...sanitizedData })
+          );
+          return;
+        } else {
+          console.log(`[EVENT] No workflow found for ${key}`);
+        }
+      } else if (eventType === "change") {
+        console.log(
+          "🔄 PREVIEW: Input changed:",
+          elementId,
+          sanitizedData.value
+        );
+      } else {
+        console.log("🎯 PREVIEW: Event:", eventType, elementId, sanitizedData);
+      }
+    },
+    [workflowIndex, runWorkflow]
+  );
 
   if (!currentPage) {
     return (
@@ -243,6 +460,10 @@ function PreviewContent({ appId, pageId }: PreviewContentProps) {
                 canvasHeight={currentPage.canvasHeight ?? 640}
                 elements={currentPage.elements as CanvasElement[]}
                 onEvent={handleRuntimeEvent}
+                hasClickWorkflow={(elementId) =>
+                  workflowIndex.has(`${elementId}:click` as TriggerKey)
+                }
+                workflowContext={workflowContext}
               />
             </div>
           );
