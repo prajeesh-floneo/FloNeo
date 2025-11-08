@@ -292,6 +292,15 @@ const getDefaultProperties = (elementType: string): Record<string, any> => {
       borderColor: "#d1d5db",
       borderWidth: 1,
     },
+    TEXT_DISPLAY: {
+      bindingPath: "",
+      fallbackText: "No data",
+      format: "text",
+      fontSize: 14,
+      fontWeight: "normal",
+      color: "#000000",
+      textAlign: "left",
+    },
   };
   return propertiesMap[elementType] || {};
 };
