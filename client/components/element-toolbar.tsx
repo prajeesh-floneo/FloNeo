@@ -31,6 +31,7 @@ import {
   Lock,
   Eye,
   Unlock,
+  FileText,
   // Icon category icons
   Minimize2,
   Maximize2,
