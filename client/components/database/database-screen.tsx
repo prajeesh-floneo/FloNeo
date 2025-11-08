@@ -88,6 +88,11 @@ export function DatabaseScreen() {
   ]);
   const [creatingTable, setCreatingTable] = useState(false);
 
+  // Add Record Modal State
+  const [showAddRecordModal, setShowAddRecordModal] = useState(false);
+  const [newRecordData, setNewRecordData] = useState<Record<string, any>>({});
+  const [addingRecord, setAddingRecord] = useState(false);
+
   const searchParams = useSearchParams();
   const router = useRouter();
   const appId = searchParams.get("appId");
@@ -144,32 +149,48 @@ export function DatabaseScreen() {
   };
 
   const loadTableData = async (table: DatabaseTable, page = 1) => {
+    console.log("🟢 [LOAD TABLE DATA] Starting...");
+    console.log("🟢 [LOAD TABLE DATA] Table:", table.name);
+    console.log("🟢 [LOAD TABLE DATA] Page:", page);
+
     try {
       const token = localStorage.getItem("authToken");
       if (!token) {
         throw new Error("Authentication token not found");
       }
 
-      const response = await fetch(
-        `/api/database/${appId}/tables/${table.name}/data?page=${page}&limit=50`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
+      const url = `/api/database/${appId}/tables/${table.name}/data?page=${page}&limit=50`;
+      console.log("🟢 [LOAD TABLE DATA] Fetching:", url);
+
+      const response = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
 
       const data = await response.json();
+      console.log("🟢 [LOAD TABLE DATA] Response received:", data);
 
       if (!response.ok) {
         throw new Error(data.message || "Failed to load table data");
       }
 
+      console.log(
+        "🟢 [LOAD TABLE DATA] Data array length:",
+        data.data?.length || 0
+      );
+      console.log(
+        "🟢 [LOAD TABLE DATA] First 3 records:",
+        data.data?.slice(0, 3)
+      );
+
       setTableData(data.data || []);
       setCurrentPage(data.pagination.page);
       setTotalPages(data.pagination.totalPages);
       setSelectedTable(table);
+
+      console.log("✅ [LOAD TABLE DATA] State updated successfully");
     } catch (err) {
       console.error("❌ [DATABASE] Error loading table data:", err);
       toast({
@@ -267,7 +288,7 @@ export function DatabaseScreen() {
       ]);
 
       // Reload tables
-      loadTables();
+      await loadTables();
     } catch (err) {
       console.error("❌ [DATABASE] Error creating table:", err);
       toast({
@@ -278,6 +299,149 @@ export function DatabaseScreen() {
       });
     } finally {
       setCreatingTable(false);
+    }
+  };
+
+  const handleAddRecord = async () => {
+    if (!selectedTable) {
+      toast({
+        title: "Error",
+        description: "No table selected",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    console.log("🔵 [ADD RECORD] Starting record creation...");
+    console.log("🔵 [ADD RECORD] Selected table:", selectedTable);
+    console.log("🔵 [ADD RECORD] Record data:", newRecordData);
+
+    setAddingRecord(true);
+
+    try {
+      const token = localStorage.getItem("authToken");
+      if (!token) {
+        throw new Error("Authentication token not found");
+      }
+
+      console.log("🔵 [ADD RECORD] Sending POST request...");
+      const response = await fetch(
+        `/api/database/${appId}/tables/${selectedTable.name}/records`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(newRecordData),
+        }
+      );
+
+      const data = await response.json();
+      console.log("🔵 [ADD RECORD] Response:", data);
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to add record");
+      }
+
+      console.log("✅ [ADD RECORD] Record created successfully:", data.record);
+
+      toast({
+        title: "Success",
+        description: "Record added successfully",
+      });
+
+      // Reset form
+      setShowAddRecordModal(false);
+      setNewRecordData({});
+
+      // Reload table data
+      console.log("🔵 [ADD RECORD] Reloading table data...");
+      console.log(
+        "🔵 [ADD RECORD] Current tableData length:",
+        tableData.length
+      );
+      await loadTableData(selectedTable, currentPage);
+      console.log(
+        "🔵 [ADD RECORD] Table data reloaded. New length:",
+        tableData.length
+      );
+    } catch (err) {
+      console.error("❌ [DATABASE] Error adding record:", err);
+      toast({
+        title: "Error",
+        description:
+          err instanceof Error ? err.message : "Failed to add record",
+        variant: "destructive",
+      });
+    } finally {
+      setAddingRecord(false);
+    }
+  };
+
+  const handleDeleteTable = async (tableName: string) => {
+    // Show confirmation dialog
+    if (
+      !confirm(
+        `Are you sure you want to delete the table "${tableName}"? This action cannot be undone.`
+      )
+    ) {
+      return;
+    }
+
+    console.log("🔴 [DELETE TABLE] Starting table deletion...");
+    console.log("🔴 [DELETE TABLE] Table name:", tableName);
+
+    try {
+      const token = localStorage.getItem("authToken");
+      if (!token) {
+        throw new Error("Authentication token not found");
+      }
+
+      console.log("🔴 [DELETE TABLE] Sending DELETE request...");
+      const response = await fetch(
+        `/api/database/${appId}/tables/${tableName}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      const data = await response.json();
+      console.log("🔴 [DELETE TABLE] Response:", data);
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to delete table");
+      }
+
+      console.log("✅ [DELETE TABLE] Table deleted successfully");
+
+      toast({
+        title: "Success",
+        description: `Table "${tableName}" deleted successfully`,
+      });
+
+      // If the deleted table was selected, clear the selection
+      if (selectedTable?.name === tableName) {
+        setSelectedTable(null);
+        setTableData([]);
+      }
+
+      // Reload tables list
+      console.log("🔴 [DELETE TABLE] Reloading tables list...");
+      await loadTables();
+      console.log("✅ [DELETE TABLE] Tables list reloaded");
+    } catch (err) {
+      console.error("❌ [DATABASE] Error deleting table:", err);
+      toast({
+        title: "Error",
+        description:
+          err instanceof Error ? err.message : "Failed to delete table",
+        variant: "destructive",
+      });
     }
   };
 
@@ -1019,20 +1183,36 @@ export function DatabaseScreen() {
             </h2>
             <div className="space-y-2">
               {tables.map((table) => (
-                <button
+                <div
                   key={table.name}
-                  onClick={() => loadTableData(table)}
-                  className={`w-full text-left p-3 rounded-lg transition-colors ${
+                  className={`group relative w-full text-left p-3 rounded-lg transition-colors ${
                     selectedTable?.name === table.name
                       ? "bg-blue-100 dark:bg-blue-900/30 text-blue-900 dark:text-blue-100"
                       : "hover:bg-gray-100 dark:hover:bg-gray-800"
                   }`}
                 >
-                  <div className="font-medium truncate">{table.name}</div>
-                  <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">
-                    {table.rowCount} rows • {table.columns.length} columns
-                  </div>
-                </button>
+                  <button
+                    onClick={() => loadTableData(table)}
+                    className="w-full text-left"
+                  >
+                    <div className="font-medium truncate pr-8">
+                      {table.name}
+                    </div>
+                    <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                      {table.rowCount} rows • {table.columns.length} columns
+                    </div>
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteTable(table.name);
+                    }}
+                    className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-100 dark:hover:bg-red-900/30 rounded"
+                    title="Delete table"
+                  >
+                    <Trash className="w-4 h-4 text-red-600 dark:text-red-400" />
+                  </button>
+                </div>
               ))}
             </div>
           </div>
@@ -1051,14 +1231,26 @@ export function DatabaseScreen() {
                       {selectedTable.rowCount} total rows
                     </p>
                   </div>
-                  <Button
-                    onClick={() => loadTableData(selectedTable)}
-                    variant="outline"
-                    size="sm"
-                  >
-                    <RefreshCw className="w-4 h-4 mr-2" />
-                    Refresh
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      onClick={() => {
+                        setNewRecordData({});
+                        setShowAddRecordModal(true);
+                      }}
+                      size="sm"
+                    >
+                      <Plus className="w-4 h-4 mr-2" />
+                      Add Record
+                    </Button>
+                    <Button
+                      onClick={() => loadTableData(selectedTable)}
+                      variant="outline"
+                      size="sm"
+                    >
+                      <RefreshCw className="w-4 h-4 mr-2" />
+                      Refresh
+                    </Button>
+                  </div>
                 </div>
 
                 {/* Search */}
@@ -1298,6 +1490,114 @@ export function DatabaseScreen() {
                 </>
               ) : (
                 "Create Table"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Record Modal */}
+      <Dialog open={showAddRecordModal} onOpenChange={setShowAddRecordModal}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Add New Record</DialogTitle>
+            <DialogDescription>
+              Add a new record to {selectedTable?.name}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            {selectedTable?.columns
+              .filter(
+                (col) =>
+                  col.name !== "id" &&
+                  col.name !== "created_at" &&
+                  col.name !== "updated_at" &&
+                  col.name !== "app_id"
+              )
+              .map((column) => (
+                <div key={column.name} className="space-y-2">
+                  <Label htmlFor={column.name}>
+                    {column.name}
+                    <span className="text-xs text-muted-foreground ml-2">
+                      ({column.type})
+                    </span>
+                  </Label>
+                  {column.type === "Boolean" ? (
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        id={column.name}
+                        checked={newRecordData[column.name] || false}
+                        onCheckedChange={(checked) =>
+                          setNewRecordData({
+                            ...newRecordData,
+                            [column.name]: checked,
+                          })
+                        }
+                      />
+                      <Label htmlFor={column.name} className="text-sm">
+                        {newRecordData[column.name] ? "True" : "False"}
+                      </Label>
+                    </div>
+                  ) : column.type === "Date" || column.type === "DateTime" ? (
+                    <Input
+                      id={column.name}
+                      type="datetime-local"
+                      value={newRecordData[column.name] || ""}
+                      onChange={(e) =>
+                        setNewRecordData({
+                          ...newRecordData,
+                          [column.name]: e.target.value,
+                        })
+                      }
+                    />
+                  ) : column.type === "Number" || column.type === "Integer" ? (
+                    <Input
+                      id={column.name}
+                      type="number"
+                      placeholder={`Enter ${column.name}`}
+                      value={newRecordData[column.name] || ""}
+                      onChange={(e) =>
+                        setNewRecordData({
+                          ...newRecordData,
+                          [column.name]: e.target.value,
+                        })
+                      }
+                    />
+                  ) : (
+                    <Input
+                      id={column.name}
+                      type="text"
+                      placeholder={`Enter ${column.name}`}
+                      value={newRecordData[column.name] || ""}
+                      onChange={(e) =>
+                        setNewRecordData({
+                          ...newRecordData,
+                          [column.name]: e.target.value,
+                        })
+                      }
+                    />
+                  )}
+                </div>
+              ))}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowAddRecordModal(false)}
+              disabled={addingRecord}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleAddRecord} disabled={addingRecord}>
+              {addingRecord ? (
+                <>
+                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                  Adding...
+                </>
+              ) : (
+                "Add Record"
               )}
             </Button>
           </DialogFooter>

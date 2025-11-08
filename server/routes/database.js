@@ -120,10 +120,14 @@ router.get("/:appId/tables", authenticateToken, async (req, res) => {
       })
     );
 
-    console.log(`[DATABASE] Tables data prepared for appId=${appIdInt}`);
+    const filteredTables = tablesWithData.filter(Boolean);
+    console.log(
+      `[DATABASE] Tables data prepared for appId=${appIdInt}, returning ${filteredTables.length} tables`
+    );
+
     res.json({
       success: true,
-      tables: tablesWithData.filter(Boolean),
+      tables: filteredTables,
       totalTables: userTables.length,
     });
   } catch (error) {
@@ -256,7 +260,7 @@ router.post("/:appId/tables/create", authenticateToken, async (req, res) => {
     );
 
     // Register table in the UserTable metadata
-    await prisma.userTable.create({
+    const createdTableMetadata = await prisma.userTable.create({
       data: {
         appId: appIdInt,
         tableName,
@@ -264,7 +268,9 @@ router.post("/:appId/tables/create", authenticateToken, async (req, res) => {
       },
     });
 
-    console.log(`✅ [DATABASE] Table "${tableName}" created successfully`);
+    console.log(
+      `✅ [DATABASE] Table "${tableName}" created successfully with metadata ID: ${createdTableMetadata.id}`
+    );
 
     // Emit socket event for real-time updates
     emitTableCreated(appIdInt, {
@@ -401,6 +407,173 @@ router.get(
 );
 
 /**
+ * @route   POST /api/database/:appId/tables/:tableName/records
+ * @desc    Insert a new record into a table
+ * @access  Private
+ */
+router.post(
+  "/:appId/tables/:tableName/records",
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const appIdInt = parseAppId(req.params.appId);
+      const { tableName } = req.params;
+      const userId = req.user.id;
+      const recordData = req.body;
+
+      console.log(
+        `[DATABASE] Insert record request appId=${appIdInt} table=${tableName}`
+      );
+
+      // Validate inputs
+      if (!appIdInt) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid appId" });
+      }
+      if (!isValidTableName(tableName)) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid table name" });
+      }
+      if (!recordData || Object.keys(recordData).length === 0) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Record data is required" });
+      }
+
+      // Verify app access
+      await assertAppAccess(appIdInt, userId);
+
+      // Verify table metadata belongs to this app
+      const userTable = await prisma.userTable.findFirst({
+        where: { tableName, appId: appIdInt },
+      });
+      if (!userTable) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Table not found in metadata" });
+      }
+
+      // Parse table columns
+      let tableColumns = [];
+      try {
+        tableColumns =
+          typeof userTable.columns === "string"
+            ? JSON.parse(userTable.columns)
+            : userTable.columns;
+      } catch {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to parse table column metadata",
+        });
+      }
+
+      // Build INSERT query
+      const insertColumns = [];
+      const insertValues = [];
+      const insertParams = [];
+      let paramIndex = 1;
+
+      // Process each field in recordData
+      for (const [key, value] of Object.entries(recordData)) {
+        // Skip id, created_at, updated_at, app_id as they are auto-generated
+        if (
+          key === "id" ||
+          key === "created_at" ||
+          key === "updated_at" ||
+          key === "app_id"
+        ) {
+          continue;
+        }
+
+        // Find column definition
+        const columnDef = tableColumns.find((col) => col.name === key);
+        if (!columnDef) {
+          console.warn(
+            `[DATABASE] Column "${key}" not found in table metadata, skipping`
+          );
+          continue;
+        }
+
+        insertColumns.push(`"${key}"`);
+        insertValues.push(`$${paramIndex}`);
+
+        // Convert value based on column type
+        let processedValue = value;
+        if (columnDef.type === "Number" || columnDef.type === "Integer") {
+          processedValue =
+            value === "" || value === null ? null : Number(value);
+        } else if (columnDef.type === "Boolean") {
+          processedValue = Boolean(value);
+        } else if (columnDef.type === "Date" || columnDef.type === "DateTime") {
+          processedValue = value ? new Date(value) : null;
+        } else {
+          // Text, String, etc.
+          processedValue = value === null ? null : String(value);
+        }
+
+        insertParams.push(processedValue);
+        paramIndex++;
+      }
+
+      // Add app_id
+      insertColumns.push('"app_id"');
+      insertValues.push(`$${paramIndex}`);
+      insertParams.push(appIdInt);
+
+      if (insertColumns.length === 1) {
+        // Only app_id, no actual data
+        return res.status(400).json({
+          success: false,
+          message: "No valid columns provided for insert",
+        });
+      }
+
+      const insertSQL = `INSERT INTO "${tableName}" (${insertColumns.join(
+        ", "
+      )}) VALUES (${insertValues.join(", ")}) RETURNING *`;
+
+      console.log("💾 [DATABASE] Insert SQL:", insertSQL);
+      console.log("💾 [DATABASE] Insert params:", insertParams);
+
+      const insertResult = await prisma.$queryRawUnsafe(
+        insertSQL,
+        ...insertParams
+      );
+      const insertedRecord = insertResult[0];
+
+      console.log(
+        "✅ [DATABASE] Record inserted successfully, ID:",
+        insertedRecord?.id
+      );
+
+      // Emit socket event for real-time updates
+      emitDataUpdated(appIdInt, {
+        tableName,
+        action: "insert",
+        rowsAffected: 1,
+        preview: [insertedRecord],
+      });
+
+      res.json({
+        success: true,
+        message: "Record inserted successfully",
+        record: insertedRecord,
+      });
+    } catch (error) {
+      const status = error.status || 500;
+      console.error(`[DATABASE] Error inserting record:`, error);
+      res.status(status).json({
+        success: false,
+        message: error.status ? error.message : "Failed to insert record",
+        error: error.message,
+      });
+    }
+  }
+);
+
+/**
  * @route   POST /api/database/:appId/tables/:tableName/export
  * @desc    Export table data as CSV or Excel
  * @access  Private
@@ -494,6 +667,89 @@ router.post(
 
 /**
  * Debug route to test socket events manually
+ * @route   DELETE /api/database/:appId/tables/:tableName
+ * @desc    Delete a table from the database
+ * @access  Private
+ */
+router.delete(
+  "/:appId/tables/:tableName",
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const appIdInt = parseAppId(req.params.appId);
+      const { tableName } = req.params;
+      const userId = req.user.id;
+
+      // Validate inputs
+      if (!appIdInt) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid appId" });
+      }
+      if (!isValidTableName(tableName)) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid table name" });
+      }
+
+      console.log(
+        `[DATABASE] Deleting table: ${tableName} for appId=${appIdInt}`
+      );
+
+      // Verify app access
+      await assertAppAccess(appIdInt, userId);
+
+      // Verify table metadata belongs to this app
+      const userTable = await prisma.userTable.findFirst({
+        where: { tableName, appId: appIdInt },
+      });
+      if (!userTable) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Table not found in metadata" });
+      }
+
+      // Drop the actual table from the database
+      try {
+        await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "${tableName}"`);
+        console.log(`[DATABASE] Table "${tableName}" dropped successfully`);
+      } catch (error) {
+        console.error(`[DATABASE] Error dropping table "${tableName}":`, error);
+        // Continue even if table doesn't exist in database
+      }
+
+      // Delete the table metadata
+      await prisma.userTable.delete({
+        where: { id: userTable.id },
+      });
+
+      console.log(`[DATABASE] Table metadata deleted for "${tableName}"`);
+
+      // Emit socket event for real-time updates
+      emitTableCreated(appIdInt, {
+        tableName,
+        action: "deleted",
+        deletedBy: { id: userId },
+      });
+
+      res.json({
+        success: true,
+        message: "Table deleted successfully",
+        tableName,
+      });
+    } catch (error) {
+      const status = error.status || 500;
+      console.error(`[DATABASE] Error deleting table:`, error);
+      res.status(status).json({
+        success: false,
+        message: error.status ? error.message : "Failed to delete table",
+        error: error.message,
+      });
+    }
+  }
+);
+
+/**
  * @route POST /api/database/:appId/debug/broadcast
  */
 router.post(
