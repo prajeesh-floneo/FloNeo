@@ -5,7 +5,9 @@ RUN apk add --no-cache \
     python3 \
     make \
     g++ \
-    libc6-compat
+    libc6-compat \
+    curl \
+    postgresql-client
 
 WORKDIR /app
 
@@ -13,19 +15,14 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies with better caching
-# Use npm ci when a lockfile exists, otherwise fall back to npm install
-RUN sh -c '\
-  if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then \
-    npm ci --only=production --no-cache --prefer-offline; \
-  else \
-    npm install --only=production --no-cache --prefer-offline; \
-  fi'
+# Note: --no-cache is invalid for npm ci and causes build failures
+# Using --prefer-offline for better Docker layer caching
+RUN npm ci --omit=dev --prefer-offline --no-audit
 
 # Copy source code
 COPY . .
 
-# Copy startup script
-COPY start.sh /app/start.sh
+# Ensure start.sh has execute permissions
 RUN chmod +x /app/start.sh
 
 # Generate Prisma client
@@ -38,8 +35,8 @@ RUN mkdir -p uploads/thumbnails
 EXPOSE 5000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:5000/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"
+HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=5 \
+  CMD curl -f http://localhost:5000/health || exit 1
 
 # Start the application with migrations
-CMD ["/app/start.sh"]
+CMD ["/bin/sh", "/app/start.sh"]

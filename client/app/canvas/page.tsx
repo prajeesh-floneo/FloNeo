@@ -5678,52 +5678,8 @@ function CanvasPageContent() {
                 type="text"
                 value={appName}
                 onChange={(e) => setAppName(e.target.value)}
-                onBlur={async () => {
-                  setIsEditingName(false);
-                  // persist name
-                  if (currentAppId) {
-                    try {
-                      const resp = await authenticatedFetch(`/api/apps/${currentAppId}`, {
-                        method: "PATCH",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ name: appName.trim() }),
-                      });
-                      const result = await resp.json();
-                      if (result.success) {
-                        toast({ title: "App name saved", description: `Saved as \"${appName}\"` });
-                      } else {
-                        throw new Error(result.message || "Failed to save name");
-                      }
-                    } catch (err: any) {
-                      console.error("Error saving app name:", err);
-                      toast({ title: "Save failed", description: err?.message || "Failed to save app name", variant: "destructive" });
-                    }
-                  }
-                }}
-                onKeyDown={async (e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    setIsEditingName(false);
-                    if (currentAppId) {
-                      try {
-                        const resp = await authenticatedFetch(`/api/apps/${currentAppId}`, {
-                          method: "PATCH",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ name: appName.trim() }),
-                        });
-                        const result = await resp.json();
-                        if (result.success) {
-                          toast({ title: "App name saved", description: `Saved as \"${appName}\"` });
-                        } else {
-                          throw new Error(result.message || "Failed to save name");
-                        }
-                      } catch (err: any) {
-                        console.error("Error saving app name:", err);
-                        toast({ title: "Save failed", description: err?.message || "Failed to save app name", variant: "destructive" });
-                      }
-                    }
-                  }
-                }}
+                onBlur={() => setIsEditingName(false)}
+                onKeyDown={(e) => e.key === "Enter" && setIsEditingName(false)}
                 className="text-lg font-semibold bg-transparent border-none outline-none dark:text-gray-100"
                 autoFocus
               />
