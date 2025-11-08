@@ -159,14 +159,18 @@ export function DatabaseScreen() {
         throw new Error("Authentication token not found");
       }
 
-      const url = `/api/database/${appId}/tables/${table.name}/data?page=${page}&limit=50`;
+      // Add timestamp to prevent caching
+      const timestamp = Date.now();
+      const url = `/api/database/${appId}/tables/${table.name}/data?page=${page}&limit=50&_t=${timestamp}`;
       console.log("🟢 [LOAD TABLE DATA] Fetching:", url);
 
       const response = await fetch(url, {
+        method: "GET",
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
+        cache: "no-store",
       });
 
       const data = await response.json();
