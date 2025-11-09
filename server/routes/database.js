@@ -245,8 +245,18 @@ router.post("/:appId/tables/create", authenticateToken, async (req, res) => {
     sqlColumns.push("updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
     sqlColumns.push(`app_id INTEGER NOT NULL DEFAULT ${appIdInt}`);
 
+    // Auto-prepend app prefix to match workflow execution behavior
+    // This ensures consistency between UI-created tables and workflow-created tables
+    const fullTableName = tableName.startsWith("app_")
+      ? tableName
+      : `app_${appIdInt}_${tableName}`;
+
+    console.log(
+      `🔨 [DATABASE] Creating table: ${tableName} -> ${fullTableName}`
+    );
+
     // Create the physical table
-    const createTableSQL = `CREATE TABLE "${tableName}" (${sqlColumns.join(
+    const createTableSQL = `CREATE TABLE "${fullTableName}" (${sqlColumns.join(
       ", "
     )})`;
 
@@ -256,34 +266,34 @@ router.post("/:appId/tables/create", authenticateToken, async (req, res) => {
 
     // Create index for app_id for better performance
     await prisma.$executeRawUnsafe(
-      `CREATE INDEX idx_${tableName}_app_id ON "${tableName}" (app_id)`
+      `CREATE INDEX idx_${fullTableName}_app_id ON "${fullTableName}" (app_id)`
     );
 
-    // Register table in the UserTable metadata
+    // Register table in the UserTable metadata (store the full name)
     const createdTableMetadata = await prisma.userTable.create({
       data: {
         appId: appIdInt,
-        tableName,
+        tableName: fullTableName,
         columns: JSON.stringify(columnDefinitions),
       },
     });
 
     console.log(
-      `✅ [DATABASE] Table "${tableName}" created successfully with metadata ID: ${createdTableMetadata.id}`
+      `✅ [DATABASE] Table "${fullTableName}" created successfully with metadata ID: ${createdTableMetadata.id}`
     );
 
     // Emit socket event for real-time updates
     emitTableCreated(appIdInt, {
-      tableName,
+      tableName: fullTableName,
       columns: columnDefinitions,
       createdBy: { id: userId, email: req.user.email },
     });
 
     res.json({
       success: true,
-      message: `Table "${tableName}" created successfully`,
+      message: `Table "${fullTableName}" created successfully`,
       table: {
-        name: tableName,
+        name: fullTableName,
         columns: columnDefinitions,
       },
     });

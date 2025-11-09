@@ -111,8 +111,9 @@ function convertSimpleModeToBackend(simple: DbFindSimpleState): any {
 
   switch (simple.template) {
     case "all":
-      // Get all records - just defaults with sorting by newest
-      config.orderBy = [{ field: "createdAt", direction: "DESC" }];
+      // Get all records - just defaults without sorting
+      // Don't assume created_at/createdAt exists in all tables
+      config.orderBy = [];
       config.limit = 100;
       break;
 
@@ -161,7 +162,8 @@ function convertSimpleModeToBackend(simple: DbFindSimpleState): any {
         config.offset = simple.customOffset || 0;
       }
 
-      config.orderBy = [{ field: "createdAt", direction: "DESC" }];
+      // Don't assume created_at/createdAt exists in all tables
+      config.orderBy = [];
       break;
 
     case "latest":

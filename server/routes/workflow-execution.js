@@ -1010,19 +1010,29 @@ const executeDbFind = async (node, context, appId, userId) => {
       throw new Error("Table name is required for DbFind operation");
     }
 
+    // Auto-prepend app prefix if not already present
+    // This allows users to specify just "debug_test" instead of "app_3_debug_test"
+    const fullTableName = tableName.startsWith("app_")
+      ? tableName
+      : `app_${appId}_${tableName}`;
+
+    console.log(
+      `🔍 [DB-FIND] Table name: ${tableName} -> Full table name: ${fullTableName}`
+    );
+
     // Validate table name for security
-    securityValidator.validateTableName(tableName, appId);
+    securityValidator.validateTableName(fullTableName, appId);
 
     // Check if table exists
-    const tableExists = await dbUtils.tableExists(tableName);
+    const tableExists = await dbUtils.tableExists(fullTableName);
     if (!tableExists) {
-      throw new Error(`Table '${tableName}' does not exist`);
+      throw new Error(`Table '${fullTableName}' does not exist`);
     }
 
     // Get table schema for validation
-    const tableSchema = await dbUtils.discoverTableSchema(tableName);
+    const tableSchema = await dbUtils.discoverTableSchema(fullTableName);
     if (!tableSchema || tableSchema.length === 0) {
-      throw new Error(`Unable to discover schema for table '${tableName}'`);
+      throw new Error(`Unable to discover schema for table '${fullTableName}'`);
     }
 
     // Validate conditions
@@ -1054,8 +1064,11 @@ const executeDbFind = async (node, context, appId, userId) => {
     queryBuilder.setLimit(limit);
     queryBuilder.setOffset(offset);
 
-    // Build and execute query
-    const { query, params } = queryBuilder.buildSelectQuery(tableName, columns);
+    // Build and execute query using the full table name
+    const { query, params } = queryBuilder.buildSelectQuery(
+      fullTableName,
+      columns
+    );
 
     console.log("🔍 [DB-FIND] Executing query:", query);
     console.log("🔍 [DB-FIND] Query params:", params);
@@ -1066,7 +1079,7 @@ const executeDbFind = async (node, context, appId, userId) => {
     const executionTime = Date.now() - startTime;
     await dbUtils.recordQueryPerformance(
       appId,
-      tableName,
+      fullTableName,
       "find",
       executionTime,
       results.length
@@ -1081,7 +1094,7 @@ const executeDbFind = async (node, context, appId, userId) => {
       type: "dbFind",
       data: results,
       count: results.length,
-      tableName,
+      tableName: fullTableName,
       query: {
         conditions,
         orderBy,
@@ -1092,7 +1105,7 @@ const executeDbFind = async (node, context, appId, userId) => {
       hasMore: results.length === limit, // Indicates if there might be more results
       context: {
         ...context,
-        dbFindResults: results,
+        dbFindResult: results, // Changed from dbFindResults to dbFindResult (singular) for consistency with frontend
         dbFindCount: results.length,
       },
     };

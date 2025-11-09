@@ -69,6 +69,16 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
     }
   }, [values, mode]);
 
+  // Debug: Log workflow context changes
+  React.useEffect(() => {
+    if (mode === "preview") {
+      console.log("🔄 [CANVAS-RENDERER] Workflow context updated:", {
+        contextKeys: Object.keys(workflowContext),
+        fullContext: workflowContext,
+      });
+    }
+  }, [workflowContext, mode]);
+
   // Phase 7: Logging for parity verification
   React.useEffect(() => {
     if (elements.length > 0) {
@@ -1075,6 +1085,30 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
 
       case "SHAPE":
       default:
+        // Check if this SHAPE has a bindingPath (making it a TEXT_DISPLAY)
+        const hasBindingPath = element.properties?.bindingPath;
+
+        if (hasBindingPath) {
+          // Render as TEXT_DISPLAY
+          const textDisplayShapeProps = elementHasClickWorkflow
+            ? { ...clickableProps, style }
+            : {
+                style,
+                onClick: isInPreviewMode ? undefined : handleClick,
+                onDoubleClick: isInPreviewMode ? undefined : handleDoubleClick,
+                onMouseDown: isInPreviewMode ? undefined : handleMouseDown,
+              };
+          return (
+            <div key={element.id} {...textDisplayShapeProps}>
+              <TextDisplay
+                element={element}
+                context={workflowContext}
+                isPreviewMode={isInPreviewMode}
+              />
+            </div>
+          );
+        }
+
         // Use clickableProps for non-interactive elements with workflows
         const shapeProps = elementHasClickWorkflow
           ? clickableProps
