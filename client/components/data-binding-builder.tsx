@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -495,14 +496,13 @@ export function DataBindingBuilder({
                           </div>
                         ) : (
                           <div className="flex-1 min-w-0">
-                            <input
+                            <Input
                               type="text"
                               value={segment.textValue || ""}
                               onChange={(e) =>
                                 updateTextSegment(segment.id, e.target.value)
                               }
                               placeholder="Enter text..."
-                              className="w-full px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
                             />
                           </div>
                         )}
