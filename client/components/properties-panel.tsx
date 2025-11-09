@@ -33,7 +33,9 @@ import {
   Settings as SettingsIcon,
   HelpCircle,
   Info,
+  Wand2,
 } from "lucide-react";
+import { DataBindingBuilder } from "@/components/data-binding-builder";
 
 interface CanvasElement {
   id: string;
@@ -106,11 +108,31 @@ interface PropertiesPanelProps {
 const isValidBindingPath = (path: string): boolean => {
   if (!path || path.trim() === "") return true; // Empty is valid
 
-  // Basic validation: check for common patterns
-  // Valid examples: dbFindResult[0].name, formData.email, urlParams.id
-  const validPattern =
-    /^[a-zA-Z_$][a-zA-Z0-9_$]*(\[[0-9]+\]|\.[a-zA-Z_$][a-zA-Z0-9_$]*)*$/;
-  return validPattern.test(path);
+  // Check if it's a template string with {{...}}
+  const templateRegex = /\{\{([^}]+)\}\}/g;
+  const hasTemplate = templateRegex.test(path);
+
+  if (hasTemplate) {
+    // Template mode - validate each {{path}} segment
+    templateRegex.lastIndex = 0; // Reset regex
+    const matches = [...path.matchAll(templateRegex)];
+
+    for (const match of matches) {
+      const innerPath = match[1].trim();
+      const validPattern =
+        /^[a-zA-Z_$][a-zA-Z0-9_$]*(\[[0-9]+\]|\.[a-zA-Z_$][a-zA-Z0-9_$]*)*$/;
+      if (!validPattern.test(innerPath)) {
+        return false;
+      }
+    }
+    return true;
+  } else {
+    // Simple binding mode - validate single path
+    // Valid examples: dbFindResult[0].name, formData.email, urlParams.id
+    const validPattern =
+      /^[a-zA-Z_$][a-zA-Z0-9_$]*(\[[0-9]+\]|\.[a-zA-Z_$][a-zA-Z0-9_$]*)*$/;
+    return validPattern.test(path);
+  }
 };
 
 export function PropertiesPanel({
@@ -127,6 +149,20 @@ export function PropertiesPanel({
   onMoveElementLayer,
 }: PropertiesPanelProps) {
   const [showExamplesModal, setShowExamplesModal] = React.useState(false);
+  const [showBindingBuilder, setShowBindingBuilder] = React.useState(false);
+
+  // Get appId from URL query parameters
+  const [appId, setAppId] = React.useState<string>("");
+
+  React.useEffect(() => {
+    if (typeof window !== "undefined") {
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlAppId = urlParams.get("appId");
+      if (urlAppId) {
+        setAppId(urlAppId);
+      }
+    }
+  }, []);
 
   const renderGeneralProperties = () => {
     const isDisabled = !selectedElement;
@@ -3029,13 +3065,25 @@ export function PropertiesPanel({
                           </div>
                         </div>
                       </div>
+
+                      {/* Visual Builder Button */}
+                      <Button
+                        onClick={() => setShowBindingBuilder(true)}
+                        variant="outline"
+                        className="w-full mb-2"
+                        type="button"
+                      >
+                        <Wand2 className="w-4 h-4 mr-2" />
+                        Open Visual Binding Builder
+                      </Button>
+
                       <Input
                         type="text"
                         value={selectedElement.properties.bindingPath || ""}
                         onChange={(e) =>
                           onUpdateElement("bindingPath", e.target.value)
                         }
-                        placeholder="Example: dbFindResult[0].name"
+                        placeholder="Example: dbFindResult[0].name or {{dbFindResult[0].name}}"
                         className={
                           selectedElement.properties.bindingPath &&
                           !isValidBindingPath(
@@ -3046,7 +3094,7 @@ export function PropertiesPanel({
                         }
                       />
                       <p className="text-xs text-gray-500 dark:text-gray-400">
-                        Enter the path to your data.{" "}
+                        Use the visual builder above or enter the path manually.{" "}
                         <button
                           type="button"
                           onClick={() => setShowExamplesModal(true)}
@@ -3264,6 +3312,20 @@ export function PropertiesPanel({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Data Binding Builder Modal */}
+      {showBindingBuilder && selectedElement && appId && (
+        <DataBindingBuilder
+          appId={appId}
+          elementId={selectedElement.id}
+          currentBindingPath={selectedElement.properties?.bindingPath || ""}
+          onSave={(bindingPath) => {
+            onUpdateElement("bindingPath", bindingPath);
+            setShowBindingBuilder(false);
+          }}
+          onCancel={() => setShowBindingBuilder(false)}
+        />
       )}
     </>
   );

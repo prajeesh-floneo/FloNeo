@@ -14,6 +14,31 @@ export const TextDisplay: React.FC<TextDisplayProps> = ({
   isPreviewMode = false,
   style = {},
 }) => {
+  // Helper function to resolve a single binding path
+  const resolvePath = (path: string): any => {
+    // Normalize array indices: "dbFindResult[0].name" -> "dbFindResult.0.name"
+    const normalizedPath = path.replace(/\[(\d+)\]/g, ".$1");
+
+    if (isPreviewMode) {
+      console.log("🔍 [TEXT-DISPLAY] Resolving path:", {
+        original: path,
+        normalized: normalizedPath,
+      });
+    }
+
+    const value = get(context, normalizedPath);
+
+    if (isPreviewMode) {
+      console.log("🔍 [TEXT-DISPLAY] Resolved value:", {
+        path: normalizedPath,
+        value: value,
+        valueType: typeof value,
+      });
+    }
+
+    return value;
+  };
+
   const getValue = () => {
     const bindingPath = element.properties?.bindingPath;
 
@@ -46,38 +71,77 @@ export const TextDisplay: React.FC<TextDisplayProps> = ({
     }
 
     try {
-      // Normalize array indices: "dbFindResult[0].name" -> "dbFindResult.0.name"
-      const normalizedPath = bindingPath.replace(/\[(\d+)\]/g, ".$1");
+      // Check if binding path contains template syntax {{...}}
+      const templateRegex = /\{\{([^}]+)\}\}/g;
+      const hasTemplate = templateRegex.test(bindingPath);
 
-      if (isPreviewMode) {
-        console.log("🔍 [TEXT-DISPLAY] Normalized path:", {
-          original: bindingPath,
-          normalized: normalizedPath,
-        });
-      }
-
-      const value = get(context, normalizedPath);
-
-      if (isPreviewMode) {
-        console.log("🔍 [TEXT-DISPLAY] Resolved value:", {
-          path: normalizedPath,
-          value: value,
-          valueType: typeof value,
-          isArray: Array.isArray(value),
-        });
-      }
-
-      // If value is undefined or null, return fallback
-      if (value === undefined || value === null) {
+      if (hasTemplate) {
+        // Template string mode - replace all {{path}} with values
         if (isPreviewMode) {
-          console.log(
-            "⚠️ [TEXT-DISPLAY] Value is undefined or null, using fallback text"
-          );
+          console.log("🎨 [TEXT-DISPLAY] Using template mode");
         }
-        return element.properties?.fallbackText || "No data";
-      }
 
-      return value;
+        let result = bindingPath;
+        let hasUndefinedValue = false;
+
+        // Reset regex lastIndex
+        templateRegex.lastIndex = 0;
+
+        // Replace each {{path}} with its value
+        result = bindingPath.replace(
+          templateRegex,
+          (match: string, path: string) => {
+            const trimmedPath = path.trim();
+            const value = resolvePath(trimmedPath);
+
+            if (value === undefined || value === null) {
+              hasUndefinedValue = true;
+              return match; // Keep original {{path}} if value not found
+            }
+
+            return String(value);
+          }
+        );
+
+        if (isPreviewMode) {
+          console.log("🎨 [TEXT-DISPLAY] Template result:", {
+            original: bindingPath,
+            result: result,
+            hasUndefinedValue: hasUndefinedValue,
+          });
+        }
+
+        // If any value was undefined, return fallback
+        if (hasUndefinedValue) {
+          if (isPreviewMode) {
+            console.log(
+              "⚠️ [TEXT-DISPLAY] Some template values undefined, using fallback"
+            );
+          }
+          return element.properties?.fallbackText || "No data";
+        }
+
+        return result;
+      } else {
+        // Simple binding mode - single path
+        if (isPreviewMode) {
+          console.log("📍 [TEXT-DISPLAY] Using simple binding mode");
+        }
+
+        const value = resolvePath(bindingPath);
+
+        // If value is undefined or null, return fallback
+        if (value === undefined || value === null) {
+          if (isPreviewMode) {
+            console.log(
+              "⚠️ [TEXT-DISPLAY] Value is undefined or null, using fallback text"
+            );
+          }
+          return element.properties?.fallbackText || "No data";
+        }
+
+        return value;
+      }
     } catch (error) {
       console.error("❌ [TEXT-DISPLAY] Error resolving binding path:", {
         bindingPath,
