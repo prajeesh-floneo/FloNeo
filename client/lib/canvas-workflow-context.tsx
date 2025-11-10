@@ -66,6 +66,10 @@ interface CanvasWorkflowContextType {
   setCanvasElements: (elements: any[]) => void;
   formGroups: any[]; // NEW: Form groups for OnSubmit dropdown
   setFormGroups: (groups: any[]) => void;
+  saveCanvasWorkflow?: (appId: string) => Promise<boolean> | boolean;
+  setSaveCanvasWorkflow?: React.Dispatch<
+    React.SetStateAction<((appId: string) => Promise<boolean>) | undefined>
+  >;
 }
 
 const CanvasWorkflowContext = createContext<
@@ -97,6 +101,9 @@ export const CanvasWorkflowProvider: React.FC<{
   const [currentAppId, setCurrentAppId] = useState<string | null>(null);
   const [canvasElements, setCanvasElements] = useState<any[]>([]);
   const [formGroups, setFormGroups] = useState<any[]>([]);
+  const [saveCanvasWorkflow, setSaveCanvasWorkflow] = useState<
+    ((appId: string) => Promise<boolean>) | undefined
+  >();
 
   // Debug: Log selectedElementId changes
   useEffect(() => {
@@ -181,6 +188,8 @@ export const CanvasWorkflowProvider: React.FC<{
     setCanvasElements,
     formGroups,
     setFormGroups,
+    saveCanvasWorkflow,
+    setSaveCanvasWorkflow,
   };
 
   return (

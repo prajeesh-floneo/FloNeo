@@ -353,7 +353,7 @@ function WorkflowBuilderContent() {
   const renderMainContent = () => {
     if (isCanvasWorkflowSplit && activeTab === "canvas") {
       return (
-        <div className="flex h-full">
+        <div className="flex h-full w-screen">
           <div className="w-1/2 border-r border-border">
             {/* Pass appId to Canvas component via URL context */}
             <div style={{ width: "100%", height: "100%" }}>
