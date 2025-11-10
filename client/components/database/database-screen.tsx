@@ -1,21 +1,13 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-<<<<<<< HEAD
-=======
 import { initializeSocket, getSocket } from "@/lib/socket";
-
-import {
-  onDBRecordUpdated,
-  onDBRecordCreated,
-  onDBRecordDeleted,
-} from "@/lib/socket";
-
->>>>>>> main
+import { useSearchParams, useRouter } from "next/navigation";
+import { useToast } from "@/hooks/use-toast";
 import {
   Table,
   TableBody,
@@ -40,22 +32,9 @@ import {
   ArrowLeft,
   Table as TableIcon,
   HardDrive,
-<<<<<<< HEAD
-<<<<<<< HEAD
-} from "lucide-react";
-import { useSearchParams, useRouter } from "next/navigation";
-import { useToast } from "@/hooks/use-toast";
-=======
-=======
-} from "lucide-react";
-import { useSearchParams, useRouter } from "next/navigation";
-import { useToast } from "@/hooks/use-toast";
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
   Plus,
   Trash,
 } from "lucide-react";
-import { useSearchParams, useRouter } from "next/navigation";
-import { useToast } from "@/hooks/use-toast";
 import {
   Dialog,
   DialogContent,
@@ -73,10 +52,6 @@ import {
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-<<<<<<< HEAD
->>>>>>> main
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
 
 interface DatabaseTable {
   name: string;
@@ -99,20 +74,11 @@ export function DatabaseScreen() {
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
   // Create Table Modal State
   const [showCreateTableModal, setShowCreateTableModal] = useState(false);
   const [newTableName, setNewTableName] = useState("");
   const [newTableColumns, setNewTableColumns] = useState<
-    Array<{
-      name: string;
-      type: string;
-      required: boolean;
-    }>
+    Array<{ name: string; type: string; required: boolean }>
   >([
     { name: "id", type: "Number", required: true },
     { name: "Name", type: "Text", required: true },
@@ -124,17 +90,23 @@ export function DatabaseScreen() {
   const [newRecordData, setNewRecordData] = useState<Record<string, any>>({});
   const [addingRecord, setAddingRecord] = useState(false);
 
-<<<<<<< HEAD
->>>>>>> main
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
   const searchParams = useSearchParams();
   const router = useRouter();
   const appId = searchParams.get("appId");
   const appName = searchParams.get("appName") || "Unknown App";
   const { toast } = useToast();
 
-  // Load tables for the current app with auto-refresh
+  // ✅ Initialize socket connection once
+  useEffect(() => {
+    try {
+      const socket = initializeSocket();
+      console.log("✅ Socket initialized for database screen:", socket.id);
+    } catch (err) {
+      console.warn("⚠️ Socket initialization failed:", err);
+    }
+  }, []);
+
+  // ✅ Load tables for the current app with auto-refresh
   useEffect(() => {
     if (!appId) {
       setError("No app ID provided");
@@ -142,10 +114,8 @@ export function DatabaseScreen() {
       return;
     }
 
-    // Initial load
     loadTables();
 
-    // Auto-refresh every 10 seconds to detect new tables
     const interval = setInterval(() => {
       loadTables();
     }, 10000);
@@ -153,8 +123,7 @@ export function DatabaseScreen() {
     return () => clearInterval(interval);
   }, [appId]);
 
-<<<<<<< HEAD
-=======
+  // ✅ Real-time database updates
   useEffect(() => {
     const socket = getSocket();
     if (!socket) {
@@ -175,6 +144,7 @@ export function DatabaseScreen() {
       }
     };
 
+    // Attach listeners
     window.addEventListener(
       "db_record_updated",
       handleDBEvent as EventListener
@@ -207,7 +177,6 @@ export function DatabaseScreen() {
     };
   }, [selectedTable, currentPage]);
 
->>>>>>> main
   const loadTables = async () => {
     try {
       const token = localStorage.getItem("authToken");
@@ -239,41 +208,16 @@ export function DatabaseScreen() {
   };
 
   const loadTableData = async (table: DatabaseTable, page = 1) => {
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
     console.log("🟢 [LOAD TABLE DATA] Starting...");
     console.log("🟢 [LOAD TABLE DATA] Table:", table.name);
     console.log("🟢 [LOAD TABLE DATA] Page:", page);
 
-<<<<<<< HEAD
->>>>>>> main
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
     try {
       const token = localStorage.getItem("authToken");
       if (!token) {
         throw new Error("Authentication token not found");
       }
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-      const response = await fetch(
-        `/api/database/${appId}/tables/${table.name}/data?page=${page}&limit=50`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      const data = await response.json();
-=======
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
       // Add timestamp to prevent caching
       const timestamp = Date.now();
       const url = `/api/database/${appId}/tables/${table.name}/data?page=${page}&limit=50&_t=${timestamp}`;
@@ -290,20 +234,11 @@ export function DatabaseScreen() {
 
       const data = await response.json();
       console.log("🟢 [LOAD TABLE DATA] Response received:", data);
-<<<<<<< HEAD
->>>>>>> main
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
 
       if (!response.ok) {
         throw new Error(data.message || "Failed to load table data");
       }
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
       console.log(
         "🟢 [LOAD TABLE DATA] Data array length:",
         data.data?.length || 0
@@ -313,24 +248,12 @@ export function DatabaseScreen() {
         data.data?.slice(0, 3)
       );
 
-<<<<<<< HEAD
->>>>>>> main
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
       setTableData(data.data || []);
       setCurrentPage(data.pagination.page);
       setTotalPages(data.pagination.totalPages);
       setSelectedTable(table);
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
 
       console.log("✅ [LOAD TABLE DATA] State updated successfully");
->>>>>>> main
-=======
-
-      console.log("✅ [LOAD TABLE DATA] State updated successfully");
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
     } catch (err) {
       console.error("❌ [DATABASE] Error loading table data:", err);
       toast({
@@ -342,11 +265,6 @@ export function DatabaseScreen() {
     }
   };
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
   const handleCreateTable = async () => {
     if (!newTableName.trim()) {
       toast({
@@ -469,9 +387,6 @@ export function DatabaseScreen() {
         throw new Error("Authentication token not found");
       }
 
-      const response = await fetch(
-        `/api/database/${appId}/tables/${table.name}/data?page=${page}&limit=50`,
-        {
       console.log("🔵 [ADD RECORD] Sending POST request...");
       const response = await fetch(
         `/api/database/${appId}/tables/${selectedTable.name}/records`,
@@ -486,26 +401,6 @@ export function DatabaseScreen() {
       );
 
       const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.message || "Failed to load table data");
-      }
-
-      setTableData(data.data || []);
-      setCurrentPage(data.pagination.page);
-      setTotalPages(data.pagination.totalPages);
-      setSelectedTable(table);
-    } catch (err) {
-      console.error("❌ [DATABASE] Error loading table data:", err);
-      toast({
-        title: "Error",
-        description:
-          err instanceof Error ? err.message : "Failed to load table data",
-        variant: "destructive",
-      });
-    }
-  };
-
       console.log("🔵 [ADD RECORD] Response:", data);
 
       if (!response.ok) {
@@ -634,10 +529,6 @@ export function DatabaseScreen() {
     setNewTableColumns(updated);
   };
 
-<<<<<<< HEAD
->>>>>>> main
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
   // Helper function to format cell values based on type
   const formatCellValue = (value: any, columnType: string) => {
     if (value === null || value === undefined) {
@@ -792,18 +683,6 @@ export function DatabaseScreen() {
 
   if (loading) {
     return (
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
-      <div className="flex items-center justify-center h-64">
-        <RefreshCw className="w-6 h-6 animate-spin mr-2" />
-        <span>Loading database tables...</span>
-      </div>
-<<<<<<< HEAD
-=======
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
       <>
         <div className="flex items-center justify-center h-64">
           <RefreshCw className="w-6 h-6 animate-spin mr-2" />
@@ -934,36 +813,11 @@ export function DatabaseScreen() {
           </DialogContent>
         </Dialog>
       </>
-<<<<<<< HEAD
->>>>>>> main
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
     );
   }
 
   if (error) {
     return (
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
-      <div className="flex flex-col items-center justify-center h-64 space-y-4">
-        <Database className="w-12 h-12 text-gray-400" />
-        <div className="text-center">
-          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
-            Database Error
-          </h3>
-          <p className="text-gray-600 dark:text-gray-400 mt-1">{error}</p>
-        </div>
-        <Button onClick={loadTables} variant="outline">
-          <RefreshCw className="w-4 h-4 mr-2" />
-          Retry
-        </Button>
-      </div>
-<<<<<<< HEAD
-=======
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
       <>
         <div className="flex flex-col items-center justify-center h-64 space-y-4">
           <Database className="w-12 h-12 text-gray-400" />
@@ -1103,39 +957,11 @@ export function DatabaseScreen() {
           </DialogContent>
         </Dialog>
       </>
-<<<<<<< HEAD
->>>>>>> main
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
     );
   }
 
   if (tables.length === 0) {
     return (
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
-      <div className="flex flex-col items-center justify-center h-64 space-y-4">
-        <Database className="w-12 h-12 text-gray-400" />
-        <div className="text-center">
-          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
-            No Tables Found
-          </h3>
-          <p className="text-gray-600 dark:text-gray-400 mt-1">
-            Create your first table by submitting a form with a db.create
-            workflow block.
-          </p>
-        </div>
-        <Button onClick={loadTables} variant="outline">
-          <RefreshCw className="w-4 h-4 mr-2" />
-          Refresh
-        </Button>
-      </div>
-<<<<<<< HEAD
-=======
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
       <>
         <div className="flex flex-col items-center justify-center h-64 space-y-4">
           <Database className="w-12 h-12 text-gray-400" />
@@ -1284,10 +1110,6 @@ export function DatabaseScreen() {
           </DialogContent>
         </Dialog>
       </>
-<<<<<<< HEAD
->>>>>>> main
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
     );
   }
 
@@ -1341,11 +1163,6 @@ export function DatabaseScreen() {
                 </div>
               </div>
             </div>
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
             <div className="flex items-center gap-2">
               <Button
                 onClick={() => setShowCreateTableModal(true)}
@@ -1359,10 +1176,6 @@ export function DatabaseScreen() {
                 Refresh
               </Button>
             </div>
-<<<<<<< HEAD
->>>>>>> main
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
           </div>
 
           {/* Quick Stats */}
@@ -1433,43 +1246,14 @@ export function DatabaseScreen() {
             </h2>
             <div className="space-y-2">
               {tables.map((table) => (
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
-                <button
-                  key={table.name}
-                  onClick={() => loadTableData(table)}
-                  className={`w-full text-left p-3 rounded-lg transition-colors ${
-<<<<<<< HEAD
-=======
                 <div
                   key={table.name}
                   className={`group relative w-full text-left p-3 rounded-lg transition-colors ${
->>>>>>> main
-=======
-                <div
-                  key={table.name}
-                  className={`group relative w-full text-left p-3 rounded-lg transition-colors ${
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
                     selectedTable?.name === table.name
                       ? "bg-blue-100 dark:bg-blue-900/30 text-blue-900 dark:text-blue-100"
                       : "hover:bg-gray-100 dark:hover:bg-gray-800"
                   }`}
                 >
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
-                  <div className="font-medium truncate">{table.name}</div>
-                  <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">
-                    {table.rowCount} rows • {table.columns.length} columns
-                  </div>
-                </button>
-<<<<<<< HEAD
-=======
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
                   <button
                     onClick={() => loadTableData(table)}
                     className="w-full text-left"
@@ -1492,10 +1276,6 @@ export function DatabaseScreen() {
                     <Trash className="w-4 h-4 text-red-600 dark:text-red-400" />
                   </button>
                 </div>
-<<<<<<< HEAD
->>>>>>> main
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
               ))}
             </div>
           </div>
@@ -1514,22 +1294,6 @@ export function DatabaseScreen() {
                       {selectedTable.rowCount} total rows
                     </p>
                   </div>
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
-                  <Button
-                    onClick={() => loadTableData(selectedTable)}
-                    variant="outline"
-                    size="sm"
-                  >
-                    <RefreshCw className="w-4 h-4 mr-2" />
-                    Refresh
-                  </Button>
-<<<<<<< HEAD
-=======
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
                   <div className="flex items-center gap-2">
                     <Button
                       onClick={() => {
@@ -1550,10 +1314,6 @@ export function DatabaseScreen() {
                       Refresh
                     </Button>
                   </div>
-<<<<<<< HEAD
->>>>>>> main
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
                 </div>
 
                 {/* Search */}
@@ -1674,11 +1434,6 @@ export function DatabaseScreen() {
           )}
         </div>
       </div>
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
 
       {/* Create Table Modal */}
       <Dialog
@@ -1911,10 +1666,6 @@ export function DatabaseScreen() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-<<<<<<< HEAD
->>>>>>> main
-=======
->>>>>>> eb5d9fb44972435d11b865695362cc2476ea323f
     </div>
   );
 }
