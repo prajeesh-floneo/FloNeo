@@ -1,0 +1,200 @@
+﻿                userId
+              );
+              break;
+
+            case "notify.toast":
+              result = await executeNotifyToast(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
+              break;
+
+            case "page.redirect":
+              result = await executePageRedirect(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
+              break;
+
+            case "page.goBack":
+              result = await executePageGoBack(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
+              break;
+
+            case "auth.verify":
+              result = await executeAuthVerify(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
+              break;
+
+            case "http.request":
+              result = await executeHttpRequest(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
+              break;
+
+            case "ai.summarize":
+              result = await executeAiSummarize(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
+              break;
+
+            default:
+              console.log(
+                `ΓÜá∩╕Å [WF-EXEC] Unhandled action block: ${node.data.label}`
+              );
+              result = {
+                success: true,
+                message: `${node.data.label} executed (placeholder)`,
+              };
+          }
+        } else if (node.data.category === "Conditions") {
+          switch (node.data.label) {
+            case "isFilled":
+              result = await executeIsFilled(node, currentContext, appId);
+              break;
+
+            case "dateValid":
+              result = await executeDateValid(node, currentContext, appId);
+              break;
+
+            case "match":
+              result = await executeMatch(node, currentContext, appId, userId);
+              break;
+
+            case "roleIs":
+              result = await executeRoleIs(node, currentContext, appId, userId);
+              break;
+
+            case "switch":
+              result = await executeSwitch(node, currentContext, appId, userId);
+              break;
+
+            case "expr":
+              result = await executeExpr(node, currentContext, appId, userId);
+              break;
+
+            default:
+              console.log(
+                `ΓÜá∩╕Å [WF-EXEC] Unhandled condition block: ${node.data.label}`
+              );
+              result = {
+                success: true,
+                isFilled: true, // Default to true for unknown conditions
+                message: `${node.data.label} processed (placeholder)`,
+              };
+          }
+        } else if (node.data.category === "Triggers") {
+          switch (node.data.label) {
+            case "onClick":
+              result = await executeOnClick(node, currentContext, appId);
+              break;
+
+            case "onPageLoad":
+              result = await executeOnPageLoad(node, currentContext, appId);
+              break;
+
+            case "onSubmit":
+              result = await executeOnSubmit(node, currentContext, appId);
+              break;
+
+            case "onDrop":
+              result = await executeOnDrop(node, currentContext, appId, userId);
+              break;
+
+            case "onLogin":
+              result = await executeOnLogin(node, currentContext, appId);
+              break;
+
+            case "onWebhook":
+              result = await executeOnWebhook(node, currentContext, appId, userId);
+              break;
+
+            case "onSchedule":
+              result = await executeOnSchedule(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
+              break;
+
+            case "onRecordCreate":
+              result = await executeOnRecordCreate(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
+              break;
+
+            case "onRecordUpdate":
+              result = await executeOnRecordUpdate(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
+              break;
+
+            default:
+              console.log(
+                `ΓÜá∩╕Å [WF-EXEC] Unhandled trigger block: ${node.data.label}`
+              );
+              result = {
+                success: true,
+                message: `${node.data.label} triggered (placeholder)`,
+              };
+          }
+        } else {
+          // For other block types, just log and continue
+          result = { success: true, message: `${node.data.label} processed` };
+        }
+
+        results.push({
+          nodeId: node.id,
+          nodeLabel: node.data.label,
+          result,
+        });
+
+        // Update context with result data
+        if (result && typeof result === "object") {
+          currentContext = { ...currentContext, ...result };
+        }
+
+        // Determine next node based on condition result or edge label
+        let nextNodeId = null;
+
+        if (node.data.category === "Conditions") {
+          // For switch nodes, use the matched case as connector label
+          if (node.data.label === "switch") {
+            const matchedCase = result?.matchedCase || "default";
+            const edgeKey = `${node.id}:${matchedCase}`;
+            nextNodeId = edgeMap[edgeKey];
+
+            console.log(
+              `≡ƒöÇ [WF-EXEC] Switch matched case: "${matchedCase}", following connector`
+            );
+            console.log(`≡ƒöÇ [WF-EXEC] Looking for edge key: ${edgeKey}`);
+            console.log(`≡ƒöÇ [WF-EXEC] Next node ID: ${nextNodeId}`);
+            console.log(
+              `≡ƒöÇ [WF-EXEC] Available edge keys:`,
+              Object.keys(edgeMap).filter((k) => k.startsWith(node.id))
+            );

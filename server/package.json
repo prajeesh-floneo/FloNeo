@@ -4,7 +4,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js",
+    "dev": "prisma generate --schema=prisma/schema.prisma && nodemon index.js",
     "test": "jest --detectOpenHandles --forceExit",
     "test:watch": "jest --watch --detectOpenHandles",
     "test:coverage": "jest --coverage --detectOpenHandles --forceExit",

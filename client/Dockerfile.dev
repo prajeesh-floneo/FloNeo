@@ -1,0 +1,27 @@
+# Development Dockerfile for Frontend
+# Enables hot reload with Next.js dev mode
+
+FROM node:18-alpine
+
+# Install required libraries for Next.js SWC
+RUN apk add --no-cache libc6-compat gcompat
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install ALL dependencies (including dev dependencies)
+RUN npm install --no-audit
+RUN npm install sharp --platform=linux --arch=x64
+
+# Expose port
+EXPOSE 3000
+
+# Health check
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=5 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3000 || exit 1
+
+# Default command (can be overridden in docker-compose)
+CMD ["npm", "run", "dev"]
+
