@@ -10,6 +10,15 @@ import { useToast } from "@/hooks/use-toast";
 import { Toaster } from "@/components/ui/toaster";
 import { AiSummaryPopup } from "@/workflow-builder/components/ai-summary-popup";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import TestDisplayElement from "@/components/test-display-element";
+import {
   isAuthenticated,
   validateAndRefreshAuth,
   handleApiError,
@@ -97,6 +106,10 @@ function RunAppContent() {
   const [workflows, setWorkflows] = useState<Map<string, Workflow>>(new Map());
   const [loading, setLoading] = useState(true);
   const [pageStack, setPageStack] = useState<string[]>([]); // For goBack() navigation
+
+  // Runtime modal state for ui.openModal actions
+  const [runtimeModalOpen, setRuntimeModalOpen] = useState(false);
+  const [runtimeModalPayload, setRuntimeModalPayload] = useState<any>(null);
 
   // AI Summary popup state
   const [summaryPopupOpen, setSummaryPopupOpen] = useState(false);
@@ -896,6 +909,61 @@ function RunAppContent() {
     [currentPageId, pages, toast]
   );
 
+  // Temporary test handler to fetch a mock quote and open runtime modal
+  const handleTestQuote = useCallback(async () => {
+    try {
+      toast({ title: "Fetching quote...", description: "Contacting mock API", duration: 2000 });
+
+  // Use backend host (default localhost:5000 in dev).
+  // Avoid referencing `process` here to prevent TypeScript "Cannot find name 'process'" in some environments.
+  const base = "http://localhost:5000";
+  // Add ignoreTls flag for dev environments where the external mock endpoint
+  // may present an untrusted/self-signed certificate. The proxy will honor
+  // ?ignoreTls=true and skip certificate validation (dev only).
+  const mockUrl = `${base}/api/proxy/mock-quote?ignoreTls=true`;
+
+      const response = await fetch(mockUrl, { cache: "no-store" });
+
+      // Handle non-JSON responses (HTML 404 from wrong host) gracefully
+      const contentType = response.headers.get("content-type") || "";
+      let json: any = null;
+
+      if (!response.ok) {
+        const txt = await response.text();
+        throw new Error(`Proxy request failed: ${response.status} ${response.statusText} - ${txt.substring(0, 200)}`);
+      }
+
+      if (contentType.includes("application/json") || contentType.includes("application/hal+json")) {
+        json = await response.json();
+      } else {
+        const txt = await response.text();
+        try {
+          json = JSON.parse(txt);
+        } catch (e) {
+          // Fallback: return the raw text when it's not valid JSON
+          json = { text: txt };
+        }
+      }
+
+      console.log("🌐 [TEST-QUOTE] Mock API response:", json);
+
+      // Prepare modal payload and open modal
+      setRuntimeModalPayload({
+        modalId: "test-quote-modal",
+        title: "Mock Quote",
+        content: "This is a mock quote response from the test endpoint.",
+        data: json,
+      });
+      setRuntimeModalOpen(true);
+
+      // Show success toast
+      toast({ title: "Quote fetched successfully.", description: "Mock quote loaded", variant: "default" });
+    } catch (error) {
+      console.error("❌ [TEST-QUOTE] Error fetching mock quote:", error);
+      toast({ title: "Quote fetch failed", description: String(error), variant: "destructive" });
+    }
+  }, [toast]);
+
   const goBack = useCallback(() => {
     setPageStack((s) => {
       const prev = s[s.length - 1];
@@ -1112,6 +1180,42 @@ function RunAppContent() {
               fullResult: blockResult,
             });
 
+            // Detect HTTP response objects in returned context and log them
+            try {
+              const ctx = blockResult.context || {};
+              for (const [k, v] of Object.entries(ctx)) {
+                if (
+                  v &&
+                  typeof v === "object" &&
+                  "statusCode" in v &&
+                  "data" in v
+                ) {
+                  console.log("🌐 [WF-RUN] HTTP response object found in context:", k, v);
+                  // Show toast for successful quote fetch (guard safely)
+                  if ("success" in v && (v as any).success) {
+                    toast({
+                      title: "Quote fetched successfully.",
+                      description: `HTTP ${(v as any).statusCode}`,
+                    });
+
+                    // If a modal payload is already present, merge response into it
+                    setRuntimeModalPayload((prev: any) => {
+                      const base = prev || {};
+                      return {
+                        ...base,
+                        data: {
+                          ...(base.data || {}),
+                          httpResponse: v,
+                        },
+                      };
+                    });
+                  }
+                }
+              }
+            } catch (e) {
+              console.warn("[WF-RUN] Error scanning context for http response", e);
+            }
+
             // Handle page redirects
             if (blockResult.type === "redirect" && blockResult.redirect) {
               const redirectData = blockResult.redirect;
@@ -1128,6 +1232,21 @@ function RunAppContent() {
                 }
                 return; // Stop after navigation
               }
+            }
+
+            // Handle openModal actions returned from backend
+            if (
+              blockResult.type === "modal" ||
+              (blockResult.action && blockResult.action.type === "openModal")
+            ) {
+              const payload =
+                (blockResult.action && blockResult.action.payload) ||
+                (blockResult.context && blockResult.context.openModalResult) ||
+                blockResult;
+
+              console.log("🪟 [WF-RUN] Opening runtime modal with payload:", payload);
+              setRuntimeModalPayload(payload);
+              setRuntimeModalOpen(true);
             }
 
             // Handle page back
@@ -1749,6 +1868,12 @@ function RunAppContent() {
           </span>
         </div>
         <div className="flex items-center space-x-2">
+          <button
+            onClick={handleTestQuote}
+            className="px-2 py-1 text-xs rounded bg-emerald-500 text-white hover:bg-emerald-600"
+          >
+            Test Quote
+          </button>
           {pages.map((page, index) => (
             <button
               key={page.id}
@@ -1838,6 +1963,48 @@ function RunAppContent() {
           );
         })()}
       </div>
+
+      {/* Runtime modal used by workflows (ui.openModal) */}
+      <Dialog
+        open={runtimeModalOpen}
+        onOpenChange={() => {
+          setRuntimeModalOpen(false);
+          setRuntimeModalPayload(null);
+        }}
+      >
+        {/* Responsive dialog: full width on small screens, centered with max-width on larger screens.
+            Use max-height + overflow to keep content scrollable on small viewports. */}
+        <DialogContent className="w-full mx-4 sm:mx-auto max-w-3xl sm:max-w-2xl md:max-w-4xl lg:max-w-6xl p-4 max-h-[80vh] overflow-auto">
+          <DialogHeader className="space-y-2">
+            <DialogTitle className="text-lg sm:text-xl font-medium break-words">
+              {runtimeModalPayload?.title || runtimeModalPayload?.modalId || "Modal"}
+            </DialogTitle>
+            {runtimeModalPayload?.content && (
+              <DialogDescription className="text-sm text-muted-foreground">
+                {runtimeModalPayload?.content}
+              </DialogDescription>
+            )}
+          </DialogHeader>
+
+          <div className="py-4">
+            <TestDisplayElement data={runtimeModalPayload?.data || runtimeModalPayload} />
+          </div>
+
+          <DialogFooter>
+            <div className="w-full flex flex-col sm:flex-row sm:justify-end gap-2">
+              <button
+                onClick={() => {
+                  setRuntimeModalOpen(false);
+                  setRuntimeModalPayload(null);
+                }}
+                className="w-full sm:w-auto px-4 py-2 bg-gray-200 rounded hover:bg-gray-300"
+              >
+                Close
+              </button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* AI Summary Popup - Always render to avoid mounting issues */}
       <AiSummaryPopup

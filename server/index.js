@@ -31,6 +31,7 @@ const workflowRoutes = require("./routes/workflow");
 const workflowExecutionRoutes = require("./routes/workflow-execution");
 const databaseRoutes = require("./routes/database");
 const publishRoutes = require("./routes/publish");
+const proxyRoutes = require("./routes/proxy");
 
 // Import middleware
 const { cleanExpiredTokens } = require("./middleware/auth");
@@ -116,6 +117,7 @@ app.use("/api/workflow", workflowRoutes);
 app.use("/api/workflow", workflowExecutionRoutes);
 app.use("/api/database", databaseRoutes);
 app.use("/api", publishRoutes);
+app.use("/api/proxy", proxyRoutes);
 
 // Socket.io authentication middleware - Developer-only (Risk Mitigation)
 io.use(async (socket, next) => {

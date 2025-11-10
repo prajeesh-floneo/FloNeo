@@ -1,13 +1,13 @@
-FROM node:20-alpine
+FROM node:20-bullseye-slim
 
-# Install system dependencies
-RUN apk add --no-cache \
+# Install system dependencies (Debian/apt)
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
     python3 \
-    make \
-    g++ \
-    libc6-compat \
+    build-essential \
     curl \
-    postgresql-client
+    postgresql-client \
+  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
