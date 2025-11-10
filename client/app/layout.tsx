@@ -5,6 +5,7 @@ import { Suspense } from "react";
 import { CanvasWorkflowProvider } from "../lib/canvas-workflow-context";
 import "./globals.css";
 import "../styles/design-system.css";
+import { WorkflowHeader } from "@/components/Header";
 
 const poppins = Poppins({
   subsets: ["latin"],
@@ -46,6 +47,7 @@ export default function RootLayout({
       </head>
       <body className={`font-sans ${poppins.variable}`}>
         <CanvasWorkflowProvider>
+          <WorkflowHeader/>
           <Suspense fallback={<div>Loading...</div>}>{children}</Suspense>
         </CanvasWorkflowProvider>
       </body>

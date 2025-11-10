@@ -23,9 +23,9 @@ export default function WorkflowParent() {
   const { selectedElementId, setPages, setCurrentAppId } = useCanvasWorkflow();
 
   const [activeTab, setActiveTab] = useState("canvas");
-  const [isCanvasWorkflowSplit, setIsCanvasWorkflowSplit] = useState(false);
+  const [isCanvasWorkflowSplit, setIsCanvasWorkflowSplit] = useState(true);
 
-  const appId = searchParams.get("appId") || "3";
+  const appId = searchParams.get("appId") || "1";
 
   // Initialize app context
   useEffect(() => {
@@ -76,13 +76,6 @@ export default function WorkflowParent() {
 
   return (
     <div className="flex flex-col h-screen bg-background text-foreground">
-      {/* Header - Always on Top */}
-      <WorkflowHeader
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        isCanvasWorkflowSplit={isCanvasWorkflowSplit}
-        onSplitScreenToggle={toggleSplitScreen}
-      />
 
       {/* Content Area */}
       <div className="flex-1 overflow-hidden">{renderContent()}</div>

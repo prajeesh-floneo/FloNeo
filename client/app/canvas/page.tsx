@@ -139,7 +139,7 @@ function CanvasPageContent() {
     currentAppId: contextAppId,
     setCanvasElements,
     setFormGroups,
-    setSaveCanvasWorkflow
+    setSaveCanvasWorkflow,
   } = useCanvasWorkflow();
   const [selectedElement, setSelectedElement] = useState<CanvasElement | null>(
     null
@@ -233,6 +233,11 @@ function CanvasPageContent() {
   const currentPage = pages.find((p) => p.id === currentPageId);
   const canvasElements = currentPage?.elements || [];
   const currentGroups = currentPage?.groups || []; // Get current groups
+
+  // Register function once on mount
+  useEffect(() => {
+    setSaveCanvasWorkflow?.(() => saveCanvasToBackend);
+  }, [setSaveCanvasWorkflow]);
 
   // Sync canvas elements to context for workflow blocks
   useEffect(() => {
@@ -797,14 +802,6 @@ function CanvasPageContent() {
     },
     [appName, currentPage, canvasElements, pages]
   );
-
-  // Register saveCanvasWorkflow function in context (after saveCanvasToBackend is defined)
-  useEffect(() => {
-    if (setSaveCanvasWorkflow) {
-      setSaveCanvasWorkflow(() => saveCanvasToBackend);
-      console.log("🔄 Canvas: Registered saveCanvasWorkflow function");
-    }
-  }, [setSaveCanvasWorkflow, saveCanvasToBackend]);
 
   // Auto-save functionality with debouncing and error handling
   const triggerAutoSave = useCallback(async () => {
@@ -5670,200 +5667,7 @@ function CanvasPageContent() {
   return (
     <div className="h-screen w-full flex flex-col bg-gray-50 dark:bg-gray-900 overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
-        <div className="flex items-center space-x-4">
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => router.push("/dashboard")}
-          >
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back
-          </Button>
-          <div className="flex items-center space-x-2">
-            <Image
-              src="/floneo-profile-logo.png"
-              alt="Floneo"
-              width={24}
-              height={24}
-            />
-            {isEditingName ? (
-              <input
-                type="text"
-                value={appName}
-                onChange={(e) => setAppName(e.target.value)}
-                onBlur={() => setIsEditingName(false)}
-                onKeyDown={(e) => e.key === "Enter" && setIsEditingName(false)}
-                className="text-lg font-semibold bg-transparent border-none outline-none dark:text-gray-100"
-                autoFocus
-              />
-            ) : (
-              <h1
-                className="text-lg font-semibold cursor-pointer dark:text-gray-100"
-                onClick={() => setIsEditingName(true)}
-              >
-                {appName}
-              </h1>
-            )}
-          </div>
-        </div>
-        <div className="flex items-center space-x-1 overflow-x-auto min-w-0 flex-shrink-0">
-          <ThemeToggle />
-
-          {/* Auto-save status indicator */}
-          {autoSaveStatus !== "idle" && (
-            <div className="flex items-center space-x-1 text-xs">
-              {autoSaveStatus === "saving" && (
-                <>
-                  <div className="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-                  <span className="text-blue-600 dark:text-blue-400">
-                    Saving...
-                  </span>
-                </>
-              )}
-              {autoSaveStatus === "saved" && (
-                <>
-                  <div className="w-3 h-3 bg-green-500 rounded-full"></div>
-                  <span className="text-green-600 dark:text-green-400">
-                    Saved
-                  </span>
-                </>
-              )}
-              {autoSaveStatus === "error" && (
-                <>
-                  <div className="w-3 h-3 bg-red-500 rounded-full"></div>
-                  <span
-                    className="text-red-600 dark:text-red-400"
-                    title={autoSaveError || "Auto-save failed"}
-                  >
-                    Save failed
-                  </span>
-                </>
-              )}
-            </div>
-          )}
-
-          <Button
-            size="sm"
-            onClick={saveApp}
-            data-save-button
-            className="bg-[var(--brand-blue)] hover:bg-[var(--brand-blue)]/90 text-white dark:text-white"
-          >
-            <Save className="w-3 h-3 mr-1" />
-            Save
-          </Button>
-
-          <Button size="sm" variant="outline" onClick={togglePreviewMode}>
-            <Eye className="w-3 h-3 mr-1" />
-            {isPreviewMode ? "Exit Preview" : "Preview"}
-          </Button>
-
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={async () => {
-              const appId = currentAppId || searchParams.get("appId") || "1";
-
-              // Save current state before publishing
-              try {
-                await saveCanvasToBackend(appId);
-                console.log(
-                  "✅ PUBLISH: Canvas saved before opening publish modal"
-                );
-              } catch (error) {
-                console.error("❌ PUBLISH: Failed to save canvas:", error);
-              }
-
-              // Open publish modal
-              setIsPublishModalOpen(true);
-            }}
-          >
-            <Upload className="w-3 h-3 mr-1" />
-            Publish
-          </Button>
-
-          <Button
-            size="sm"
-            variant="default"
-            onClick={async () => {
-              const appId = currentAppId || searchParams.get("appId") || "1";
-
-              // Save current state before opening preview
-              try {
-                await saveCanvasToBackend(appId);
-                console.log("✅ RUN APP: Canvas saved before opening preview");
-              } catch (error) {
-                console.error("❌ RUN APP: Failed to save canvas:", error);
-                // Continue anyway - user might want to preview unsaved changes
-              }
-
-              // Open preview with current page
-              const previewUrl = `/run?appId=${appId}&pageId=${currentPageId}`;
-              console.log("🚀 RUN APP: Opening preview:", previewUrl);
-              window.open(previewUrl, "_blank");
-            }}
-          >
-            <Play className="w-3 h-3 mr-1" />
-            Run App
-          </Button>
-
-          <Button
-            size="sm"
-            variant="outline"
-            title="Workflow"
-            className="px-2"
-            onClick={() => {
-              const appId = currentAppId || searchParams.get("appId") || "1";
-              router.push(`/workflow?appId=${appId}`);
-            }}
-          >
-            <Workflow className="w-3 h-3" />
-          </Button>
-
-          <Button
-            size="sm"
-            variant="outline"
-            title="Database"
-            className="px-2"
-            onClick={() => {
-              const appId = currentAppId || searchParams.get("appId") || "1";
-              router.push(`/database?appId=${appId}`);
-            }}
-          >
-            <Database className="w-3 h-3" />
-          </Button>
-
-          <div className="h-4 w-px bg-gray-300 dark:bg-gray-600 mx-2" />
-
-          {/* View Options */}
-          <div className="flex items-center space-x-1">
-            <Button
-              size="sm"
-              variant={isLeftPanelHidden ? "default" : "outline"}
-              title="Hide Elements Panel"
-              onClick={() => setIsLeftPanelHidden(!isLeftPanelHidden)}
-            >
-              <Eye className={`w-3 h-3 ${isLeftPanelHidden ? "hidden" : ""}`} />
-              <EyeOff
-                className={`w-3 h-3 ${isLeftPanelHidden ? "" : "hidden"}`}
-              />
-            </Button>
-            <Button
-              size="sm"
-              variant={isRightPanelHidden ? "default" : "outline"}
-              title="Hide Properties Panel"
-              onClick={() => setIsRightPanelHidden(!isRightPanelHidden)}
-            >
-              <Eye
-                className={`w-3 h-3 ${isRightPanelHidden ? "hidden" : ""}`}
-              />
-              <EyeOff
-                className={`w-3 h-3 ${isRightPanelHidden ? "" : "hidden"}`}
-              />
-            </Button>
-          </div>
-        </div>
-      </div>
+      
 
       <div className="absolute bottom-4 left-4 z-10 bg-black bg-opacity-90 text-white text-xs p-4 rounded-lg opacity-0 hover:opacity-100 transition-opacity pointer-events-none max-w-md">
         <div className="grid grid-cols-2 gap-2 text-xs">
@@ -6009,35 +5813,165 @@ function CanvasPageContent() {
           {/* Canvas area */}
           <div className="flex-1 flex flex-col min-w-0 overflow-hidden ">
             {/* VIEW SWITCHER - placed inside canvas column so it doesn't steal horizontal space */}
-            <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-900 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
-              <div className="flex items-center gap-2">
-                {/* Canvas View Button */}
-                <button
-                  onClick={() => setCurrentView("canvas")}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all ${
-                    currentView === "canvas"
-                      ? "bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-sm"
-                      : "text-gray-600 dark:text-gray-400 hover:bg-white/50 dark:hover:bg-gray-700/50"
-                  }`}
-                >
-                  <LayoutGrid className="w-4 h-4" />
-                  Canvas View
-                </button>
+            <header className="sticky top-0 z-40 w-full border-b border-gray-200/70 bg-gradient-to-r from-gray-50 to-gray-100 backdrop-blur supports-[backdrop-filter]:bg-white/70 dark:border-gray-800 dark:from-gray-900 dark:to-gray-950">
+              <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-3 sm:px-4">
+                {/* Left: Brand + Segmented Switch */}
+                <div className="flex min-w-0 items-center gap-3">
+                  {/* Segmented control (Canvas / Database) */}
+                  <div className="hidden sm:flex items-center rounded-lg border border-gray-200 bg-white p-1 shadow-sm dark:border-gray-800 dark:bg-gray-800">
+                    <button
+                      onClick={() => setCurrentView("canvas")}
+                      className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-xs font-medium transition ${
+                        currentView === "canvas"
+                          ? "bg-blue-50 text-blue-700 shadow-xs dark:bg-blue-950/50 dark:text-blue-300"
+                          : "text-gray-600 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-gray-700/60"
+                      }`}
+                      aria-pressed={currentView === "canvas"}
+                    >
+                      <LayoutGrid className="h-3.5 w-3.5" />
+                      <span>Canvas</span>
+                    </button>
+                    <button
+                      onClick={() => setCurrentView("database")}
+                      className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-xs font-medium transition ${
+                        currentView === "database"
+                          ? "bg-blue-50 text-blue-700 shadow-xs dark:bg-blue-950/50 dark:text-blue-300"
+                          : "text-gray-600 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-gray-700/60"
+                      }`}
+                      aria-pressed={currentView === "database"}
+                    >
+                      <Database className="h-3.5 w-3.5" />
+                      <span>Database</span>
+                    </button>
+                  </div>
+                  {/* Auto-save status */}
+                  {autoSaveStatus !== "idle" && (
+                    <div className="ml-1 hidden items-center gap-1 text-xs md:flex">
+                      {autoSaveStatus === "saving" && (
+                        <>
+                          <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+                          <span className="text-blue-600 dark:text-blue-400">
+                            Saving…
+                          </span>
+                        </>
+                      )}
+                      {autoSaveStatus === "saved" && (
+                        <>
+                          <span className="inline-block h-3 w-3 rounded-full bg-green-500" />
+                          <span className="text-green-600 dark:text-green-400">
+                            Saved
+                          </span>
+                        </>
+                      )}
+                      {autoSaveStatus === "error" && (
+                        <>
+                          <span className="inline-block h-3 w-3 rounded-full bg-red-500" />
+                          <span
+                            className="text-red-600 dark:text-red-400"
+                            title={autoSaveError || "Auto-save failed"}
+                          >
+                            Save failed
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
 
-                {/* Database View Button */}
-                <button
-                  onClick={() => setCurrentView("database")}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all ${
-                    currentView === "database"
-                      ? "bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-sm"
-                      : "text-gray-600 dark:text-gray-400 hover:bg-white/50 dark:hover:bg-gray-700/50"
-                  }`}
-                >
-                  <Database className="w-4 h-4" />
-                  Database View
-                </button>
+                {/* Right: Actions + Status */}
+                <div className="flex items-center gap-2">
+                  {/* Preview toggle */}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={togglePreviewMode}
+                    className="hidden md:inline-flex"
+                  >
+                    <Eye className="mr-1 h-3.5 w-3.5" />
+                    {isPreviewMode ? "Exit Preview" : "Preview"}
+                  </Button>
+
+                  {/* Save */}
+                  <Button
+                    size="sm"
+                    onClick={saveApp}
+                    data-save-button
+                    className="bg-[var(--brand-blue)] hover:bg-[var(--brand-blue)]/90 text-white dark:text-white"
+                  >
+                    <Save className="mr-1 h-3.5 w-3.5" />
+                    Save
+                  </Button>
+
+                  {/* View Options */}
+                  <div className="flex items-center space-x-1">
+                    <Button
+                      size="sm"
+                      variant={isLeftPanelHidden ? "default" : "outline"}
+                      title="Hide Elements Panel"
+                      onClick={() => setIsLeftPanelHidden(!isLeftPanelHidden)}
+                    >
+                      <Eye
+                        className={`w-3 h-3 ${
+                          isLeftPanelHidden ? "hidden" : ""
+                        }`}
+                      />
+                      <EyeOff
+                        className={`w-3 h-3 ${
+                          isLeftPanelHidden ? "" : "hidden"
+                        }`}
+                      />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={isRightPanelHidden ? "default" : "outline"}
+                      title="Hide Properties Panel"
+                      onClick={() => setIsRightPanelHidden(!isRightPanelHidden)}
+                    >
+                      <Eye
+                        className={`w-3 h-3 ${
+                          isRightPanelHidden ? "hidden" : ""
+                        }`}
+                      />
+                      <EyeOff
+                        className={`w-3 h-3 ${
+                          isRightPanelHidden ? "" : "hidden"
+                        }`}
+                      />
+                    </Button>
+                  </div>
+                </div>
               </div>
-            </div>
+
+              {/* Mobile segmented control */}
+              <div className="sm:hidden border-t border-gray-200/70 bg-white/70 px-3 py-2 backdrop-blur dark:border-gray-800 dark:bg-gray-900/70">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setCurrentView("canvas")}
+                    className={`flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition ${
+                      currentView === "canvas"
+                        ? "bg-blue-50 text-blue-700 shadow-xs dark:bg-blue-950/50 dark:text-blue-300"
+                        : "text-gray-600 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-gray-800/70"
+                    }`}
+                    aria-pressed={currentView === "canvas"}
+                  >
+                    <LayoutGrid className="h-4 w-4" />
+                    <span>Canvas</span>
+                  </button>
+                  <button
+                    onClick={() => setCurrentView("database")}
+                    className={`flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition ${
+                      currentView === "database"
+                        ? "bg-blue-50 text-blue-700 shadow-xs dark:bg-blue-950/50 dark:text-blue-300"
+                        : "text-gray-600 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-gray-800/70"
+                    }`}
+                    aria-pressed={currentView === "database"}
+                  >
+                    <Database className="h-4 w-4" />
+                    <span>Database</span>
+                  </button>
+                </div>
+              </div>
+            </header>
             {currentView === "database" ? (
               <div className="flex-1 overflow-hidden">
                 <DatabaseTab />
@@ -6454,9 +6388,7 @@ function CanvasPageContent() {
                         </Button>
                         <Button
                           size="sm"
-                          variant={
-                            canvasMode === "text" ? "default" : "ghost"
-                          }
+                          variant={canvasMode === "text" ? "default" : "ghost"}
                           onClick={() => setCanvasMode("text")}
                           className="h-8 px-3"
                           title="Text Tool"
@@ -6603,9 +6535,7 @@ function CanvasPageContent() {
                             </label>
                             <input
                               type="number"
-                              value={
-                                selectedElement.properties.fontSize || 16
-                              }
+                              value={selectedElement.properties.fontSize || 16}
                               onChange={(e) =>
                                 updateElementProperty(
                                   "fontSize",
@@ -6625,8 +6555,7 @@ function CanvasPageContent() {
                             <Button
                               size="sm"
                               variant={
-                                selectedElement.properties.fontWeight ===
-                                "bold"
+                                selectedElement.properties.fontWeight === "bold"
                                   ? "default"
                                   : "outline"
                               }
@@ -6677,8 +6606,8 @@ function CanvasPageContent() {
                               onClick={() =>
                                 updateElementProperty(
                                   "textDecoration",
-                                  selectedElement.properties
-                                    .textDecoration === "underline"
+                                  selectedElement.properties.textDecoration ===
+                                    "underline"
                                     ? "none"
                                     : "underline"
                                 )
@@ -6748,8 +6677,7 @@ function CanvasPageContent() {
                             <Button
                               size="sm"
                               variant={
-                                selectedElement.properties.textAlign ===
-                                "right"
+                                selectedElement.properties.textAlign === "right"
                                   ? "default"
                                   : "outline"
                               }
