@@ -32,10 +32,6 @@ interface WorkflowHeaderProps {
 }
 
 export function WorkflowHeader({
-  activeTab,
-  setActiveTab,
-  isCanvasWorkflowSplit,
-  onSplitScreenToggle,
 }: WorkflowHeaderProps) {
   const router = useRouter();
   const searchParams = useSearchParams();

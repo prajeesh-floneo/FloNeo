@@ -86,7 +86,7 @@ export function WorkflowBuilderContent() {
   };
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full ">
       {/* Main Workflow Area */}
       <div className="flex-1 flex flex-col border-r border-border">
         {/* Status Bar */}
