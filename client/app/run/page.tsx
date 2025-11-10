@@ -97,6 +97,9 @@ function RunAppContent() {
   const [workflows, setWorkflows] = useState<Map<string, Workflow>>(new Map());
   const [loading, setLoading] = useState(true);
   const [pageStack, setPageStack] = useState<string[]>([]); // For goBack() navigation
+  const [workflowContext, setWorkflowContext] = useState<Record<string, any>>(
+    {}
+  ); // Workflow execution context
 
   // AI Summary popup state
   const [summaryPopupOpen, setSummaryPopupOpen] = useState(false);
@@ -1096,7 +1099,64 @@ function RunAppContent() {
         console.log("[WF-RUN] Backend execution completed:", {
           resultsCount: result.results?.length,
           success: result.success,
+          hasResults: !!result.results,
+          isArray: Array.isArray(result.results),
         });
+
+        // Update workflow context with results
+        console.log(
+          "[WF-RUN] BEFORE context update check - result.results:",
+          result.results
+        );
+
+        if (result.results && Array.isArray(result.results)) {
+          console.log(
+            "[WF-RUN] INSIDE context update block - processing results"
+          );
+          const newContext: Record<string, any> = { ...workflowContext };
+
+          for (const resultItem of result.results) {
+            console.log("[WF-RUN] Processing resultItem:", resultItem);
+
+            if (!resultItem.result) {
+              console.log("[WF-RUN] Skipping - no result property");
+              continue;
+            }
+
+            const blockResult = resultItem.result;
+            const nodeLabel = resultItem.nodeLabel || "unknown";
+
+            console.log(`[WF-RUN] Processing result for ${nodeLabel}:`, {
+              success: blockResult.success,
+              type: blockResult.type,
+            });
+
+            // Store db.find results in context
+            if (blockResult.type === "dbFind" && blockResult.success) {
+              newContext.dbFindResult = blockResult.data;
+              console.log(
+                "[WF-RUN] Stored dbFindResult in context:",
+                blockResult.data
+              );
+            }
+
+            // Store other results as needed
+            if (blockResult.data) {
+              newContext[nodeLabel] = blockResult.data;
+            }
+          }
+
+          console.log(
+            "[WF-RUN] ABOUT TO CALL setWorkflowContext with:",
+            newContext
+          );
+          setWorkflowContext(newContext);
+          console.log(
+            "[WF-RUN] AFTER setWorkflowContext call - context should be updated"
+          );
+        } else {
+          console.log("[WF-RUN] SKIPPED context update - condition failed");
+        }
 
         // Process results from backend execution
         if (result.results && Array.isArray(result.results)) {
@@ -1250,7 +1310,7 @@ function RunAppContent() {
         });
       }
     },
-    [appId, navigateTo, goBack, toast]
+    [appId, navigateTo, goBack, toast, workflowContext]
   );
 
   // Handle element click
@@ -1833,6 +1893,7 @@ function RunAppContent() {
                   currentPage.groups?.filter((g: any) => g.type === "form") ||
                   []
                 }
+                workflowContext={workflowContext}
               />
             </div>
           );

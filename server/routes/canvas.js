@@ -1281,5 +1281,248 @@ router.patch("/workflows/:appId", authenticateToken, async (req, res) => {
   }
 });
 
+// ===== DATA DISCOVERY FOR BINDING =====
+
+/**
+ * @route   GET /api/canvas/:appId/elements/:elementId/available-data
+ * @desc    Discover available data sources for an element's binding
+ * @access  Private
+ */
+router.get(
+  "/:appId/elements/:elementId/available-data",
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const { appId, elementId } = req.params;
+      const userId = req.user.id;
+
+      console.log("🔍 [DATA-DISCOVERY] Fetching available data for element:", {
+        appId,
+        elementId,
+      });
+
+      // Verify app access
+      const app = await prisma.app.findFirst({
+        where: {
+          id: parseInt(appId),
+          ownerId: userId,
+        },
+      });
+
+      if (!app) {
+        return res.status(404).json({
+          success: false,
+          message: "App not found or access denied",
+        });
+      }
+
+      // Get all workflows for this element
+      const workflows = await prisma.workflow.findMany({
+        where: {
+          appId: parseInt(appId),
+          elementId: elementId,
+        },
+      });
+
+      console.log(
+        `🔍 [DATA-DISCOVERY] Found ${workflows.length} workflow(s) for element`
+      );
+
+      const dataSources = [];
+
+      // Analyze each workflow to extract data sources
+      for (const workflow of workflows) {
+        const nodes = workflow.nodes || [];
+
+        for (const node of nodes) {
+          const label = node.data?.label;
+          const category = node.data?.category;
+
+          // db.find block
+          if (label === "db.find" && category === "Actions") {
+            const tableName = node.data?.tableName;
+            if (tableName) {
+              // Get table schema from database
+              const fullTableName = tableName.startsWith("app_")
+                ? tableName
+                : `app_${parseInt(appId)}_${tableName}`;
+
+              try {
+                // Get table columns from information_schema
+                const columns = await prisma.$queryRawUnsafe(`
+                  SELECT column_name, data_type
+                  FROM information_schema.columns
+                  WHERE table_name = '${fullTableName}'
+                  AND column_name NOT IN ('app_id', 'created_at', 'updated_at')
+                  ORDER BY ordinal_position
+                `);
+
+                // Get sample data
+                const sampleData = await prisma.$queryRawUnsafe(
+                  `SELECT * FROM "${fullTableName}" LIMIT 1`
+                );
+
+                const fields = columns.map((col) => {
+                  const sample =
+                    sampleData.length > 0
+                      ? sampleData[0][col.column_name]
+                      : null;
+                  return {
+                    name: col.column_name,
+                    type: mapPostgresType(col.data_type),
+                    sample: sample,
+                  };
+                });
+
+                dataSources.push({
+                  name: "dbFindResult",
+                  type: "array",
+                  from: `db.find block (table: ${tableName})`,
+                  workflowName: workflow.name,
+                  fields: fields,
+                  isArray: true,
+                  arrayItemType: "object",
+                });
+              } catch (error) {
+                console.warn(
+                  `⚠️ [DATA-DISCOVERY] Could not fetch schema for table ${fullTableName}:`,
+                  error.message
+                );
+              }
+            }
+          }
+
+          // db.create block
+          if (label === "db.create" && category === "Actions") {
+            dataSources.push({
+              name: "dbCreateResult",
+              type: "object",
+              from: "db.create block",
+              workflowName: workflow.name,
+              fields: [
+                { name: "tableName", type: "string", sample: null },
+                { name: "recordId", type: "number", sample: null },
+                { name: "tableCreated", type: "boolean", sample: null },
+                { name: "executionTime", type: "number", sample: null },
+              ],
+              isArray: false,
+            });
+          }
+
+          // db.update block
+          if (label === "db.update" && category === "Actions") {
+            dataSources.push({
+              name: "dbUpdateResult",
+              type: "object",
+              from: "db.update block",
+              workflowName: workflow.name,
+              fields: [
+                { name: "tableName", type: "string", sample: null },
+                { name: "updatedCount", type: "number", sample: null },
+                { name: "updatedRecords", type: "array", sample: null },
+                { name: "executionTime", type: "number", sample: null },
+              ],
+              isArray: false,
+            });
+          }
+
+          // http.request block
+          if (label === "http.request" && category === "Actions") {
+            const saveResponseTo = node.data?.saveResponseTo || "httpResponse";
+            dataSources.push({
+              name: saveResponseTo,
+              type: "object",
+              from: "http.request block",
+              workflowName: workflow.name,
+              fields: [
+                { name: "status", type: "number", sample: 200 },
+                { name: "data", type: "any", sample: null },
+                { name: "headers", type: "object", sample: null },
+              ],
+              isArray: false,
+            });
+          }
+
+          // onSubmit trigger
+          if (label === "onSubmit" && category === "Triggers") {
+            dataSources.push({
+              name: "formData",
+              type: "object",
+              from: "onSubmit trigger",
+              workflowName: workflow.name,
+              fields: [
+                {
+                  name: "(dynamic form fields)",
+                  type: "string",
+                  sample: "Form field values",
+                },
+              ],
+              isArray: false,
+            });
+          }
+        }
+      }
+
+      // Add common data sources that are always available
+      dataSources.push({
+        name: "urlParams",
+        type: "object",
+        from: "URL parameters",
+        workflowName: "Built-in",
+        fields: [
+          {
+            name: "(dynamic URL params)",
+            type: "string",
+            sample: "URL parameter values",
+          },
+        ],
+        isArray: false,
+      });
+
+      console.log(
+        `✅ [DATA-DISCOVERY] Found ${dataSources.length} data source(s)`
+      );
+
+      res.json({
+        success: true,
+        dataSources: dataSources,
+        elementId: elementId,
+        workflowsAnalyzed: workflows.length,
+      });
+    } catch (error) {
+      console.error("❌ [DATA-DISCOVERY] Error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to discover available data",
+        error: error.message,
+      });
+    }
+  }
+);
+
+// Helper function to map PostgreSQL types to user-friendly types
+function mapPostgresType(pgType) {
+  const typeMap = {
+    integer: "number",
+    bigint: "number",
+    numeric: "number",
+    "double precision": "number",
+    real: "number",
+    smallint: "number",
+    "character varying": "string",
+    text: "string",
+    char: "string",
+    boolean: "boolean",
+    date: "date",
+    timestamp: "date",
+    "timestamp without time zone": "date",
+    "timestamp with time zone": "date",
+    json: "object",
+    jsonb: "object",
+  };
+
+  return typeMap[pgType.toLowerCase()] || "string";
+}
+
 module.exports = router;
 module.exports.setSocketIO = setSocketIO;

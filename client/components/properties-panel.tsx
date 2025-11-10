@@ -1,4 +1,5 @@
 "use client";
+import React from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,7 +31,11 @@ import {
   AlignCenter,
   AlignRight,
   Settings as SettingsIcon,
+  HelpCircle,
+  Info,
+  Wand2,
 } from "lucide-react";
+import { DataBindingBuilder } from "@/components/data-binding-builder";
 
 interface CanvasElement {
   id: string;
@@ -99,6 +104,37 @@ interface PropertiesPanelProps {
   onMoveElementLayer: (direction: "up" | "down") => void;
 }
 
+// Helper function to validate binding path syntax
+const isValidBindingPath = (path: string): boolean => {
+  if (!path || path.trim() === "") return true; // Empty is valid
+
+  // Check if it's a template string with {{...}}
+  const templateRegex = /\{\{([^}]+)\}\}/g;
+  const hasTemplate = templateRegex.test(path);
+
+  if (hasTemplate) {
+    // Template mode - validate each {{path}} segment
+    templateRegex.lastIndex = 0; // Reset regex
+    const matches = [...path.matchAll(templateRegex)];
+
+    for (const match of matches) {
+      const innerPath = match[1].trim();
+      const validPattern =
+        /^[a-zA-Z_$][a-zA-Z0-9_$]*(\[[0-9]+\]|\.[a-zA-Z_$][a-zA-Z0-9_$]*)*$/;
+      if (!validPattern.test(innerPath)) {
+        return false;
+      }
+    }
+    return true;
+  } else {
+    // Simple binding mode - validate single path
+    // Valid examples: dbFindResult[0].name, formData.email, urlParams.id
+    const validPattern =
+      /^[a-zA-Z_$][a-zA-Z0-9_$]*(\[[0-9]+\]|\.[a-zA-Z_$][a-zA-Z0-9_$]*)*$/;
+    return validPattern.test(path);
+  }
+};
+
 export function PropertiesPanel({
   selectedElement,
   currentPage,
@@ -112,6 +148,22 @@ export function PropertiesPanel({
   onToggleElementLock,
   onMoveElementLayer,
 }: PropertiesPanelProps) {
+  const [showExamplesModal, setShowExamplesModal] = React.useState(false);
+  const [showBindingBuilder, setShowBindingBuilder] = React.useState(false);
+
+  // Get appId from URL query parameters
+  const [appId, setAppId] = React.useState<string>("");
+
+  React.useEffect(() => {
+    if (typeof window !== "undefined") {
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlAppId = urlParams.get("appId");
+      if (urlAppId) {
+        setAppId(urlAppId);
+      }
+    }
+  }, []);
+
   const renderGeneralProperties = () => {
     const isDisabled = !selectedElement;
     const alignHorizontally = (dir: "left" | "center" | "right") => {
@@ -2995,6 +3047,112 @@ export function PropertiesPanel({
                     </div>
                   </>
                 )}
+
+                {/* TEXT_DISPLAY Element Properties */}
+                {(selectedElement.type === "TEXT_DISPLAY" ||
+                  selectedElement.type === "text_display") && (
+                  <>
+                    {/* Data Binding Path */}
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Label>Data Binding (Optional)</Label>
+                        <div className="group relative">
+                          <HelpCircle className="w-4 h-4 text-gray-400 cursor-help" />
+                          <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block w-64 p-2 bg-gray-900 text-white text-xs rounded shadow-lg z-50">
+                            Connect this element to data from workflows, forms,
+                            or URL parameters. Leave empty to show static
+                            fallback text.
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Visual Builder Button */}
+                      <Button
+                        onClick={() => setShowBindingBuilder(true)}
+                        variant="outline"
+                        className="w-full mb-2"
+                        type="button"
+                      >
+                        <Wand2 className="w-4 h-4 mr-2" />
+                        Open Visual Binding Builder
+                      </Button>
+
+                      <Input
+                        type="text"
+                        value={selectedElement.properties.bindingPath || ""}
+                        onChange={(e) =>
+                          onUpdateElement("bindingPath", e.target.value)
+                        }
+                        placeholder="Example: dbFindResult[0].name or {{dbFindResult[0].name}}"
+                        className={
+                          selectedElement.properties.bindingPath &&
+                          !isValidBindingPath(
+                            selectedElement.properties.bindingPath
+                          )
+                            ? "border-red-500 focus:border-red-500"
+                            : ""
+                        }
+                      />
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        Use the visual builder above or enter the path manually.{" "}
+                        <button
+                          type="button"
+                          onClick={() => setShowExamplesModal(true)}
+                          className="text-blue-600 dark:text-blue-400 hover:underline"
+                        >
+                          Show examples
+                        </button>
+                      </p>
+                    </div>
+
+                    {/* Format */}
+                    <div>
+                      <Label>Format</Label>
+                      <Select
+                        value={selectedElement.properties.format || "text"}
+                        onValueChange={(value) =>
+                          onUpdateElement("format", value)
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="text">Text</SelectItem>
+                          <SelectItem value="currency">Currency ($)</SelectItem>
+                          <SelectItem value="number">Number</SelectItem>
+                          <SelectItem value="percentage">
+                            Percentage (%)
+                          </SelectItem>
+                          <SelectItem value="date">Date</SelectItem>
+                          <SelectItem value="datetime">Date & Time</SelectItem>
+                          <SelectItem value="phone">Phone</SelectItem>
+                          <SelectItem value="uppercase">UPPERCASE</SelectItem>
+                          <SelectItem value="lowercase">lowercase</SelectItem>
+                          <SelectItem value="capitalize">Capitalize</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Fallback Text */}
+                    <div>
+                      <Label>Fallback Text</Label>
+                      <Input
+                        type="text"
+                        value={
+                          selectedElement.properties.fallbackText || "No data"
+                        }
+                        onChange={(e) =>
+                          onUpdateElement("fallbackText", e.target.value)
+                        }
+                        placeholder="No data"
+                      />
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        Shown when no data is available
+                      </p>
+                    </div>
+                  </>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -3004,15 +3162,171 @@ export function PropertiesPanel({
   };
 
   return (
-    <div className="w-80 bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 p-4 overflow-y-auto h-full flex-shrink-0">
-      <div className="space-y-4">
-        {renderGeneralProperties()}
-        {selectedElement
-          ? renderElementProperties()
-          : showCanvasProperties
-          ? renderCanvasProperties()
-          : null}
+    <>
+      <div className="w-80 bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 p-4 overflow-y-auto h-full flex-shrink-0">
+        <div className="space-y-4">
+          {renderGeneralProperties()}
+          {selectedElement
+            ? renderElementProperties()
+            : showCanvasProperties
+            ? renderCanvasProperties()
+            : null}
+        </div>
       </div>
-    </div>
+
+      {/* Data Binding Examples Modal */}
+      {showExamplesModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
+                  Data Binding Examples
+                </h2>
+                <button
+                  onClick={() => setShowExamplesModal(false)}
+                  className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                >
+                  <svg
+                    className="w-6 h-6"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="space-y-6">
+                {/* Database Query Results */}
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2 flex items-center gap-2">
+                    <Info className="w-5 h-5 text-blue-500" />
+                    Database Query Results (db.find)
+                  </h3>
+                  <div className="bg-gray-50 dark:bg-gray-900 rounded p-4 space-y-2">
+                    <div>
+                      <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                        First item from query:
+                      </p>
+                      <code className="block mt-1 p-2 bg-white dark:bg-gray-800 rounded text-sm text-blue-600 dark:text-blue-400 border border-gray-200 dark:border-gray-700">
+                        dbFindResult[0].fieldName
+                      </code>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        Example: <code>dbFindResult[0].name</code> or{" "}
+                        <code>dbFindResult[0].price</code>
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                        Second item from query:
+                      </p>
+                      <code className="block mt-1 p-2 bg-white dark:bg-gray-800 rounded text-sm text-blue-600 dark:text-blue-400 border border-gray-200 dark:border-gray-700">
+                        dbFindResult[1].fieldName
+                      </code>
+                    </div>
+                    <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
+                      <p className="text-xs text-gray-600 dark:text-gray-400">
+                        💡 <strong>Tip:</strong> For displaying all items, use a
+                        repeater element instead of Text Display
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Form Inputs */}
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2 flex items-center gap-2">
+                    <Info className="w-5 h-5 text-green-500" />
+                    Form Input Values
+                  </h3>
+                  <div className="bg-gray-50 dark:bg-gray-900 rounded p-4 space-y-2">
+                    <div>
+                      <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                        Get value from form input:
+                      </p>
+                      <code className="block mt-1 p-2 bg-white dark:bg-gray-800 rounded text-sm text-green-600 dark:text-green-400 border border-gray-200 dark:border-gray-700">
+                        formData.inputName
+                      </code>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        Example: <code>formData.email</code> or{" "}
+                        <code>formData.username</code>
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* URL Parameters */}
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2 flex items-center gap-2">
+                    <Info className="w-5 h-5 text-purple-500" />
+                    URL Parameters
+                  </h3>
+                  <div className="bg-gray-50 dark:bg-gray-900 rounded p-4 space-y-2">
+                    <div>
+                      <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                        Get value from URL parameter:
+                      </p>
+                      <code className="block mt-1 p-2 bg-white dark:bg-gray-800 rounded text-sm text-purple-600 dark:text-purple-400 border border-gray-200 dark:border-gray-700">
+                        urlParams.paramName
+                      </code>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        Example: <code>urlParams.id</code> or{" "}
+                        <code>urlParams.category</code>
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Common Mistakes */}
+                <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded p-4">
+                  <h3 className="text-sm font-semibold text-yellow-800 dark:text-yellow-200 mb-2">
+                    ⚠️ Common Mistakes to Avoid
+                  </h3>
+                  <ul className="text-xs text-yellow-700 dark:text-yellow-300 space-y-1 list-disc list-inside">
+                    <li>Don't use spaces in binding paths</li>
+                    <li>
+                      Array indices must be numbers: <code>[0]</code> not{" "}
+                      <code>[first]</code>
+                    </li>
+                    <li>Field names are case-sensitive</li>
+                    <li>
+                      Make sure the workflow block has executed before the data
+                      is available
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              <div className="mt-6 flex justify-end">
+                <Button onClick={() => setShowExamplesModal(false)}>
+                  Close
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Data Binding Builder Modal */}
+      {showBindingBuilder && selectedElement && appId && (
+        <DataBindingBuilder
+          appId={appId}
+          elementId={selectedElement.id}
+          currentBindingPath={selectedElement.properties?.bindingPath || ""}
+          onSave={(bindingPath) => {
+            onUpdateElement("bindingPath", bindingPath);
+            setShowBindingBuilder(false);
+          }}
+          onCancel={() => setShowBindingBuilder(false)}
+        />
+      )}
+    </>
   );
 }

@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { CanvasElement } from "./ElementManager";
 import { useCanvasWorkflow } from "@/lib/canvas-workflow-context";
 import { toRuntimeStyle, logElementRender } from "@/runtime/styleMap";
+import { TextDisplay } from "./elements/TextDisplay";
 
 export interface CanvasRendererProps {
   elements: CanvasElement[];
@@ -26,6 +27,8 @@ export interface CanvasRendererProps {
   formGroups?: any[];
   // Callback to get current form values
   onGetFormValues?: (callback: (values: Record<string, any>) => void) => void;
+  // Workflow context for data display elements
+  workflowContext?: Record<string, any>;
 }
 export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
   elements,
@@ -43,6 +46,7 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
   hasClickWorkflow,
   formGroups = [],
   onGetFormValues,
+  workflowContext = {},
 }) => {
   const { isPreviewMode } = useCanvasWorkflow();
 
@@ -64,6 +68,16 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
       (window as any).__canvasFormValues = values;
     }
   }, [values, mode]);
+
+  // Debug: Log workflow context changes
+  React.useEffect(() => {
+    if (mode === "preview") {
+      console.log("🔄 [CANVAS-RENDERER] Workflow context updated:", {
+        contextKeys: Object.keys(workflowContext),
+        fullContext: workflowContext,
+      });
+    }
+  }, [workflowContext, mode]);
 
   // Phase 7: Logging for parity verification
   React.useEffect(() => {
@@ -131,7 +145,15 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
 
       if (isInPreviewMode) {
         // In preview mode, trigger runtime events
-        onEvent?.(element.id, "click", { element, event: e });
+        // IMPORTANT: Don't pass the entire element or event object - they contain circular references
+        // Only pass serializable data
+        onEvent?.(element.id, "click", {
+          elementId: element.id,
+          elementType: element.type,
+          clientX: e.clientX,
+          clientY: e.clientY,
+          timestamp: Date.now(),
+        });
       } else {
         // In edit mode, handle selection
         onElementClick?.(element, e);
@@ -1041,8 +1063,52 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
           </div>
         );
 
+      case "TEXT_DISPLAY":
+      case "text_display":
+        const textDisplayProps = elementHasClickWorkflow
+          ? { ...clickableProps, style }
+          : {
+              style,
+              onClick: isInPreviewMode ? undefined : handleClick,
+              onDoubleClick: isInPreviewMode ? undefined : handleDoubleClick,
+              onMouseDown: isInPreviewMode ? undefined : handleMouseDown,
+            };
+        return (
+          <div key={element.id} {...textDisplayProps}>
+            <TextDisplay
+              element={element}
+              context={workflowContext}
+              isPreviewMode={isInPreviewMode}
+            />
+          </div>
+        );
+
       case "SHAPE":
       default:
+        // Check if this SHAPE has a bindingPath (making it a TEXT_DISPLAY)
+        const hasBindingPath = element.properties?.bindingPath;
+
+        if (hasBindingPath) {
+          // Render as TEXT_DISPLAY
+          const textDisplayShapeProps = elementHasClickWorkflow
+            ? { ...clickableProps, style }
+            : {
+                style,
+                onClick: isInPreviewMode ? undefined : handleClick,
+                onDoubleClick: isInPreviewMode ? undefined : handleDoubleClick,
+                onMouseDown: isInPreviewMode ? undefined : handleMouseDown,
+              };
+          return (
+            <div key={element.id} {...textDisplayShapeProps}>
+              <TextDisplay
+                element={element}
+                context={workflowContext}
+                isPreviewMode={isInPreviewMode}
+              />
+            </div>
+          );
+        }
+
         // Use clickableProps for non-interactive elements with workflows
         const shapeProps = elementHasClickWorkflow
           ? clickableProps
