@@ -19,7 +19,8 @@
     "db:sync-models": "node sync-models.js",
     "db:sync-models:local": "node sync-models.js --local",
     "db:create-tables": "node create-tables-from-registry.js",
-    "db:seed": "node prisma/seed.js"
+    "db:seed": "node prisma/seed.js",
+    "test:upsert": "node scripts/test-db-upsert.js"
   },
   "prisma": {
     "seed": "node prisma/seed.js"

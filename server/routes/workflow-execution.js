@@ -1151,12 +1151,33 @@ const executeDbUpdate = async (node, context, appId, userId) => {
     }
 
     // Extract configuration from node data
-    const {
+    let {
       tableName,
       updateData = {},
       whereConditions = [],
       returnUpdatedRecords = true,
     } = node.data;
+
+    // Parse JSON strings if needed
+    if (typeof updateData === "string") {
+      try {
+        updateData = JSON.parse(updateData);
+      } catch (error) {
+        throw new Error(
+          `Invalid JSON in updateData: ${error.message}. Please provide valid JSON.`
+        );
+      }
+    }
+
+    if (typeof whereConditions === "string") {
+      try {
+        whereConditions = JSON.parse(whereConditions);
+      } catch (error) {
+        throw new Error(
+          `Invalid JSON in whereConditions: ${error.message}. Please provide valid JSON.`
+        );
+      }
+    }
 
     if (!tableName) {
       throw new Error("Table name is required for DbUpdate operation");
@@ -1191,12 +1212,21 @@ const executeDbUpdate = async (node, context, appId, userId) => {
     securityValidator.validateConditions(whereConditions);
 
     // Process update data with context substitution
+    // Filter out reserved columns (id, created_at, updated_at, app_id) from update data
+    const reservedColumns = ['id', 'created_at', 'updated_at', 'app_id'];
     const processedUpdateData = {};
+    console.log(`🔄 [DB-UPDATE] Original updateData keys:`, Object.keys(updateData));
     for (const [column, value] of Object.entries(updateData)) {
+      // Skip reserved columns - they shouldn't be updated
+      if (reservedColumns.includes(column.toLowerCase())) {
+        console.log(`⚠️ [DB-UPDATE] Skipping reserved column '${column}' from update data`);
+        continue;
+      }
       // Substitute context variables in value
       const substitutedValue = substituteContextVariables(value, context);
       processedUpdateData[column] = substitutedValue;
     }
+    console.log(`🔄 [DB-UPDATE] Processed updateData keys:`, Object.keys(processedUpdateData));
 
     // Build safe UPDATE query using SafeQueryBuilder
     const queryBuilder = new SafeQueryBuilder();
@@ -1209,6 +1239,16 @@ const executeDbUpdate = async (node, context, appId, userId) => {
       const substitutedValue = substituteContextVariables(value, context);
 
       queryBuilder.addWhere(field, operator, substitutedValue, logic);
+    }
+
+    // Automatically update updated_at timestamp if column exists
+    // Check if table has updated_at column
+    const hasUpdatedAt = tableSchema.some(
+      (col) => col.name === "updated_at"
+    );
+    if (hasUpdatedAt && !processedUpdateData.updated_at) {
+      // Add updated_at to update data if not already provided
+      processedUpdateData.updated_at = new Date();
     }
 
     // Build the update query
@@ -1302,13 +1342,118 @@ const executeDbUpsert = async (node, context, appId, userId) => {
     }
 
     // Extract configuration from node data
-    const {
+    let {
       tableName,
       uniqueFields = [],
       updateData = {},
       insertData = {},
       returnRecord = true,
     } = node.data;
+
+    // Parse JSON strings if needed
+    if (typeof uniqueFields === "string") {
+      try {
+        uniqueFields = JSON.parse(uniqueFields);
+      } catch {
+        // If not valid JSON, try splitting by comma
+        uniqueFields = uniqueFields
+          .split(",")
+          .map((f) => f.trim())
+          .filter((f) => f.length > 0);
+      }
+    }
+
+    // Clean up uniqueFields - remove quotes and ensure they're strings
+    if (Array.isArray(uniqueFields)) {
+      uniqueFields = uniqueFields.map((field) => {
+        if (typeof field === "string") {
+          // Remove surrounding quotes if present
+          let cleaned = field.trim();
+          if ((cleaned.startsWith('"') && cleaned.endsWith('"')) || 
+              (cleaned.startsWith("'") && cleaned.endsWith("'"))) {
+            cleaned = cleaned.slice(1, -1);
+          }
+          return cleaned;
+        }
+        return String(field).trim();
+      }).filter((f) => f.length > 0);
+    }
+
+    if (typeof updateData === "string") {
+      try {
+        updateData = JSON.parse(updateData);
+      } catch (error) {
+        throw new Error(
+          `Invalid JSON in updateData: ${error.message}. Please provide valid JSON.`
+        );
+      }
+    }
+
+    // Parse insertData if it's a string
+    if (typeof insertData === "string") {
+      const trimmed = insertData.trim();
+      if (trimmed) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          // Ensure it's an object, not an array or primitive
+          if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+            throw new Error("insertData must be a JSON object, not an array or primitive");
+          }
+          insertData = parsed;
+        } catch (error) {
+          console.error("❌ [DB-UPSERT] Failed to parse insertData:", error.message);
+          console.error("❌ [DB-UPSERT] insertData value:", insertData);
+          throw new Error(
+            `Invalid JSON in insertData: ${error.message}. Please provide valid JSON object.`
+          );
+        }
+      } else {
+        insertData = {};
+      }
+    }
+
+    // Validate insertData is an object
+    if (insertData && (typeof insertData !== "object" || Array.isArray(insertData))) {
+      console.error("❌ [DB-UPSERT] insertData is not an object:", typeof insertData, insertData);
+      throw new Error("insertData must be an object, not an array or primitive");
+    }
+
+    // Ensure insertData is initialized
+    if (!insertData) {
+      insertData = {};
+    }
+
+    // Parse updateData if it's a string
+    if (typeof updateData === "string") {
+      const trimmed = updateData.trim();
+      if (trimmed && trimmed !== "{}") {
+        try {
+          const parsed = JSON.parse(trimmed);
+          // Ensure it's an object, not an array or primitive
+          if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+            throw new Error("updateData must be a JSON object, not an array or primitive");
+          }
+          updateData = parsed;
+        } catch (error) {
+          console.error("❌ [DB-UPSERT] Failed to parse updateData:", error.message);
+          throw new Error(
+            `Invalid JSON in updateData: ${error.message}. Please provide valid JSON object.`
+          );
+        }
+      } else {
+        updateData = {};
+      }
+    }
+
+    // Validate updateData is an object
+    if (updateData && (typeof updateData !== "object" || Array.isArray(updateData))) {
+      throw new Error("updateData must be an object, not an array or primitive");
+    }
+
+    // Ensure updateData is initialized
+    if (!updateData) {
+      updateData = {};
+    }
 
     if (!tableName) {
       throw new Error("Table name is required for DbUpsert operation");
@@ -1318,9 +1463,19 @@ const executeDbUpsert = async (node, context, appId, userId) => {
       throw new Error("At least one unique field is required for upsert");
     }
 
+    // Validate uniqueFields are not just numbers
+    const invalidFields = uniqueFields.filter(
+      (field) => typeof field === "string" && /^\d+$/.test(field.trim())
+    );
+    if (invalidFields.length > 0) {
+      throw new Error(
+        `Invalid unique fields: ${invalidFields.join(", ")}. Unique fields must be column names or JSONB paths (e.g., "email" or "data->>'applicationId'"), not just numbers.`
+      );
+    }
+
     if (
-      Object.keys(updateData).length === 0 &&
-      Object.keys(insertData).length === 0
+      (!updateData || Object.keys(updateData).length === 0) &&
+      (!insertData || Object.keys(insertData).length === 0)
     ) {
       throw new Error("Either updateData or insertData must be provided");
     }
@@ -1343,13 +1498,154 @@ const executeDbUpsert = async (node, context, appId, userId) => {
       processedInsertData[key] = substituteContextVariables(value, context);
     }
 
+    // Validate table name for security
+    securityValidator.validateTableName(tableName, appId);
+
+    console.log(`🔍 [DB-UPSERT] Checking table existence: ${tableName}`);
+
+    // Check if table exists - throw error if it doesn't (no auto-creation)
+    const tableExists = await dbUtils.tableExists(tableName);
+    console.log(`🔍 [DB-UPSERT] Table existence check: ${tableExists}`);
+    
+    if (!tableExists) {
+      // Verify with direct query to be sure
+      try {
+        await prisma.$queryRawUnsafe(`SELECT 1 FROM "${tableName}" LIMIT 1`);
+        // If query succeeds, table exists
+        console.log(`✅ [DB-UPSERT] Table ${tableName} verified to exist`);
+      } catch (error) {
+        if (error.code === '42P01') {
+          // Table doesn't exist - throw error
+          throw new Error(
+            `Table "${tableName}" does not exist. Please create the table first before using db.upsert.`
+          );
+        } else {
+          // Some other error - rethrow it
+          throw new Error(
+            `Cannot access table "${tableName}": ${error.message}. Please check table name and database permissions.`
+          );
+        }
+      }
+    } else {
+      // Table exists according to check, verify with direct query
+      try {
+        await prisma.$queryRawUnsafe(`SELECT 1 FROM "${tableName}" LIMIT 1`);
+        console.log(`✅ [DB-UPSERT] Table ${tableName} verified to exist`);
+      } catch (error) {
+        console.error(`❌ [DB-UPSERT] Table check said exists but query failed: ${error.message}`);
+        throw new Error(
+          `Table "${tableName}" appears to exist but cannot be queried. Error: ${error.message}. ` +
+          `Please check: 1) Table name is correct, 2) Table is in 'public' schema, 3) Database connection has proper permissions.`
+        );
+      }
+    }
+
+    // Get table schema to determine column types for proper type casting
+    let tableSchema = [];
+    try {
+      tableSchema = await dbUtils.discoverTableSchema(tableName);
+      console.log(`🔍 [DB-UPSERT] Discovered table schema with ${tableSchema.length} columns`);
+    } catch (error) {
+      console.log(`⚠️ [DB-UPSERT] Could not discover table schema: ${error.message}`);
+    }
+
     // Build WHERE clause for checking existence using unique fields
     const queryBuilder = new SafeQueryBuilder();
+    console.log(`🔍 [DB-UPSERT] Building WHERE clause with uniqueFields:`, uniqueFields);
+    console.log(`🔍 [DB-UPSERT] processedInsertData keys:`, Object.keys(processedInsertData));
+    console.log(`🔍 [DB-UPSERT] processedUpdateData keys:`, Object.keys(processedUpdateData));
+    
     for (const field of uniqueFields) {
-      const value = processedInsertData[field] || processedUpdateData[field];
+      // Clean the field name (remove any remaining quotes)
+      const cleanField = field.replace(/^["']|["']$/g, '');
+      let value = processedInsertData[cleanField] || processedUpdateData[cleanField];
+      
+      console.log(`🔍 [DB-UPSERT] Looking for field "${cleanField}" (original: "${field}"), value:`, value);
+      
       if (value !== undefined && value !== null) {
-        queryBuilder.addCondition(field, "=", value);
+        // Check if this is a JSONB field path (e.g., "data->>'applicationId'")
+        if (field.includes("->>") || field.includes("->")) {
+          // JSONB field path - use raw condition
+          // Extract the value from nested data if needed
+          let actualValue = value;
+          
+          // If field is like "data->>'applicationId'" and value is in processedInsertData["data"]
+          // we need to extract it from the nested object
+          if (field.startsWith("data->>") || field.startsWith("data->")) {
+            const jsonbKey = field.split("'")[1] || field.split('"')[1]; // Extract key from data->>'key'
+            if (processedInsertData.data && typeof processedInsertData.data === 'object') {
+              actualValue = processedInsertData.data[jsonbKey];
+            } else if (processedUpdateData.data && typeof processedUpdateData.data === 'object') {
+              actualValue = processedUpdateData.data[jsonbKey];
+            }
+          }
+          
+          const paramPlaceholder = queryBuilder.addParam(actualValue);
+          queryBuilder.addWhereRaw(`${field} = ${paramPlaceholder}`);
+        } else {
+          // Regular column - check type and cast if needed
+          // Use cleanField for schema lookup
+          const columnInfo = tableSchema.find((col) => col.name === cleanField);
+          
+          if (columnInfo) {
+            // Convert value to match column type
+            const columnType = columnInfo.type.toLowerCase();
+            
+            if (columnType.includes('int') || columnType.includes('serial') || columnType.includes('bigint')) {
+              // Integer types - convert string to number
+              if (typeof value === 'string') {
+                const numValue = parseInt(value, 10);
+                if (!isNaN(numValue)) {
+                  value = numValue;
+                  console.log(`🔧 [DB-UPSERT] Converted ${field} from string "${processedInsertData[field] || processedUpdateData[field]}" to integer ${value}`);
+                }
+              }
+            } else if (columnType.includes('numeric') || columnType.includes('decimal') || columnType.includes('real') || columnType.includes('double')) {
+              // Numeric types - convert string to number
+              if (typeof value === 'string') {
+                const numValue = parseFloat(value);
+                if (!isNaN(numValue)) {
+                  value = numValue;
+                }
+              }
+            } else if (columnType === 'boolean') {
+              // Boolean type
+              if (typeof value === 'string') {
+                value = value.toLowerCase() === 'true' || value === '1';
+              }
+            }
+          }
+          
+          // Use standard condition with properly typed value (use cleanField)
+          queryBuilder.addWhere(cleanField, "=", value);
+        }
+      } else {
+        console.warn(`⚠️ [DB-UPSERT] No value found for unique field "${cleanField}" in insertData or updateData`);
       }
+    }
+    
+    // Verify WHERE clause was built
+    const whereClause = queryBuilder.buildWhereClause();
+    if (!whereClause) {
+      throw new Error(
+        `No WHERE conditions could be built from unique fields. ` +
+        `Make sure the unique field values exist in your Insert Data or Update Data. ` +
+        `Unique fields: ${uniqueFields.join(", ")}, ` +
+        `Insert Data keys: ${Object.keys(processedInsertData).join(", ")}, ` +
+        `Update Data keys: ${Object.keys(processedUpdateData).join(", ")}`
+      );
+    }
+
+    // Verify table exists before querying
+    try {
+      await prisma.$queryRawUnsafe(`SELECT 1 FROM "${tableName}" LIMIT 1`);
+    } catch (error) {
+      if (error.code === '42P01') {
+        throw new Error(
+          `Table "${tableName}" does not exist. Please create the table first or ensure the table name is correct.`
+        );
+      }
+      throw error;
     }
 
     // Check if record exists
@@ -1359,11 +1655,23 @@ const executeDbUpsert = async (node, context, appId, userId) => {
       "🔄 [DB-UPSERT] Checking if record exists with query:",
       selectQuery
     );
-
-    const existingRecords = await prisma.$queryRawUnsafe(
-      selectQuery,
-      ...selectParams
+    console.log(
+      "🔄 [DB-UPSERT] Query params:",
+      selectParams
     );
+
+    let existingRecords;
+    try {
+      existingRecords = await prisma.$queryRawUnsafe(
+        selectQuery,
+        ...selectParams
+      );
+    } catch (error) {
+      console.error("❌ [DB-UPSERT] Query error:", error);
+      throw new Error(
+        `Failed to check if record exists: ${error.message}. Query: ${selectQuery}`
+      );
+    }
 
     let operation, result;
 
@@ -1372,15 +1680,55 @@ const executeDbUpsert = async (node, context, appId, userId) => {
       operation = "update";
       console.log("🔄 [DB-UPSERT] Record exists, performing UPDATE");
 
+      // If updateData is empty, use insertData for update (as per hint in UI)
+      const dataToUpdate = Object.keys(processedUpdateData).length > 0 
+        ? processedUpdateData 
+        : processedInsertData;
+
+      if (Object.keys(dataToUpdate).length === 0) {
+        throw new Error(
+          "No update data provided. Please provide data in either Update Data field or Insert Data field."
+        );
+      }
+
+      // Remove unique fields and reserved columns from update data
+      // Reserved columns: id, created_at, updated_at, app_id (they're auto-managed)
+      const reservedColumns = ['id', 'created_at', 'updated_at', 'app_id'];
+      const updateDataWithoutUniqueFields = { ...dataToUpdate };
+      
+      // Remove unique fields (they're used in WHERE clause, not SET)
+      for (const field of uniqueFields) {
+        // Clean the field name (remove quotes)
+        const cleanField = field.replace(/^["']|["']$/g, '');
+        // Handle JSONB paths - extract just the field name
+        const fieldName = field.includes("->>") 
+          ? field.split("'")[1] || field.split('"')[1] || cleanField
+          : cleanField;
+        delete updateDataWithoutUniqueFields[fieldName];
+        // Also try removing the full JSONB path if it exists
+        delete updateDataWithoutUniqueFields[field];
+      }
+      
+      // Remove reserved columns (they shouldn't be updated)
+      for (const reservedCol of reservedColumns) {
+        if (updateDataWithoutUniqueFields.hasOwnProperty(reservedCol)) {
+          console.log(`⚠️ [DB-UPSERT] Removing reserved column '${reservedCol}' from update data`);
+          delete updateDataWithoutUniqueFields[reservedCol];
+        }
+      }
+
       const updateNode = {
         data: {
           tableName,
-          updateData: processedUpdateData,
-          whereConditions: uniqueFields.map((field) => ({
-            field,
-            operator: "=",
-            value: processedInsertData[field] || processedUpdateData[field],
-          })),
+          updateData: updateDataWithoutUniqueFields,
+          whereConditions: uniqueFields.map((field) => {
+            const cleanField = field.replace(/^["']|["']$/g, '');
+            return {
+              field: cleanField,
+              operator: "=",
+              value: processedInsertData[cleanField] || processedUpdateData[cleanField],
+            };
+          }),
           returnUpdatedRecords: returnRecord,
         },
       };
@@ -1390,13 +1738,73 @@ const executeDbUpsert = async (node, context, appId, userId) => {
       operation = "insert";
       console.log("🔄 [DB-UPSERT] Record does not exist, performing INSERT");
 
-      const createNode = {
-        data: {
-          tableName,
-          formData: processedInsertData,
+      // Instead of calling executeDbCreate (which has table creation logic),
+      // perform the INSERT directly since we know the table exists
+      const insertColumns = [];
+      const insertValues = [];
+      const insertParams = [];
+      let paramIndex = 1;
+
+      // Map data to table columns (skip auto-generated columns)
+      for (const column of tableSchema) {
+        if (
+          column.name === "id" ||
+          column.name === "created_at" ||
+          column.name === "updated_at" ||
+          column.name === "app_id"
+        ) {
+          continue;
+        }
+
+        const dataValue = processedInsertData[column.name] || null;
+        insertColumns.push(`"${column.name}"`);
+        insertValues.push(`$${paramIndex}`);
+        insertParams.push(dataValue);
+        paramIndex++;
+      }
+
+      // Add app_id
+      insertColumns.push('"app_id"');
+      insertValues.push(`$${paramIndex}`);
+      insertParams.push(parseInt(appId));
+
+      const insertSQL = `INSERT INTO "${tableName}" (${insertColumns.join(
+        ", "
+      )}) VALUES (${insertValues.join(", ")}) RETURNING id`;
+
+      console.log("💾 [DB-UPSERT] Insert SQL:", insertSQL);
+      console.log("💾 [DB-UPSERT] Insert params:", insertParams);
+
+      const insertResult = await prisma.$queryRawUnsafe(
+        insertSQL,
+        ...insertParams
+      );
+      const insertedId = insertResult[0]?.id;
+
+      console.log(
+        "✅ [DB-UPSERT] Data inserted successfully, record ID:",
+        insertedId
+      );
+
+      result = {
+        success: true,
+        tableName,
+        recordId: insertedId,
+        tableCreated: false,
+        columnsInserted: insertColumns.length - 1, // Exclude app_id
+        message: `Data inserted into '${tableName}' (ID: ${insertedId})`,
+        context: {
+          ...context,
+          recordId: insertedId,
+          tableName: tableName,
+          dbCreateResult: {
+            tableName,
+            recordId: insertedId,
+            tableCreated: false,
+            executionTime: Date.now() - startTime,
+          },
         },
       };
-      result = await executeDbCreate(createNode, context, appId, userId);
     }
 
     const executionTime = Date.now() - startTime;

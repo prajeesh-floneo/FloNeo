@@ -25,3 +25,4 @@ HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=5 \
 # Default command (can be overridden in docker-compose)
 CMD ["npm", "run", "dev"]
 
+
