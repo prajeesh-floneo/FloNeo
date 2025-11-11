@@ -35,16 +35,3 @@ queue.on('error', (err) => {
   console.error('[QUEUE-WORKER] Queue error:', err && err.message ? err.message : err);
 });
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-console.log('[QUEUE-WORKER] Worker is listening for jobs...');
-=======
-console.log('[QUEUE-WORKER] Worker is listening for jobs...');
->>>>>>> 000b9a8 (Modified workflow files and added queueWorker, webhook tests, and workflow queue utility)
-=======
-console.log('[QUEUE-WORKER] Worker is listening for jobs...');
->>>>>>> 306aa40 (fixed app name issue changed client/app/canvas/page.tsx,app/dashboard.tsx,components/rename-modal.tsx,queueWorker.js)
-=======
-console.log('[QUEUE-WORKER] Worker is listening for jobs...');
->>>>>>> 306aa40 (fixed app name issue changed client/app/canvas/page.tsx,app/dashboard.tsx,components/rename-modal.tsx,queueWorker.js)
