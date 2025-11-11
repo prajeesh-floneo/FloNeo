@@ -5586,13 +5586,10 @@ router.post('/workflow/send-daily-summary', authenticateToken, async (req, res) 
 });
 
 module.exports = router;
-<<<<<<< HEAD
 
-=======
 // Export runWorkflow for background worker to invoke
 try {
   module.exports.runWorkflow = runWorkflow;
 } catch (e) {
   // If runWorkflow is not defined (shouldn't happen), skip export
 }
->>>>>>> 000b9a8 (Modified workflow files and added queueWorker, webhook tests, and workflow queue utility)
