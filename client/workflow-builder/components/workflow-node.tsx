@@ -3191,8 +3191,8 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
         </div>
       )}
 
-      {/* OnSchedule Configuration */}
-      {data.label === "onSchedule" && (
+      {/* OnSchedule Configuration - Now in Modal */}
+      {false && data.label === "onSchedule" && (
         <div className="mt-2 w-full space-y-3">
           {/* Schedule Type */}
           <div className="space-y-2">
@@ -3504,8 +3504,8 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
         </div>
       )}
 
-      {/* OnRecordUpdate Configuration */}
-      {data.label === "onRecordUpdate" && (
+      {/* OnRecordUpdate Configuration - Now in Modal */}
+      {false && data.label === "onRecordUpdate" && (
         <div className="mt-2 w-full space-y-3">
           {/* Table Name */}
           <div className="space-y-2">
@@ -4575,8 +4575,8 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
         </div>
       )}
 
-      {/* DbUpdate Configuration */}
-      {data.label === "db.update" && (
+      {/* DbUpdate Configuration - Now in Modal */}
+      {false && data.label === "db.update" && (
         <div className="mt-2 w-full space-y-3">
           {/* Table Selection */}
           <div className="space-y-2">
@@ -5163,8 +5163,8 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
         </div>
       )}
 
-      {/* EmailSend Configuration */}
-      {data.label === "email.send" && (
+      {/* EmailSend Configuration - Now in Modal */}
+      {false && data.label === "email.send" && (
         <div className="mt-2 w-full space-y-3">
           {/* Recipient Email */}
           <div className="space-y-2">
