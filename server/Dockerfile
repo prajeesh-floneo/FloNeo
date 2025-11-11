@@ -17,7 +17,13 @@ COPY package*.json ./
 # Install dependencies with better caching
 # Note: --no-cache is invalid for npm ci and causes build failures
 # Using --prefer-offline for better Docker layer caching
-RUN npm ci --omit=dev --prefer-offline --no-audit
+## Use `npm install` instead of `npm ci` in the Docker build.
+## Reason: `npm ci` requires package.json and package-lock.json to be perfectly
+## in sync. On CI or local environments the lockfile sometimes drifts and
+## causes `npm ci` to fail during the image build (see build logs). `npm install`
+## will tolerate small mismatches and still produce a working node_modules for
+## production. We keep the same flags to avoid dev deps and auditing during build.
+RUN npm install --omit=dev --prefer-offline --no-audit
 
 # Copy source code
 COPY . .

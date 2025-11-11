@@ -36,6 +36,9 @@ function normalizeElementType(type: string): string {
     dropdown: "DROPDOWN",
     toggle: "TOGGLE",
     phone: "PHONE_FIELD",
+    password: "PASSWORD_FIELD",
+    email: "EMAIL_FIELD",
+    number: "NUMBER_FIELD",
     calendar: "DATE_FIELD",
     upload: "FILE_UPLOAD",
     addfile: "FILE_UPLOAD",
@@ -1681,6 +1684,18 @@ function RunAppContent() {
         }
         return; // Workflow handled the event
       }
+    }
+
+    // Custom event for invalid phone input from CanvasRenderer
+    if (eventType === "invalidPhone") {
+      try {
+        const message = data?.message || "Invalid phone input";
+        // Use toast to show the message in run mode
+        toast({ title: "Invalid phone number", description: message, variant: "destructive", duration: 4000 });
+      } catch (err) {
+        console.warn("Failed to show invalidPhone toast", err);
+      }
+      return;
     }
 
     // Fallback to legacy handler for backwards compatibility

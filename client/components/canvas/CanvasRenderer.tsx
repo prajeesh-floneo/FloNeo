@@ -1,6 +1,8 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
+import ReactDOM from "react-dom";
+import { Eye, EyeOff } from "lucide-react";
 import { CanvasElement } from "./ElementManager";
 import { useCanvasWorkflow } from "@/lib/canvas-workflow-context";
 import { toRuntimeStyle, logElementRender } from "@/runtime/styleMap";
@@ -50,11 +52,25 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
 }) => {
   const { isPreviewMode } = useCanvasWorkflow();
 
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const [canvasReady, setCanvasReady] = useState(false);
+
+  React.useEffect(() => {
+    // Trigger one re-render after mount so canvasRef is available for portal positioning
+    setCanvasReady(true);
+  }, []);
+
   // Determine if we're in preview mode - either from prop or context
   const isInPreviewMode = mode === "preview" || readOnly || isPreviewMode;
 
   // Runtime state for form values
   const [values, setValues] = useState<Record<string, any>>({});
+  // Per-element show-password state for password fields
+  const [showPasswordMap, setShowPasswordMap] = useState<Record<string, boolean>>({});
+
+  const toggleShowPassword = (id: string) => {
+    setShowPasswordMap((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
 
   // Handler for form value changes
   const handleValueChange = (id: string, value: any) => {
@@ -449,7 +465,12 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
           <input
             key={element.id}
             type="text"
-            style={style}
+            style={{
+              ...style,
+              pointerEvents: "auto" as React.CSSProperties["pointerEvents"],
+              zIndex: (element.zIndex ?? 1) + 1000 as React.CSSProperties["zIndex"],
+            }}
+            tabIndex={mode === "preview" ? 0 : undefined}
             {...dropProps}
             value={
               mode === "preview"
@@ -467,7 +488,8 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             placeholder={element.properties?.placeholder ?? "Enter text"}
             onChange={
               mode === "preview"
-                ? (e) => handleValueChange(element.id, e.target.value)
+                ? (e: React.ChangeEvent<HTMLInputElement>) =>
+                    handleValueChange(element.id, e.target.value)
                 : undefined
             }
             onClick={mode === "preview" ? undefined : handleClick}
@@ -487,7 +509,12 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
         return (
           <textarea
             key={element.id}
-            style={style}
+            style={{
+              ...style,
+              pointerEvents: "auto" as React.CSSProperties["pointerEvents"],
+              zIndex: (element.zIndex ?? 1) + 1000 as React.CSSProperties["zIndex"],
+            }}
+            tabIndex={mode === "preview" ? 0 : undefined}
             {...dropProps}
             placeholder={element.properties?.placeholder ?? "Enter text"}
             value={
@@ -506,7 +533,8 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             rows={element.properties?.rows ?? 4}
             onChange={
               mode === "preview"
-                ? (e) => handleValueChange(element.id, e.target.value)
+                ? (e: React.ChangeEvent<HTMLTextAreaElement>) =>
+                    handleValueChange(element.id, e.target.value)
                 : undefined
             }
             onClick={mode === "preview" ? undefined : handleClick}
@@ -525,7 +553,12 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
         return (
           <select
             key={element.id}
-            style={style}
+            style={{
+              ...style,
+              pointerEvents: "auto" as React.CSSProperties["pointerEvents"],
+              zIndex: (element.zIndex ?? 1) + 1000 as React.CSSProperties["zIndex"],
+            }}
+            tabIndex={mode === "preview" ? 0 : undefined}
             value={
               mode === "preview"
                 ? values[element.id] ?? element.properties?.value ?? ""
@@ -536,7 +569,8 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             }
             onChange={
               mode === "preview"
-                ? (e) => handleValueChange(element.id, e.target.value)
+                ? (e: React.ChangeEvent<HTMLSelectElement>) =>
+                    handleValueChange(element.id, e.target.value)
                 : undefined
             }
             onClick={mode === "preview" ? undefined : handleClick}
@@ -591,7 +625,8 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
               }
               onChange={
                 mode === "preview"
-                  ? (e) => handleValueChange(element.id, e.target.checked)
+                  ? (e: React.ChangeEvent<HTMLInputElement>) =>
+                      handleValueChange(element.id, e.target.checked)
                   : undefined
               }
               readOnly={mode === "edit"}
@@ -634,7 +669,8 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
               }
               onChange={
                 mode === "preview"
-                  ? (e) => handleValueChange(element.id, e.target.checked)
+                  ? (e: React.ChangeEvent<HTMLInputElement>) =>
+                      handleValueChange(element.id, e.target.checked)
                   : undefined
               }
               readOnly={mode === "edit"}
@@ -735,7 +771,180 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             style.fontFamily ||
             "Poppins, system-ui, sans-serif",
           outline: "none",
+          // Ensure inputs are interactive in runtime/preview
+          pointerEvents: "auto" as React.CSSProperties["pointerEvents"],
+          zIndex: (element.zIndex ?? 1) + 1000 as React.CSSProperties["zIndex"],
         };
+
+        // If this is a password field, render an input with an eye toggle inside a wrapper
+        const isPasswordType =
+          element.type === "password" || element.type === "PASSWORD_FIELD" ||
+          (typeof element.type === "string" && element.type.toLowerCase().includes("password"));
+
+        if (isPasswordType) {
+          const show = !!showPasswordMap[element.id];
+
+          // Debugging: log computed stacking values so we can diagnose visibility issues in run mode
+          try {
+            const inputZ = ((element.zIndex ?? 1) as number) + 1000;
+            const toggleZ = ((element.zIndex ?? 1) as number) + 1200;
+            console.log("[CANVAS][PASSWORD] rendering", {
+              id: element.id,
+              type: element.type,
+              elementZ: element.zIndex,
+              inputZ,
+              toggleZ,
+              mode,
+              isInPreviewMode,
+            });
+          } catch (e) {
+            console.warn("[CANVAS][PASSWORD] debug log failed", e);
+          }
+          return (
+            <div key={element.id} style={{ position: "relative" }} {...dropProps}>
+              <input
+                type={show ? "text" : "password"}
+                style={inputStyle}
+                placeholder={element.properties.placeholder || "Enter value"}
+                value={
+                  mode === "preview"
+                    ? values[element.id] ?? element.properties?.value ?? ""
+                    : undefined
+                }
+                defaultValue={
+                  mode === "edit" ? element.properties?.value ?? "" : undefined
+                }
+                onChange={
+                  mode === "preview"
+                    ? (e: React.ChangeEvent<HTMLInputElement>) =>
+                        handleValueChange(element.id, e.target.value)
+                    : undefined
+                }
+                tabIndex={mode === "preview" ? 0 : undefined}
+                onClick={mode === "preview" ? undefined : handleClick}
+                onDoubleClick={isInPreviewMode ? undefined : handleDoubleClick}
+                onMouseDown={isInPreviewMode ? undefined : handleMouseDown}
+                disabled={
+                  !!(
+                    element.properties?.style?.disabled ||
+                    element.properties?.disabled
+                  )
+                }
+                readOnly={mode !== "preview"}
+              />
+              <button
+                aria-label={show ? "Hide password" : "Show password"}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleShowPassword(element.id);
+                }}
+                style={{
+                  position: "absolute",
+                  right: 8,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  background: "rgba(255,255,255,0.6)",
+                  border: "none",
+                  padding: 4,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor: "pointer",
+                  borderRadius: "50%",
+                  // Ensure the toggle sits above the input which uses element.zIndex + 1000
+                  zIndex: ((element.zIndex ?? 1) as number) + 1200,
+                  pointerEvents: "auto",
+                }}
+              >
+                {show ? (
+                  <EyeOff size={16} color={element.properties?.iconColor || "#6b7280"} />
+                ) : (
+                  <Eye size={16} color={element.properties?.iconColor || "#6b7280"} />
+                )}
+              </button>
+            </div>
+          );
+        }
+
+        // Special handling for phone fields to enforce digits-only and 10-digit length
+        if (
+          typeof element.type === "string" &&
+          element.type.toUpperCase().includes("PHONE")
+        ) {
+          return (
+            <input
+              key={element.id}
+              type={getInputType(element.type)}
+              inputMode="numeric"
+              pattern="[0-9]*"
+              style={inputStyle}
+              {...dropProps}
+              placeholder={element.properties.placeholder || "Phone number"}
+              value={
+                mode === "preview"
+                  ? values[element.id] ?? element.properties?.value ?? ""
+                  : undefined
+              }
+              defaultValue={mode === "edit" ? element.properties?.value ?? "" : undefined}
+              onChange={
+                mode === "preview"
+                  ? (e: React.ChangeEvent<HTMLInputElement>) => {
+                      const raw = e.target.value || "";
+                      const digits = raw.replace(/\D+/g, "");
+
+                      if (raw !== digits) {
+                        // notify parent so it can show a toast/prompt
+                        onEvent?.(element.id, "invalidPhone", {
+                          message: "Not a valid phone number. Please enter digits only.",
+                        });
+                      }
+
+                      let normalized = digits;
+                      if (normalized.length > 10) {
+                        normalized = normalized.slice(0, 10);
+                        onEvent?.(element.id, "invalidPhone", {
+                          message: "Phone number must be 10 digits. Extra digits were removed.",
+                        });
+                      }
+
+                      handleValueChange(element.id, normalized);
+
+                      // Also reflect normalized value in the input for uncontrolled cases
+                      try {
+                        const input = e.target as HTMLInputElement;
+                        if (input && input.value !== normalized) input.value = normalized;
+                      } catch (err) {
+                        /* ignore DOM write errors */
+                      }
+                    }
+                  : undefined
+              }
+              onBlur={
+                mode === "preview"
+                  ? (e: React.FocusEvent<HTMLInputElement>) => {
+                      const value = (e.target as HTMLInputElement).value || "";
+                      if (value.length !== 10) {
+                        onEvent?.(element.id, "invalidPhone", {
+                          message: "Not a valid phone number. Phone number must be exactly 10 digits.",
+                        });
+                      }
+                    }
+                  : undefined
+              }
+              tabIndex={mode === "preview" ? 0 : undefined}
+              onClick={mode === "preview" ? undefined : handleClick}
+              onDoubleClick={isInPreviewMode ? undefined : handleDoubleClick}
+              onMouseDown={isInPreviewMode ? undefined : handleMouseDown}
+              disabled={
+                !!(
+                  element.properties?.style?.disabled ||
+                  element.properties?.disabled
+                )
+              }
+              readOnly={mode !== "preview"}
+            />
+          );
+        }
 
         return (
           <input
@@ -754,9 +963,11 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             }
             onChange={
               mode === "preview"
-                ? (e) => handleValueChange(element.id, e.target.value)
+                ? (e: React.ChangeEvent<HTMLInputElement>) =>
+                    handleValueChange(element.id, e.target.value)
                 : undefined
             }
+            tabIndex={mode === "preview" ? 0 : undefined}
             onClick={mode === "preview" ? undefined : handleClick}
             onDoubleClick={isInPreviewMode ? undefined : handleDoubleClick}
             onMouseDown={isInPreviewMode ? undefined : handleMouseDown}
@@ -766,7 +977,7 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
                 element.properties?.disabled
               )
             }
-            readOnly={mode === "edit" && !isInPreviewMode}
+            readOnly={mode !== "preview"}
           />
         );
 
@@ -1122,6 +1333,7 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
 
   return (
     <div
+      ref={canvasRef}
       className={`relative overflow-hidden ${
         mode === "preview" ? "runtime-reset" : ""
       }`}
@@ -1182,6 +1394,58 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
       {elements
         .sort((a, b) => a.zIndex - b.zIndex)
         .map((element) => renderElement(element))}
+
+      {/* Portal fallback for password toggle buttons (fixed positioned) */}
+  {typeof window !== "undefined" && canvasRef.current && canvasReady &&
+        elements
+          .filter((el) =>
+            (el.type || "").toString().toLowerCase().includes("password")
+          )
+          .map((el) => {
+            const show = !!showPasswordMap[el.id];
+            try {
+              const rect = canvasRef.current!.getBoundingClientRect();
+              const left = rect.left + (el.x || 0) + (el.width || 0) - 32 - window.scrollX;
+              const top = rect.top + (el.y || 0) + (el.height || 0) / 2 - 12 - window.scrollY;
+
+              const button = (
+                <button
+                  key={`portal-toggle-${el.id}`}
+                  aria-label={show ? "Hide password" : "Show password"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleShowPassword(el.id);
+                  }}
+                  style={{
+                    position: "fixed",
+                    left: `${left}px`,
+                    top: `${top}px`,
+                    background: "rgba(255,255,255,0.8)",
+                    border: "none",
+                    padding: 6,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderRadius: "50%",
+                    zIndex: 9999999,
+                    pointerEvents: "auto",
+                    cursor: "pointer",
+                    boxShadow: "0 2px 8px rgba(0,0,0,0.12)",
+                  }}
+                >
+                  {show ? (
+                    <EyeOff size={16} color={el.properties?.iconColor || "#6b7280"} />
+                  ) : (
+                    <Eye size={16} color={el.properties?.iconColor || "#6b7280"} />
+                  )}
+                </button>
+              );
+
+              return ReactDOM.createPortal(button, document.body);
+            } catch (e) {
+              return null;
+            }
+          })}
 
       {/* Editor-only overlays - only show in edit mode */}
       {showEditorChrome && (
