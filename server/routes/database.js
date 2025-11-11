@@ -473,18 +473,6 @@ router.get(
         });
       }
 
-      console.log(
-        `[DATABASE] Data fetched for table=${tableName} successfully`
-      );
-      const totalRows = parseInt(countResult[0]?.count || 0);
-
-      // Get paginated data
-      const data = await prisma.$queryRawUnsafe(
-        `SELECT * FROM "${tableName}" ORDER BY id DESC LIMIT ${parseInt(
-          limit
-        )} OFFSET ${offset}`
-      );
-
       console.log("✅ [DATABASE] Table data retrieved successfully");
 
       // Helper function to safely parse JSON columns
@@ -498,6 +486,8 @@ router.get(
         }
         return columns; // Already an object
       };
+
+      const safeColumns = parseColumns(userTable.columns);
 
       res.json({
         success: true,
@@ -972,12 +962,10 @@ router.post(
           .json({ success: false, message: "Invalid table name" });
       }
       if (!["csv", "excel"].includes(format)) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message: "Invalid format (use csv or excel)",
-          });
+        return res.status(400).json({
+          success: false,
+          message: "Invalid format (use csv or excel)",
+        });
       }
 
       // ✅ Verify app ownership
