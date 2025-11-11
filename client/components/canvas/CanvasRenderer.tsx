@@ -5,6 +5,8 @@ import { CanvasElement } from "./ElementManager";
 import { useCanvasWorkflow } from "@/lib/canvas-workflow-context";
 import { toRuntimeStyle, logElementRender } from "@/runtime/styleMap";
 import { TextDisplay } from "./elements/TextDisplay";
+import { getSocket } from "@/lib/socket";
+
 
 export interface CanvasRendererProps {
   elements: CanvasElement[];
