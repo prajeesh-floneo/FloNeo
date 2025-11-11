@@ -26,7 +26,7 @@ import { toast } from "@/components/ui/use-toast";
 import { ThemeToggle } from "@/components/theme-toggle";
 
 // Lazy canvas page for split view
-const CanvasPage = dynamic(() => import("../../app/canvas/page"), {
+const CanvasPage = dynamic(() => import("../../app/(app)/canvas/page"), {
   ssr: false,
 });
 

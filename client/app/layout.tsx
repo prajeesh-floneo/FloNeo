@@ -47,7 +47,7 @@ export default function RootLayout({
       </head>
       <body className={`font-sans ${poppins.variable}`}>
         <CanvasWorkflowProvider>
-          <WorkflowHeader/>
+          {/* <WorkflowHeader/> */}
           <Suspense fallback={<div>Loading...</div>}>{children}</Suspense>
         </CanvasWorkflowProvider>
       </body>

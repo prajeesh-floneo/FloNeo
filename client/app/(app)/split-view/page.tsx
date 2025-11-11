@@ -14,7 +14,7 @@ import { WorkflowBuilderSample } from "@/workflow-builder/components/workflow-bu
 // import { WorkflowBuilder } from "@/workflow-builder/components/workflow-builder";
 
 // Import Canvas dynamically
-const CanvasPage = dynamic(() => import("../../app/canvas/page"), {
+const CanvasPage = dynamic(() => import("../canvas/page"), {
   ssr: false,
 });
 
