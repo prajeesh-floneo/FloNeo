@@ -1,10 +1,13 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { initializeSocket, getSocket } from "@/lib/socket";
+import { useSearchParams, useRouter } from "next/navigation";
+import { useToast } from "@/hooks/use-toast";
 import {
   Table,
   TableBody,
@@ -32,8 +35,6 @@ import {
   Plus,
   Trash,
 } from "lucide-react";
-import { useSearchParams, useRouter } from "next/navigation";
-import { useToast } from "@/hooks/use-toast";
 import {
   Dialog,
   DialogContent,
@@ -77,11 +78,7 @@ export function DatabaseScreen() {
   const [showCreateTableModal, setShowCreateTableModal] = useState(false);
   const [newTableName, setNewTableName] = useState("");
   const [newTableColumns, setNewTableColumns] = useState<
-    Array<{
-      name: string;
-      type: string;
-      required: boolean;
-    }>
+    Array<{ name: string; type: string; required: boolean }>
   >([
     { name: "id", type: "Number", required: true },
     { name: "Name", type: "Text", required: true },
@@ -99,7 +96,17 @@ export function DatabaseScreen() {
   const appName = searchParams.get("appName") || "Unknown App";
   const { toast } = useToast();
 
-  // Load tables for the current app with auto-refresh
+  // ✅ Initialize socket connection once
+  useEffect(() => {
+    try {
+      const socket = initializeSocket();
+      console.log("✅ Socket initialized for database screen:", socket.id);
+    } catch (err) {
+      console.warn("⚠️ Socket initialization failed:", err);
+    }
+  }, []);
+
+  // ✅ Load tables for the current app with auto-refresh
   useEffect(() => {
     if (!appId) {
       setError("No app ID provided");
@@ -107,16 +114,68 @@ export function DatabaseScreen() {
       return;
     }
 
-    // Initial load
     loadTables();
 
-    // Auto-refresh every 10 seconds to detect new tables
     const interval = setInterval(() => {
       loadTables();
     }, 10000);
 
     return () => clearInterval(interval);
   }, [appId]);
+
+  // ✅ Real-time database updates
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) {
+      console.warn("⚠️ Socket not connected, skipping DB listener setup");
+      return;
+    }
+
+    const handleDBEvent = (event: CustomEvent) => {
+      const { tableName, action } = event.detail;
+      console.log(`📡 Real-time DB event [${action}] for table:`, tableName);
+
+      if (selectedTable && selectedTable.name === tableName) {
+        loadTableData(selectedTable, currentPage);
+        toast({
+          title: "Database Updated",
+          description: `Table "${tableName}" has been ${action}.`,
+        });
+      }
+    };
+
+    // Attach listeners
+    window.addEventListener(
+      "db_record_updated",
+      handleDBEvent as EventListener
+    );
+    window.addEventListener(
+      "db_record_created",
+      handleDBEvent as EventListener
+    );
+    window.addEventListener(
+      "db_record_deleted",
+      handleDBEvent as EventListener
+    );
+
+    console.log("🧩 Real-time DB event listeners registered");
+
+    return () => {
+      window.removeEventListener(
+        "db_record_updated",
+        handleDBEvent as EventListener
+      );
+      window.removeEventListener(
+        "db_record_created",
+        handleDBEvent as EventListener
+      );
+      window.removeEventListener(
+        "db_record_deleted",
+        handleDBEvent as EventListener
+      );
+      console.log("🧹 Real-time DB event listeners removed");
+    };
+  }, [selectedTable, currentPage]);
 
   const loadTables = async () => {
     try {

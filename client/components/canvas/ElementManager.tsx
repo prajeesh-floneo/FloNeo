@@ -293,13 +293,44 @@ const getDefaultProperties = (elementType: string): Record<string, any> => {
       borderWidth: 1,
     },
     TEXT_DISPLAY: {
+      // Data Binding (existing)
       bindingPath: "",
       fallbackText: "No data",
       format: "text",
+
+      // Typography (existing + new)
       fontSize: 14,
       fontWeight: "normal",
+      fontFamily: "Poppins, system-ui, sans-serif",
+      fontStyle: "normal",
+      textDecoration: "none",
+      textTransform: "none",
       color: "#000000",
       textAlign: "left",
+      lineHeight: 1.5,
+      letterSpacing: 0,
+      wordSpacing: 0,
+
+      // Background & Border (new)
+      backgroundColor: "transparent",
+      borderWidth: 0,
+      borderColor: "#d1d5db",
+      borderStyle: "solid",
+      borderRadius: 0,
+
+      // Spacing (new)
+      paddingTop: 0,
+      paddingRight: 0,
+      paddingBottom: 0,
+      paddingLeft: 0,
+      marginTop: 0,
+      marginRight: 0,
+      marginBottom: 0,
+      marginLeft: 0,
+
+      // Effects (new)
+      boxShadow: "none",
+      textShadow: "none",
     },
   };
   return propertiesMap[elementType] || {};

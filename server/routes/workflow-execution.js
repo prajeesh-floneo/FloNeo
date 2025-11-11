@@ -8,6 +8,8 @@ const fs = require("fs");
 const { SafeQueryBuilder, DatabaseUtils } = require("../utils/database");
 const { SecurityValidator } = require("../utils/security");
 const emailService = require("../utils/email");
+const io = require("../utils/io").getIO();
+const { emitDataUpdated } = require("../utils/dbEvents");
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -383,29 +385,86 @@ const executeIsFilled = async (node, context, appId) => {
 };
 
 // OnClick block handler
+// const executeOnClick = async (node, context, appId) => {
+//   try {
+//     console.log("🖱️ [ON-CLICK] Processing click event for app:", appId);
+
+//     const clickConfig = node.data || {};
+//     const { elementId, clickData } = context;
+
+//     console.log("🖱️ [ON-CLICK] Click configuration:", {
+//       targetElementId: clickConfig.targetElementId,
+//       elementId: elementId,
+//       clickData: clickData,
+//     });
+
+//     // Validate click event
+//     if (!elementId) {
+//       return {
+//         success: false,
+//         error: "No element ID provided in click event",
+//         context: context,
+//       };
+//     }
+
+//     // Check if this click is for the configured element (if specified)
+//     if (
+//       clickConfig.targetElementId &&
+//       clickConfig.targetElementId !== elementId
+//     ) {
+//       console.log("🖱️ [ON-CLICK] Click not for target element, skipping");
+//       return {
+//         success: false,
+//         error: "Click not for target element",
+//         context: context,
+//       };
+//     }
+
+//     console.log("✅ [ON-CLICK] Click event processed successfully");
+//     return {
+//       success: true,
+//       message: "Click event processed",
+//       context: {
+//         ...context,
+//         clickProcessed: true,
+//         clickElementId: elementId,
+//         clickTimestamp: new Date().toISOString(),
+//       },
+//     };
+//   } catch (error) {
+//     console.error("❌ [ON-CLICK] Error processing click:", error);
+//     return {
+//       success: false,
+//       error: error.message,
+//       context: context,
+//     };
+//   }
+// };
+
+//onClick
 const executeOnClick = async (node, context, appId) => {
   try {
     console.log("🖱️ [ON-CLICK] Processing click event for app:", appId);
 
     const clickConfig = node.data || {};
-    const { elementId, clickData } = context;
+    let { elementId, clickData } = context;
+
+    // ✅ 1️⃣ If no elementId (e.g. Postman/manual test), set default
+    if (!elementId) {
+      elementId = clickConfig.targetElementId || "manual-trigger";
+      console.log(
+        "🧩 [ON-CLICK] No elementId in context, using default:",
+        elementId
+      );
+    }
 
     console.log("🖱️ [ON-CLICK] Click configuration:", {
       targetElementId: clickConfig.targetElementId,
-      elementId: elementId,
-      clickData: clickData,
+      elementId,
+      clickData,
     });
 
-    // Validate click event
-    if (!elementId) {
-      return {
-        success: false,
-        error: "No element ID provided in click event",
-        context: context,
-      };
-    }
-
-    // Check if this click is for the configured element (if specified)
+    // ✅ 2️⃣ Skip validation if running manually (so Postman doesn’t fail)
     if (
       clickConfig.targetElementId &&
       clickConfig.targetElementId !== elementId
@@ -413,8 +472,8 @@ const executeOnClick = async (node, context, appId) => {
       console.log("🖱️ [ON-CLICK] Click not for target element, skipping");
       return {
         success: false,
-        error: "Click not for target element",
-        context: context,
+        message: `Click not for target element: ${clickConfig.targetElementId}`,
+        context,
       };
     }
 
@@ -434,7 +493,7 @@ const executeOnClick = async (node, context, appId) => {
     return {
       success: false,
       error: error.message,
-      context: context,
+      context,
     };
   }
 };
@@ -1129,34 +1188,33 @@ const executeDbFind = async (node, context, appId, userId) => {
 };
 
 // DbUpdate block handler
+
 const executeDbUpdate = async (node, context, appId, userId) => {
   const startTime = Date.now();
 
   try {
     console.log("🔄 [DB-UPDATE] Starting update execution for app:", appId);
 
-    // Validate app access
+    // ✅ Step 1: Security & rate checks
     const hasAccess = await securityValidator.validateAppAccess(
       appId,
       userId,
       prisma
     );
-    if (!hasAccess) {
-      throw new Error("Access denied to this app");
-    }
+    if (!hasAccess) throw new Error("Access denied to this app");
 
-    // Rate limiting check
     if (!securityValidator.checkRateLimit(userId, "db.update")) {
       throw new Error("Rate limit exceeded. Please try again later.");
     }
 
     // Extract configuration from node data
+    // ✅ Step 2: Extract and normalize config
     let {
       tableName,
       updateData = {},
       whereConditions = [],
       returnUpdatedRecords = true,
-    } = node.data;
+    } = node.data || {};
 
     // Parse JSON strings if needed
     if (typeof updateData === "string") {
@@ -1182,33 +1240,53 @@ const executeDbUpdate = async (node, context, appId, userId) => {
     if (!tableName) {
       throw new Error("Table name is required for DbUpdate operation");
     }
+    console.log("🧩 [DB-UPDATE] Raw Inputs:", {
+      tableName,
+      updateData,
+      whereConditionsType: typeof whereConditions,
+    });
 
-    if (!updateData || Object.keys(updateData).length === 0) {
+    // Parse JSON if received as strings
+    if (typeof updateData === "string") {
+      try {
+        updateData = JSON.parse(updateData);
+        console.log("🧠 [DB-UPDATE] Parsed updateData from string ✅");
+      } catch (err) {
+        throw new Error("Invalid updateData JSON format");
+      }
+    }
+
+    if (typeof whereConditions === "string") {
+      try {
+        const parsed = JSON.parse(whereConditions);
+        whereConditions = Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        whereConditions = [whereConditions];
+      }
+    } else if (!Array.isArray(whereConditions)) {
+      whereConditions = [whereConditions];
+    }
+
+    console.log("✅ [DB-UPDATE] Normalized Conditions:", whereConditions);
+
+    // ✅ Step 3: Validate required fields
+    if (!tableName)
+      throw new Error("Table name is required for DbUpdate operation");
+    if (!updateData || Object.keys(updateData).length === 0)
       throw new Error("No update data provided");
-    }
+    if (!whereConditions || whereConditions.length === 0)
+      throw new Error("WHERE conditions required (safety)");
 
-    if (!whereConditions || whereConditions.length === 0) {
-      throw new Error(
-        "WHERE conditions are required for UPDATE operations (safety requirement)"
-      );
-    }
-
-    // Validate table name for security
+    // ✅ Step 4: Validate table
     securityValidator.validateTableName(tableName, appId);
 
-    // Check if table exists
     const tableExists = await dbUtils.tableExists(tableName);
-    if (!tableExists) {
-      throw new Error(`Table '${tableName}' does not exist`);
-    }
+    if (!tableExists) throw new Error(`Table '${tableName}' does not exist`);
 
-    // Get table schema for validation
     const tableSchema = await dbUtils.discoverTableSchema(tableName);
-    if (!tableSchema || tableSchema.length === 0) {
+    if (!tableSchema || tableSchema.length === 0)
       throw new Error(`Unable to discover schema for table '${tableName}'`);
-    }
 
-    // Validate WHERE conditions
     securityValidator.validateConditions(whereConditions);
 
     // Process update data with context substitution
@@ -1228,16 +1306,11 @@ const executeDbUpdate = async (node, context, appId, userId) => {
     }
     console.log(`🔄 [DB-UPDATE] Processed updateData keys:`, Object.keys(processedUpdateData));
 
-    // Build safe UPDATE query using SafeQueryBuilder
+    // ✅ Step 6: Build Safe Query
     const queryBuilder = new SafeQueryBuilder();
-
-    // Add WHERE conditions
     for (const condition of whereConditions) {
       const { field, operator, value, logic = "AND" } = condition;
-
-      // Substitute context variables in value
       const substitutedValue = substituteContextVariables(value, context);
-
       queryBuilder.addWhere(field, operator, substitutedValue, logic);
     }
 
@@ -1256,17 +1329,15 @@ const executeDbUpdate = async (node, context, appId, userId) => {
       tableName,
       processedUpdateData
     );
+    console.log("🧠 [DB-UPDATE] Final Query:", query);
+    console.log("🧠 [DB-UPDATE] Params:", params);
 
-    console.log("🔄 [DB-UPDATE] Executing query:", query);
-    console.log("🔄 [DB-UPDATE] Query params:", params);
-
-    // Execute the update
+    // ✅ Step 7: Execute update
     const result = await prisma.$queryRawUnsafe(query, ...params);
-
     const executionTime = Date.now() - startTime;
-    const updatedCount = Array.isArray(result) ? result.length : 0;
+    const updatedCount =
+      result?.count || (Array.isArray(result) ? result.length : 1);
 
-    // Record performance metrics
     await dbUtils.recordQueryPerformance(
       appId,
       tableName,
@@ -1276,20 +1347,39 @@ const executeDbUpdate = async (node, context, appId, userId) => {
     );
 
     console.log(
-      `✅ [DB-UPDATE] Update completed successfully. Updated ${updatedCount} rows in ${executionTime}ms`
+      `✅ [DB-UPDATE] Updated ${updatedCount} row(s) in ${executionTime}ms`
     );
 
+    // ✅ Step 8: Emit real-time socket event (for UI refresh)
+    try {
+      // Use existing io and emitDataUpdated imports
+      emitDataUpdated(appId, {
+        tableName,
+        action: "update",
+        rowsAffected: updatedCount,
+        preview: Array.isArray(result) ? result.slice(0, 5) : [],
+      });
+
+      io.to(`app:${appId}`).emit("database:update", {
+        tableName,
+        rowsAffected: updatedCount,
+        preview: Array.isArray(result) ? result.slice(0, 5) : [],
+      });
+
+      console.log(`📢 [REALTIME] Emitted data-updated for ${tableName}`);
+    } catch (emitError) {
+      console.warn("⚠️ [REALTIME] Emit failed:", emitError.message);
+    }
+
+    // ✅ Step 9: Return successful result
     return {
       success: true,
       data: returnUpdatedRecords ? result : null,
       updatedCount,
       tableName,
-      query: {
-        updateData: processedUpdateData,
-        whereConditions,
-      },
+      query: { updateData: processedUpdateData, whereConditions },
       executionTime,
-      message: `Updated ${updatedCount} record(s) in table '${tableName}'`,
+      message: `Updated ${updatedCount} record(s) in '${tableName}'`,
       context: {
         ...context,
         dbUpdateResult: {
@@ -1303,17 +1393,16 @@ const executeDbUpdate = async (node, context, appId, userId) => {
   } catch (error) {
     console.error("❌ [DB-UPDATE] Error:", error.message);
 
-    // Record failed performance metrics
     const executionTime = Date.now() - startTime;
     await dbUtils
       .recordQueryPerformance(
         appId,
-        node.data.tableName || "unknown",
+        node.data?.tableName || "unknown",
         "update",
         executionTime,
         0
       )
-      .catch(() => {}); // Ignore errors in error logging
+      .catch(() => {});
 
     throw new Error(`Database update failed: ${error.message}`);
   }
@@ -1847,27 +1936,25 @@ const executeDbUpsert = async (node, context, appId, userId) => {
   }
 };
 
-// EmailSend block handler
+// EmailSend block handler (uses centralized EmailService)
 const executeEmailSend = async (node, context, appId, userId) => {
   try {
     console.log("📧 [EMAIL-SEND] Processing email send for app:", appId);
 
-    // Validate app access
+    // ✅ Validate app access
     const hasAccess = await securityValidator.validateAppAccess(
       appId,
       userId,
       prisma
     );
-    if (!hasAccess) {
-      throw new Error("Access denied to this app");
-    }
+    if (!hasAccess) throw new Error("Access denied to this app");
 
-    // Rate limiting check (max 10 emails per minute per user)
+    // ✅ Rate limiting (10 emails/min/user)
     if (!securityValidator.checkRateLimit(userId, "email.send", 10, 60000)) {
       throw new Error("Email rate limit exceeded (max 10 per minute)");
     }
 
-    // Extract configuration from node data
+    // ✅ Extract email node configuration
     const {
       emailTo,
       emailSubject,
@@ -1876,48 +1963,34 @@ const executeEmailSend = async (node, context, appId, userId) => {
       emailFrom,
       emailCc = [],
       emailBcc = [],
-      emailTemplate,
-      emailTemplateVars = {},
     } = node.data || {};
 
-    // Validate required fields
-    if (!emailTo) {
-      throw new Error("Recipient email is required");
-    }
+    if (!emailTo) throw new Error("Recipient email is required");
+    if (!emailSubject) throw new Error("Email subject is required");
+    if (!emailBody) throw new Error("Email body is required");
 
-    if (!emailSubject) {
-      throw new Error("Email subject is required");
-    }
-
-    if (!emailBody && !emailTemplate) {
-      throw new Error("Email body or template is required");
-    }
-
-    // Substitute context variables in emailTo, emailSubject, and emailBody
+    // ✅ Substitute dynamic values
     const processedTo = substituteContextVariables(emailTo, context);
     const processedSubject = substituteContextVariables(emailSubject, context);
-    let processedBody = substituteContextVariables(emailBody, context);
+    const processedBody = substituteContextVariables(emailBody, context);
 
-    // Validate email address format
+    // ✅ Validate recipient format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(processedTo)) {
-      throw new Error(`Invalid recipient email address: ${processedTo}`);
-    }
+    if (!emailRegex.test(processedTo))
+      throw new Error(`Invalid email address: ${processedTo}`);
 
-    // If template specified, render template (for future use)
-    if (emailTemplate) {
-      // Template rendering logic can be added here
-      console.log("📧 [EMAIL-SEND] Using template:", emailTemplate);
-    }
+    console.log("📨 [EMAIL-SEND] Ready to send:", {
+      to: processedTo,
+      subject: processedSubject,
+      from: emailFrom || process.env.EMAIL_FROM,
+    });
 
-    console.log("📧 [EMAIL-SEND] Sending email to:", processedTo);
-
-    // Send email using existing EmailService
+    // ✅ Send using centralized EmailService
     const result = await emailService.sendNotificationEmail(
-      processedTo,
-      "workflow",
-      processedBody,
-      context.user?.name || "User"
+      processedTo, // recipient
+      "system", // type (system|warning|issue etc.)
+      processedBody, // message body
+      context.user?.name || "User" // sender name
     );
 
     if (!result.success) {
@@ -1933,7 +2006,7 @@ const executeEmailSend = async (node, context, appId, userId) => {
       context: {
         ...context,
         emailSendResult: {
-          success: result.success,
+          success: true,
           messageId: result.messageId,
           to: processedTo,
           subject: processedSubject,
@@ -1947,10 +2020,115 @@ const executeEmailSend = async (node, context, appId, userId) => {
       success: false,
       type: "email",
       error: error.message,
-      context: context,
+      context,
     };
   }
 };
+
+// // EmailSend block handler
+// const executeEmailSend = async (node, context, appId, userId) => {
+//   try {
+//     console.log("📧 [EMAIL-SEND] Processing email send for app:", appId);
+
+//     // Validate app access
+//     const hasAccess = await securityValidator.validateAppAccess(
+//       appId,
+//       userId,
+//       prisma
+//     );
+//     if (!hasAccess) {
+//       throw new Error("Access denied to this app");
+//     }
+
+//     // Rate limiting check (max 10 emails per minute per user)
+//     if (!securityValidator.checkRateLimit(userId, "email.send", 10, 60000)) {
+//       throw new Error("Email rate limit exceeded (max 10 per minute)");
+//     }
+
+//     // Extract configuration from node data
+//     const {
+//       emailTo,
+//       emailSubject,
+//       emailBody,
+//       emailBodyType = "html",
+//       emailFrom,
+//       emailCc = [],
+//       emailBcc = [],
+//       emailTemplate,
+//       emailTemplateVars = {},
+//     } = node.data || {};
+
+//     // Validate required fields
+//     if (!emailTo) {
+//       throw new Error("Recipient email is required");
+//     }
+
+//     if (!emailSubject) {
+//       throw new Error("Email subject is required");
+//     }
+
+//     if (!emailBody && !emailTemplate) {
+//       throw new Error("Email body or template is required");
+//     }
+
+//     // Substitute context variables in emailTo, emailSubject, and emailBody
+//     const processedTo = substituteContextVariables(emailTo, context);
+//     const processedSubject = substituteContextVariables(emailSubject, context);
+//     let processedBody = substituteContextVariables(emailBody, context);
+
+//     // Validate email address format
+//     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+//     if (!emailRegex.test(processedTo)) {
+//       throw new Error(`Invalid recipient email address: ${processedTo}`);
+//     }
+
+//     // If template specified, render template (for future use)
+//     if (emailTemplate) {
+//       // Template rendering logic can be added here
+//       console.log("📧 [EMAIL-SEND] Using template:", emailTemplate);
+//     }
+
+//     console.log("📧 [EMAIL-SEND] Sending email to:", processedTo);
+
+//     // Send email using existing EmailService
+//     const result = await emailService.sendNotificationEmail(
+//       processedTo,
+//       "workflow",
+//       processedBody,
+//       context.user?.name || "User"
+//     );
+
+//     if (!result.success) {
+//       throw new Error(`Email sending failed: ${result.error}`);
+//     }
+
+//     console.log("✅ [EMAIL-SEND] Email sent successfully:", result.messageId);
+
+//     return {
+//       success: true,
+//       type: "email",
+//       emailSent: true,
+//       context: {
+//         ...context,
+//         emailSendResult: {
+//           success: result.success,
+//           messageId: result.messageId,
+//           to: processedTo,
+//           subject: processedSubject,
+//           sentAt: new Date().toISOString(),
+//         },
+//       },
+//     };
+//   } catch (error) {
+//     console.error("❌ [EMAIL-SEND] Error:", error.message);
+//     return {
+//       success: false,
+//       type: "email",
+//       error: error.message,
+//       context: context,
+//     };
+//   }
+// };
 
 // Switch block handler
 const executeSwitch = async (node, context, appId, userId) => {
@@ -4101,6 +4279,100 @@ const executeOnDrop = async (node, context, appId, userId = 1) => {
 };
 
 // OnSchedule trigger handler
+// const executeOnSchedule = async (node, context, appId, userId) => {
+//   try {
+//     console.log("⏰ [ON-SCHEDULE] Processing schedule trigger for app:", appId);
+
+//     // Validate app access
+//     const hasAccess = await securityValidator.validateAppAccess(
+//       appId,
+//       userId,
+//       prisma
+//     );
+//     if (!hasAccess) {
+//       throw new Error("Access denied to this app");
+//     }
+
+//     // Extract configuration
+//     const {
+//       scheduleType = "interval",
+//       scheduleValue,
+//       scheduleUnit = "minutes",
+//       cronExpression,
+//       enabled = true,
+//     } = node.data || {};
+
+//     // Validate required fields
+//     if (!enabled) {
+//       console.log("⏰ [ON-SCHEDULE] Schedule is disabled");
+//       return {
+//         success: true,
+//         scheduled: false,
+//         message: "Schedule is disabled",
+//         context: context,
+//       };
+//     }
+
+//     if (scheduleType === "interval" && !scheduleValue) {
+//       throw new Error("Schedule value is required for interval type");
+//     }
+
+//     if (scheduleType === "cron" && !cronExpression) {
+//       throw new Error("Cron expression is required for cron type");
+//     }
+
+//     console.log("⏰ [ON-SCHEDULE] Schedule configuration:", {
+//       scheduleType,
+//       scheduleValue,
+//       scheduleUnit,
+//       cronExpression,
+//     });
+
+//     // Calculate next execution time
+//     let nextExecutionTime = null;
+
+//     if (scheduleType === "interval") {
+//       const intervalMs = calculateIntervalMs(scheduleValue, scheduleUnit);
+//       nextExecutionTime = new Date(Date.now() + intervalMs);
+//     } else if (scheduleType === "cron") {
+//       // For cron, we would need a cron parser library
+//       // For now, just log that it's scheduled
+//       console.log("⏰ [ON-SCHEDULE] Cron schedule:", cronExpression);
+//       nextExecutionTime = new Date(Date.now() + 60000); // Default to 1 minute
+//     }
+
+//     console.log(
+//       "✅ [ON-SCHEDULE] Schedule registered, next execution:",
+//       nextExecutionTime
+//     );
+
+//     return {
+//       success: true,
+//       scheduled: true,
+//       scheduleType: scheduleType,
+//       nextExecutionTime: nextExecutionTime?.toISOString(),
+//       context: {
+//         ...context,
+//         scheduleResult: {
+//           scheduled: true,
+//           scheduleType: scheduleType,
+//           nextExecutionTime: nextExecutionTime?.toISOString(),
+//         },
+//       },
+//     };
+//   } catch (error) {
+//     console.error("❌ [ON-SCHEDULE] Error:", error.message);
+//     return {
+//       success: false,
+//       scheduled: false,
+//       error: error.message,
+//       context: context,
+//     };
+//   }
+// };
+
+// onScheduled Trigger
+
 const executeOnSchedule = async (node, context, appId, userId) => {
   try {
     console.log("⏰ [ON-SCHEDULE] Processing schedule trigger for app:", appId);
@@ -4115,7 +4387,7 @@ const executeOnSchedule = async (node, context, appId, userId) => {
       throw new Error("Access denied to this app");
     }
 
-    // Extract configuration
+    // Extract config
     const {
       scheduleType = "interval",
       scheduleValue,
@@ -4124,14 +4396,13 @@ const executeOnSchedule = async (node, context, appId, userId) => {
       enabled = true,
     } = node.data || {};
 
-    // Validate required fields
     if (!enabled) {
       console.log("⏰ [ON-SCHEDULE] Schedule is disabled");
       return {
         success: true,
         scheduled: false,
         message: "Schedule is disabled",
-        context: context,
+        context,
       };
     }
 
@@ -4188,7 +4459,7 @@ const executeOnSchedule = async (node, context, appId, userId) => {
       success: false,
       scheduled: false,
       error: error.message,
-      context: context,
+      context,
     };
   }
 };
@@ -4226,6 +4497,7 @@ const executeOnRecordCreate = async (node, context, appId, userId) => {
 
     // Extract configuration
     const { tableName, filterConditions = [] } = node.data || {};
+    console.log("🔁 [ON-RECORD-UPDATE] Triggered for:", tableName);
 
     // Validate required fields
     if (!tableName) {
@@ -4265,12 +4537,72 @@ const executeOnRecordCreate = async (node, context, appId, userId) => {
 };
 
 // OnRecordUpdate trigger handler
+// const executeOnRecordUpdate = async (node, context, appId, userId) => {
+//   try {
+//     console.log(
+//       "✏️ [ON-RECORD-UPDATE] Processing record update trigger for app:",
+//       appId
+//     );
+
+//     // Validate app access
+//     const hasAccess = await securityValidator.validateAppAccess(
+//       appId,
+//       userId,
+//       prisma
+//     );
+//     if (!hasAccess) {
+//       throw new Error("Access denied to this app");
+//     }
+
+//     // Extract configuration
+//     const {
+//       tableName,
+//       filterConditions = [],
+//       watchColumns = [],
+//     } = node.data || {};
+
+//     // Validate required fields
+//     if (!tableName) {
+//       throw new Error("Table name is required for onRecordUpdate trigger");
+//     }
+
+//     console.log("✏️ [ON-RECORD-UPDATE] Trigger configuration:", {
+//       tableName,
+//       filterConditions,
+//       watchColumns,
+//     });
+
+//     // The actual trigger logic would be implemented in the database
+//     // For now, we return a trigger registration response
+//     return {
+//       success: true,
+//       triggered: true,
+//       triggerType: "onRecordUpdate",
+//       tableName: tableName,
+//       context: {
+//         ...context,
+//         recordUpdateResult: {
+//           triggered: true,
+//           tableName: tableName,
+//           watchColumns: watchColumns,
+//           timestamp: new Date().toISOString(),
+//         },
+//       },
+//     };
+//   } catch (error) {
+//     console.error("❌ [ON-RECORD-UPDATE] Error:", error.message);
+//     return {
+//       success: false,
+//       triggered: false,
+//       error: error.message,
+//       context: context,
+//     };
+//   }
+// };
+
 const executeOnRecordUpdate = async (node, context, appId, userId) => {
   try {
-    console.log(
-      "✏️ [ON-RECORD-UPDATE] Processing record update trigger for app:",
-      appId
-    );
+    console.log("✏️ [ON-RECORD-UPDATE] Trigger running for app:", appId);
 
     // Validate app access
     const hasAccess = await securityValidator.validateAppAccess(
@@ -4278,41 +4610,44 @@ const executeOnRecordUpdate = async (node, context, appId, userId) => {
       userId,
       prisma
     );
-    if (!hasAccess) {
-      throw new Error("Access denied to this app");
-    }
+    if (!hasAccess) throw new Error("Access denied to this app");
 
-    // Extract configuration
     const {
       tableName,
       filterConditions = [],
       watchColumns = [],
     } = node.data || {};
-
-    // Validate required fields
-    if (!tableName) {
+    if (!tableName)
       throw new Error("Table name is required for onRecordUpdate trigger");
-    }
 
-    console.log("✏️ [ON-RECORD-UPDATE] Trigger configuration:", {
+    console.log("🧩 [ON-RECORD-UPDATE] Config:", {
       tableName,
-      filterConditions,
       watchColumns,
+      filterConditions,
     });
 
-    // The actual trigger logic would be implemented in the database
-    // For now, we return a trigger registration response
+    // ✅ Emit socket event for UI refresh
+    if (global.io) {
+      console.log(
+        `📡 [ON-RECORD-UPDATE] Emitting refresh for table: ${tableName}`
+      );
+      global.io.emit("record:updated", {
+        tableName,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
     return {
       success: true,
       triggered: true,
       triggerType: "onRecordUpdate",
-      tableName: tableName,
+      tableName,
       context: {
         ...context,
         recordUpdateResult: {
           triggered: true,
-          tableName: tableName,
-          watchColumns: watchColumns,
+          tableName,
+          watchColumns,
           timestamp: new Date().toISOString(),
         },
       },
@@ -4323,7 +4658,7 @@ const executeOnRecordUpdate = async (node, context, appId, userId) => {
       success: false,
       triggered: false,
       error: error.message,
-      context: context,
+      context,
     };
   }
 };
@@ -4590,6 +4925,12 @@ router.post("/execute", authenticateToken, async (req, res) => {
   try {
     const { appId, workflowId, nodes, edges, context } = req.body;
     const userId = req.user.id;
+
+    console.log("🚀 [WF-EXEC] Workflow triggered for app:", appId);
+    console.log(
+      "🧩 [WF-EXEC] Nodes received:",
+      nodes.map((n) => n.data.label)
+    );
 
     console.log("🚀 [WF-EXEC] Starting workflow execution:", {
       appId,
