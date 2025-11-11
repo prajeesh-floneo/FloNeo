@@ -1196,7 +1196,11 @@ const executeDbUpdate = async (node, context, appId, userId) => {
     console.log("🔄 [DB-UPDATE] Starting update execution for app:", appId);
 
     // ✅ Step 1: Security & rate checks
-    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
+    const hasAccess = await securityValidator.validateAppAccess(
+      appId,
+      userId,
+      prisma
+    );
     if (!hasAccess) throw new Error("Access denied to this app");
 
     if (!securityValidator.checkRateLimit(userId, "db.update")) {
@@ -1204,8 +1208,12 @@ const executeDbUpdate = async (node, context, appId, userId) => {
     }
 
     // ✅ Step 2: Extract and normalize config
-    let { tableName, updateData = {}, whereConditions = [], returnUpdatedRecords = true } =
-      node.data || {};
+    let {
+      tableName,
+      updateData = {},
+      whereConditions = [],
+      returnUpdatedRecords = true,
+    } = node.data || {};
 
     console.log("🧩 [DB-UPDATE] Raw Inputs:", {
       tableName,
@@ -1237,7 +1245,8 @@ const executeDbUpdate = async (node, context, appId, userId) => {
     console.log("✅ [DB-UPDATE] Normalized Conditions:", whereConditions);
 
     // ✅ Step 3: Validate required fields
-    if (!tableName) throw new Error("Table name is required for DbUpdate operation");
+    if (!tableName)
+      throw new Error("Table name is required for DbUpdate operation");
     if (!updateData || Object.keys(updateData).length === 0)
       throw new Error("No update data provided");
     if (!whereConditions || whereConditions.length === 0)
@@ -1269,18 +1278,30 @@ const executeDbUpdate = async (node, context, appId, userId) => {
       queryBuilder.addWhere(field, operator, substitutedValue, logic);
     }
 
-    const { query, params } = queryBuilder.buildUpdateQuery(tableName, processedUpdateData);
+    const { query, params } = queryBuilder.buildUpdateQuery(
+      tableName,
+      processedUpdateData
+    );
     console.log("🧠 [DB-UPDATE] Final Query:", query);
     console.log("🧠 [DB-UPDATE] Params:", params);
 
     // ✅ Step 7: Execute update
     const result = await prisma.$queryRawUnsafe(query, ...params);
     const executionTime = Date.now() - startTime;
-    const updatedCount = result?.count || (Array.isArray(result) ? result.length : 1);
+    const updatedCount =
+      result?.count || (Array.isArray(result) ? result.length : 1);
 
-    await dbUtils.recordQueryPerformance(appId, tableName, "update", executionTime, updatedCount);
+    await dbUtils.recordQueryPerformance(
+      appId,
+      tableName,
+      "update",
+      executionTime,
+      updatedCount
+    );
 
-    console.log(`✅ [DB-UPDATE] Updated ${updatedCount} row(s) in ${executionTime}ms`);
+    console.log(
+      `✅ [DB-UPDATE] Updated ${updatedCount} row(s) in ${executionTime}ms`
+    );
 
     // ✅ Step 8: Emit real-time socket event (for UI refresh)
     try {
@@ -1327,13 +1348,18 @@ const executeDbUpdate = async (node, context, appId, userId) => {
 
     const executionTime = Date.now() - startTime;
     await dbUtils
-      .recordQueryPerformance(appId, node.data?.tableName || "unknown", "update", executionTime, 0)
+      .recordQueryPerformance(
+        appId,
+        node.data?.tableName || "unknown",
+        "update",
+        executionTime,
+        0
+      )
       .catch(() => {});
 
     throw new Error(`Database update failed: ${error.message}`);
   }
 };
-
 
 // DbUpsert block handler (Update or Insert)
 const executeDbUpsert = async (node, context, appId, userId) => {
@@ -3982,37 +4008,32 @@ const executeOnSchedule = async (node, context, appId, userId) => {
 
     // Calculate next execution time
     let nextExecutionTime = null;
+
     if (scheduleType === "interval") {
       const intervalMs = calculateIntervalMs(scheduleValue, scheduleUnit);
       nextExecutionTime = new Date(Date.now() + intervalMs);
-      console.log(`⏰ [ON-SCHEDULE] Waiting for interval: ${intervalMs} ms`);
-      // Delay execution until interval
-      await new Promise((res) => setTimeout(res, intervalMs));
     } else if (scheduleType === "cron") {
-      // You can replace this stub with a cron parser lib to calculate nextExecutionTime
+      // For cron, we would need a cron parser library
+      // For now, just log that it's scheduled
       console.log("⏰ [ON-SCHEDULE] Cron schedule:", cronExpression);
-      // For now, wait 1 minute as a placeholder
-      nextExecutionTime = new Date(Date.now() + 60000);
-      await new Promise((res) => setTimeout(res, 60000));
+      nextExecutionTime = new Date(Date.now() + 60000); // Default to 1 minute
     }
 
     console.log(
-      "✅ [ON-SCHEDULE] Executing scheduled task at:",
-      new Date().toISOString()
+      "✅ [ON-SCHEDULE] Schedule registered, next execution:",
+      nextExecutionTime
     );
-
-    // Proceed with any scheduled action here (not shown, you can add your logic)
 
     return {
       success: true,
       scheduled: true,
-      scheduleType,
+      scheduleType: scheduleType,
       nextExecutionTime: nextExecutionTime?.toISOString(),
       context: {
         ...context,
         scheduleResult: {
           scheduled: true,
-          scheduleType,
+          scheduleType: scheduleType,
           nextExecutionTime: nextExecutionTime?.toISOString(),
         },
       },
