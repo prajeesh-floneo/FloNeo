@@ -64,8 +64,11 @@ router.get("/:appId/tables", authenticateToken, async (req, res) => {
       orderBy: { createdAt: "desc" },
     });
 
-    if (!userTables.length) {
-      console.log(`[DATABASE] No tables found for appId=${appIdInt}`);
+    console.log("📋 [DATABASE] Found tables:", userTables.length);
+    console.log("📋 [DATABASE] Tables:", userTables);
+    // Handle empty tables case
+    if (userTables.length === 0) {
+      console.log("📋 [DATABASE] No tables found for app:", appId);
       return res.json({
         success: true,
         tables: [],
@@ -75,7 +78,41 @@ router.get("/:appId/tables", authenticateToken, async (req, res) => {
       });
     }
 
-    // Build table data with sample rows
+    // Helper function to safely parse JSON columns
+    const parseColumns = (columns) => {
+      if (typeof columns === "string") {
+        try {
+          return JSON.parse(columns);
+        } catch (e) {
+          return {};
+        }
+      }
+      return columns; // Already an object
+    };
+
+    // Helper function to check if table exists
+    const tableExists = async (tableName) => {
+      try {
+        // Escape table name to prevent SQL injection
+        const escapedTableName = tableName.replace(/"/g, '""');
+        const result = await prisma.$queryRawUnsafe(
+          `SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_schema = 'public' 
+            AND table_name = '${escapedTableName}'
+          ) as exists`
+        );
+        return result[0]?.exists || false;
+      } catch (error) {
+        console.error(
+          `Error checking table existence for ${tableName}:`,
+          error
+        );
+        return false;
+      }
+    };
+
+    // Get table data for each table
     const tablesWithData = await Promise.all(
       userTables.map(async (table) => {
         if (!isValidTableName(table.tableName)) return null;
@@ -84,6 +121,27 @@ router.get("/:appId/tables", authenticateToken, async (req, res) => {
         let sampleData = [];
 
         try {
+          // Check if table actually exists in database
+          const exists = await tableExists(table.tableName);
+
+          if (!exists) {
+            console.warn(
+              `⚠️ [DATABASE] Table "${table.tableName}" registered but doesn't exist in database`
+            );
+            return {
+              id: table.id,
+              name: table.tableName,
+              columns: parseColumns(table.columns),
+              rowCount: 0,
+              sampleData: [],
+              createdAt: table.createdAt,
+              updatedAt: table.updatedAt,
+              error: `Table "${table.tableName}" does not exist in database`,
+              exists: false,
+            };
+          }
+
+          // Get row count
           const countResult = await prisma.$queryRawUnsafe(
             `SELECT COUNT(*) as count FROM "${table.tableName}"`
           );
@@ -92,10 +150,33 @@ router.get("/:appId/tables", authenticateToken, async (req, res) => {
           sampleData = await prisma.$queryRawUnsafe(
             `SELECT * FROM "${table.tableName}" ORDER BY id DESC LIMIT 5`
           );
-        } catch {
-          console.warn(
-            `[DATABASE] Table ${table.tableName} exists in metadata but not in DB`
+
+          return {
+            id: table.id,
+            name: table.tableName,
+            columns: parseColumns(table.columns),
+            rowCount,
+            sampleData,
+            createdAt: table.createdAt,
+            updatedAt: table.updatedAt,
+            exists: true,
+          };
+        } catch (error) {
+          console.error(
+            `Error getting data for table ${table.tableName}:`,
+            error
           );
+          return {
+            id: table.id,
+            name: table.tableName,
+            columns: parseColumns(table.columns),
+            rowCount: 0,
+            sampleData: [],
+            createdAt: table.createdAt,
+            updatedAt: table.updatedAt,
+            error: error.message,
+            exists: false,
+          };
         }
 
         let safeColumns = [];
@@ -372,19 +453,42 @@ router.get(
         });
       }
 
-      let safeColumns = [];
-      try {
-        safeColumns =
-          typeof userTable.columns === "string"
-            ? JSON.parse(userTable.columns)
-            : userTable.columns;
-      } catch {
-        safeColumns = [];
+      // Check if table actually exists in database
+      const escapedTableName = tableName.replace(/"/g, '""');
+      const tableExistsResult = await prisma.$queryRawUnsafe(
+        `SELECT EXISTS (
+          SELECT FROM information_schema.tables 
+          WHERE table_schema = 'public' 
+          AND table_name = '${escapedTableName}'
+        ) as exists`
+      );
+
+      const exists = tableExistsResult[0]?.exists || false;
+
+      if (!exists) {
+        return res.status(404).json({
+          success: false,
+          message: `Table "${tableName}" is registered but does not exist in database`,
+          exists: false,
+        });
       }
 
-      console.log(
-        `[DATABASE] Data fetched for table=${tableName} successfully`
-      );
+      console.log("✅ [DATABASE] Table data retrieved successfully");
+
+      // Helper function to safely parse JSON columns
+      const parseColumns = (columns) => {
+        if (typeof columns === "string") {
+          try {
+            return JSON.parse(columns);
+          } catch (e) {
+            return {};
+          }
+        }
+        return columns; // Already an object
+      };
+
+      const safeColumns = parseColumns(userTable.columns);
+
       res.json({
         success: true,
         data,
@@ -833,5 +937,122 @@ router.post(
     }
   }
 );
+/**
+ * @route   POST /api/database/:appId/tables/:tableName/export
+ * @desc    Export table data as CSV or Excel
+ * @access  Private
+ */
+router.post(
+  "/:appId/tables/:tableName/export",
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const { appId, tableName } = req.params;
+      const { format = "csv" } = req.body || {};
+      const userId = req.user.id;
 
+      console.log(
+        `[DATABASE] Export request for table=${tableName}, format=${format}`
+      );
+
+      // ✅ Validate inputs
+      if (!isValidTableName(tableName)) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid table name" });
+      }
+      if (!["csv", "excel"].includes(format)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid format (use csv or excel)",
+        });
+      }
+
+      // ✅ Verify app ownership
+      const app = await prisma.app.findFirst({
+        where: { id: parseInt(appId), ownerId: userId },
+      });
+      if (!app)
+        return res
+          .status(403)
+          .json({ success: false, message: "Access denied to this app" });
+
+      // ✅ Validate table metadata
+      const userTable = await prisma.userTable.findFirst({
+        where: { tableName, appId: parseInt(appId) },
+      });
+      if (!userTable)
+        return res
+          .status(404)
+          .json({ success: false, message: "Table not found in metadata" });
+
+      // ✅ Check if table actually exists in database
+      const escapedTableName = tableName.replace(/"/g, '""');
+      const tableExistsResult = await prisma.$queryRawUnsafe(
+        `SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_schema = 'public' 
+        AND table_name = '${escapedTableName}'
+      ) as exists`
+      );
+
+      const exists = tableExistsResult[0]?.exists || false;
+      if (!exists) {
+        return res.status(404).json({
+          success: false,
+          message: `Table "${tableName}" is registered but does not exist in database`,
+        });
+      }
+
+      // ✅ Fetch table data
+      const data = await prisma.$queryRawUnsafe(
+        `SELECT * FROM "${tableName}" ORDER BY id DESC`
+      );
+
+      // ✅ Parse and transform columns format
+      let columnsObj =
+        typeof userTable.columns === "string"
+          ? JSON.parse(userTable.columns)
+          : userTable.columns;
+
+      // Transform from object format to array format expected by exportTableData
+      // Input: { id: {...}, firstName: {...}, ... }
+      // Output: [{ name: 'id', ... }, { name: 'firstName', ... }, ... ]
+      const columns = Object.entries(columnsObj).map(([name, def]) => ({
+        name,
+        ...def,
+      }));
+
+      // ✅ Generate export file
+      const buffer = await exportTableData(data, columns, format);
+
+      if (format === "csv") {
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${tableName}.csv"`
+        );
+        res.setHeader("Content-Type", "text/csv");
+      } else {
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${tableName}.xlsx"`
+        );
+        res.setHeader(
+          "Content-Type",
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        );
+      }
+
+      console.log(`[DATABASE] Export completed successfully for ${tableName}`);
+      res.send(buffer);
+    } catch (error) {
+      console.error(`[DATABASE] Export error:`, error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to export table",
+        error: error.message,
+      });
+    }
+  }
+);
 module.exports = router;
