@@ -332,6 +332,9 @@ const isBlockConfigured = (data: WorkflowNodeData): boolean => {
     case "onSchedule":
       return !!data.cronExpression;
 
+    case "onWebhook":
+      return true; // Always configured - webhook URL is auto-generated
+
     case "onRecordCreate":
     case "onRecordUpdate":
       return !!data.tableName;
@@ -1301,6 +1304,59 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
               <label htmlFor="enabled" className="text-sm">
                 Enabled
               </label>
+            </div>
+          </div>
+        );
+
+      case "onWebhook":
+        // Get appId from component state (set from URL params)
+        const webhookAppId = appId || "1";
+        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://backend:5000";
+        const webhookUrl = `${backendUrl}/api/workflow/webhook/${webhookAppId}`;
+        
+        return (
+          <div className="space-y-4">
+            <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+              <div className="space-y-3">
+                <div>
+                  <label className="text-sm font-medium text-blue-700 dark:text-blue-300">
+                    Webhook URL:
+                  </label>
+                  <div className="mt-1 flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={webhookUrl}
+                      className="flex-1 px-3 py-2 text-sm border rounded-md bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(webhookUrl);
+                        // You might want to show a toast here
+                      }}
+                      className="px-3 py-2 text-sm bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
+                
+                <div className="text-xs text-blue-600 dark:text-blue-400 space-y-1">
+                  <p className="font-medium">How to use:</p>
+                  <ul className="list-disc list-inside space-y-1 ml-2">
+                    <li>Send a POST request to this URL</li>
+                    <li>Include header: <code className="bg-blue-100 dark:bg-blue-900 px-1 rounded">x-algo-secret: YOUR_SECRET</code></li>
+                    <li>Send JSON payload in request body</li>
+                    <li>Payload will be available in workflow context</li>
+                  </ul>
+                </div>
+
+                <div className="p-2 bg-yellow-50 dark:bg-yellow-900/20 rounded text-xs text-yellow-700 dark:text-yellow-300 border border-yellow-200 dark:border-yellow-800">
+                  <p className="font-medium mb-1">⚠️ Security Note:</p>
+                  <p>Set <code className="bg-yellow-100 dark:bg-yellow-900 px-1 rounded">ALGORITHM_WEBHOOK_SECRET</code> in your backend environment variables to enable secret validation.</p>
+                </div>
+              </div>
             </div>
           </div>
         );

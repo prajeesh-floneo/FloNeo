@@ -484,6 +484,52 @@ const executeOnPageLoad = async (node, context, appId) => {
   }
 };
 
+// OnWebhook block handler
+const executeOnWebhook = async (node, context, appId, userId) => {
+  try {
+    console.log("🔗 [ON-WEBHOOK] Processing webhook trigger for app:", appId);
+
+    // Webhook data should be in context (passed from webhook endpoint)
+    const webhookPayload = context.webhookPayload || context.payload || context.data || {};
+    const webhookHeaders = context.webhookHeaders || {};
+
+    console.log("🔗 [ON-WEBHOOK] Webhook payload received:", {
+      payloadKeys: Object.keys(webhookPayload),
+      hasHeaders: !!webhookHeaders,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Log the payload for debugging
+    console.log("✅ [ON-WEBHOOK] Webhook received:", webhookPayload);
+
+    // Add webhook data to context for subsequent blocks
+    const updatedContext = {
+      ...context,
+      webhookPayload,
+      webhookHeaders,
+      webhookReceivedAt: new Date().toISOString(),
+      // Also add payload data at root level for easy access in other blocks
+      ...webhookPayload,
+    };
+
+    console.log("✅ [ON-WEBHOOK] Webhook trigger processed successfully");
+
+    return {
+      success: true,
+      message: "Webhook received and processed",
+      context: updatedContext,
+      webhookData: webhookPayload,
+    };
+  } catch (error) {
+    console.error("❌ [ON-WEBHOOK] Error processing webhook:", error);
+    return {
+      success: false,
+      error: error.message,
+      context: context,
+    };
+  }
+};
+
 // OnSubmit block handler
 const executeOnSubmit = async (node, context, appId) => {
   try {
@@ -5037,6 +5083,211 @@ router.post("/execute", authenticateToken, async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Workflow execution failed",
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * @route   POST /api/workflow/webhook/:appId
+ * @desc    Webhook endpoint to receive external POST requests and trigger workflows
+ * @access  Public (with secret validation)
+ */
+router.post("/webhook/:appId", async (req, res) => {
+  try {
+    const { appId } = req.params;
+    const webhookSecret = req.headers["x-algo-secret"] || req.headers["x-webhook-secret"];
+    const payload = req.body;
+    const headers = req.headers;
+
+    console.log("🔗 [WEBHOOK] Received webhook request:", {
+      appId,
+      hasSecret: !!webhookSecret,
+      payloadKeys: Object.keys(payload),
+      timestamp: new Date().toISOString(),
+    });
+
+    // Validate webhook secret
+    const expectedSecret = process.env.ALGORITHM_WEBHOOK_SECRET;
+    if (expectedSecret && webhookSecret !== expectedSecret) {
+      console.warn("⚠️ [WEBHOOK] Invalid or missing webhook secret");
+      return res.status(403).json({
+        success: false,
+        message: "Invalid webhook secret",
+      });
+    }
+
+    // Find workflows with onWebhook trigger for this app
+    // Query workflows and check if they have onWebhook nodes
+    const allWorkflows = await prisma.workflow.findMany({
+      where: {
+        appId: parseInt(appId),
+      },
+    });
+
+    // Filter workflows that have onWebhook trigger
+    const webhookWorkflows = allWorkflows.filter((workflow) => {
+      const nodes = workflow.nodes || [];
+      return nodes.some(
+        (n) => n.data?.category === "Triggers" && n.data?.label === "onWebhook"
+      );
+    });
+
+    if (!webhookWorkflows || webhookWorkflows.length === 0) {
+      console.warn("⚠️ [WEBHOOK] No workflows found with onWebhook trigger for app:", appId);
+      return res.status(404).json({
+        success: false,
+        message: "No webhook workflows found for this app",
+      });
+    }
+
+    console.log(`🔗 [WEBHOOK] Found ${webhookWorkflows.length} webhook workflow(s) for app ${appId}`);
+
+    // Get app owner for access validation
+    const app = await prisma.app.findUnique({
+      where: { id: parseInt(appId) },
+      select: { ownerId: true },
+    });
+
+    if (!app) {
+      return res.status(404).json({
+        success: false,
+        message: "App not found",
+      });
+    }
+
+    // Execute each webhook workflow using the main execution endpoint logic
+    const results = [];
+    for (const workflow of webhookWorkflows) {
+      try {
+        const nodes = workflow.nodes || [];
+        const edges = workflow.edges || [];
+
+        // Create context with webhook payload
+        const context = {
+          webhookPayload: payload,
+          webhookHeaders: headers,
+          triggerType: "onWebhook",
+          appId: parseInt(appId),
+          // Also add payload data at root level for easy access
+          ...payload,
+        };
+
+        // Use the existing workflow execution logic
+        // Find the onWebhook trigger node
+        const webhookNode = nodes.find(
+          (n) => n.data?.category === "Triggers" && n.data?.label === "onWebhook"
+        );
+
+        if (!webhookNode) {
+          continue;
+        }
+
+        // Build edge map
+        const edgeMap = {};
+        edges.forEach((edge) => {
+          const sourceHandle = edge.sourceHandle || edge.label || "next";
+          const key = `${edge.source}:${sourceHandle}`;
+          edgeMap[key] = edge.target;
+        });
+
+        // Execute workflow starting from onWebhook node
+        const executionResults = [];
+        let currentNodeId = webhookNode.id;
+        let currentContext = context;
+        const maxIterations = 100;
+        let iteration = 0;
+
+        while (currentNodeId && iteration < maxIterations) {
+          iteration++;
+          const node = nodes.find((n) => n.id === currentNodeId);
+          if (!node) break;
+
+          try {
+            let result;
+
+            // Execute based on node type
+            if (node.data.category === "Triggers" && node.data.label === "onWebhook") {
+              result = await executeOnWebhook(node, currentContext, parseInt(appId), app.ownerId);
+            } else if (node.data.category === "Actions") {
+              switch (node.data.label) {
+                case "db.upsert":
+                  result = await executeDbUpsert(node, currentContext, parseInt(appId), app.ownerId);
+                  break;
+                case "notify.toast":
+                  result = await executeNotifyToast(node, currentContext, parseInt(appId), app.ownerId);
+                  break;
+                case "db.find":
+                  result = await executeDbFind(node, currentContext, parseInt(appId), app.ownerId);
+                  break;
+                case "db.create":
+                  result = await executeDbCreate(node, currentContext, parseInt(appId), app.ownerId);
+                  break;
+                case "db.update":
+                  result = await executeDbUpdate(node, currentContext, parseInt(appId), app.ownerId);
+                  break;
+                default:
+                  result = { success: true, message: `${node.data.label} executed` };
+              }
+            } else {
+              result = { success: true, message: `${node.data.label} processed` };
+            }
+
+            executionResults.push({
+              nodeId: node.id,
+              nodeLabel: node.data.label,
+              result,
+            });
+
+            // Update context
+            if (result && typeof result === "object" && result.context) {
+              currentContext = { ...currentContext, ...result.context };
+            }
+
+            // Find next node
+            const edgeKey = `${node.id}:next`;
+            currentNodeId = edgeMap[edgeKey] || null;
+          } catch (error) {
+            console.error(`❌ [WEBHOOK] Error in node ${node.data.label}:`, error);
+            executionResults.push({
+              nodeId: node.id,
+              nodeLabel: node.data.label,
+              error: error.message,
+            });
+            break;
+          }
+        }
+
+        results.push({
+          workflowId: workflow.id,
+          success: true,
+          results: executionResults,
+        });
+
+        console.log(`✅ [WEBHOOK] Workflow ${workflow.id} executed successfully`);
+      } catch (workflowError) {
+        console.error(`❌ [WEBHOOK] Error executing workflow ${workflow.id}:`, workflowError);
+        results.push({
+          workflowId: workflow.id,
+          success: false,
+          error: workflowError.message,
+        });
+      }
+    }
+
+    // Return success response
+    res.json({
+      success: true,
+      message: "Webhook received and processed",
+      workflowsExecuted: results.length,
+      results: results,
+      receivedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("❌ [WEBHOOK] Webhook processing error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to process webhook",
       error: error.message,
     });
   }
