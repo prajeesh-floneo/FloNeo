@@ -7,6 +7,7 @@ import {
   Eye,
   Play,
   Settings,
+  SquareSplitHorizontal,
   Upload,
   Workflow,
 } from "lucide-react";
@@ -24,15 +25,9 @@ import { useEffect, useState } from "react";
 import { useCanvasWorkflow } from "@/lib/canvas-workflow-context";
 import { PublishModal } from "./publish-modal";
 
-interface WorkflowHeaderProps {
-  activeTab: string;
-  setActiveTab: (tab: string) => void;
-  isCanvasWorkflowSplit: boolean;
-  onSplitScreenToggle: () => void;
-}
 
 export function WorkflowHeader({
-}: WorkflowHeaderProps) {
+}) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
@@ -40,40 +35,28 @@ export function WorkflowHeader({
   const [appName, setAppName] = useState("Untitled App");
   const [isEditingName, setIsEditingName] = useState(false);
   const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
-  const [currentPage, setCurrentPage] = useState<string | null>(null);
-  const [splitButtonName, setSplitButtonName] = useState("Split Screen");
+  // const [currentPage, setCurrentPage] = useState<string | null>(null);
+  const [splitButtonName, setSplitButtonName] = useState("");
 
   const currentAppId = searchParams.get("appId") || "1";
-  const urlData = searchParams.get("split-view") || "canvas";
 
   const { saveCanvasWorkflow } = useCanvasWorkflow();
 
-  const getSplitScreenIcon = () => {
-    return (
-      <div className="w-4 h-4 mr-2 flex">
-        <div className="w-2 h-4 border border-r-0 rounded-l"></div>
-        <div className="w-2 h-4 border rounded-r"></div>
-      </div>
-    );
-  };
-
   useEffect(() => {
     if (pathname.includes("split-view")) {
-      setCurrentPage("split-view");
-    } else if (pathname.includes("canvas")) {
-      setCurrentPage("canvas");
-    } else {
-      setCurrentPage(null);
+      setSplitButtonName("Exit Split");
+    } else{
+      setSplitButtonName("Split Screen");
     }
-  }, [urlData, searchParams]);
+  }, [pathname]);
+
+  console.log("pathname", pathname);
 
   const handleClick = () => {
     if(splitButtonName === "Split Screen") {
       router.push(`/split-view?appId=${currentAppId}`);
-      setSplitButtonName("Exit Split");
     }else{
         router.back();
-        setSplitButtonName("Split Screen");
     }
   };
 
@@ -136,6 +119,7 @@ export function WorkflowHeader({
         </div> */}
 
           <ThemeToggle />
+
           <Button
             size="sm"
             variant="outline"
@@ -171,14 +155,10 @@ export function WorkflowHeader({
             <Upload className="w-3 h-3 mr-1" />
             Publish
           </Button>
-          <Button variant="outline" size="sm" onClick={handleClick}>
-            {getSplitScreenIcon()}
-            {splitButtonName}
-          </Button>
 
-          <Button variant="outline" size="sm">
-            <Settings className="w-4 h-4 mr-2" />
-            Settings
+          <Button variant="outline" size="sm" onClick={handleClick}>
+            <SquareSplitHorizontal/>
+            {splitButtonName}
           </Button>
 
           <Button

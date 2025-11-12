@@ -5863,6 +5863,7 @@ function CanvasPageContent() {
                   {/* View Options */}
                   <div className="flex items-center space-x-1">
                     <Button
+                      disabled={isSplitScreenMode} 
                       className={isSplitScreenMode?"cursor-not-allowed opacity-50":""}
                       size="sm"
                       variant={isLeftPanelHidden ? "default" : "outline"}
@@ -5881,6 +5882,7 @@ function CanvasPageContent() {
                       />
                     </Button>
                     <Button
+                      disabled={isSplitScreenMode} 
                       className={isSplitScreenMode?"cursor-not-allowed opacity-50":""}
                       size="sm"
                       variant={isRightPanelHidden ? "default" : "outline"}
