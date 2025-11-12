@@ -6322,8 +6322,8 @@ function CanvasPageContent() {
                       )}
                     </div>
                   </div>
-                  <div className="absolute bottom-6 left-4 right-4 z-50 pointer-events-none">
-                    <div className="flex items-center w-full overflow-x-auto no-scrollbar space-x-1 bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm rounded-xl p-2 shadow-2xl border border-gray-200/50 dark:border-gray-700/50 pointer-events-auto">
+                  <div className="absolute max-w-280 flex items-center justify-center bottom-6 left-4 right-4 z-50 pointer-events-none">
+                    <div className="flex items-center w-fit overflow-x-auto no-scrollbar space-x-1 bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm rounded-xl p-2 shadow-2xl border border-gray-200/50 dark:border-gray-700/50 pointer-events-auto">
                       {/* Canvas tools */}
                       <div className="flex items-center flex-nowrap space-x-1 bg-gray-100 dark:bg-gray-700 rounded-lg p-1">
                         <Button
