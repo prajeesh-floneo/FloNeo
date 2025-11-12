@@ -4372,7 +4372,6 @@ const executeOnDrop = async (node, context, appId, userId = 1) => {
 // };
 
 // onScheduled Trigger
-
 const executeOnSchedule = async (node, context, appId, userId) => {
   try {
     console.log("⏰ [ON-SCHEDULE] Processing schedule trigger for app:", appId);
@@ -4423,32 +4422,37 @@ const executeOnSchedule = async (node, context, appId, userId) => {
 
     // Calculate next execution time
     let nextExecutionTime = null;
-
     if (scheduleType === "interval") {
       const intervalMs = calculateIntervalMs(scheduleValue, scheduleUnit);
       nextExecutionTime = new Date(Date.now() + intervalMs);
+      console.log(`⏰ [ON-SCHEDULE] Waiting for interval: ${intervalMs} ms`);
+      // Delay execution until interval
+      await new Promise((res) => setTimeout(res, intervalMs));
     } else if (scheduleType === "cron") {
-      // For cron, we would need a cron parser library
-      // For now, just log that it's scheduled
+      // You can replace this stub with a cron parser lib to calculate nextExecutionTime
       console.log("⏰ [ON-SCHEDULE] Cron schedule:", cronExpression);
-      nextExecutionTime = new Date(Date.now() + 60000); // Default to 1 minute
+      // For now, wait 1 minute as a placeholder
+      nextExecutionTime = new Date(Date.now() + 60000);
+      await new Promise((res) => setTimeout(res, 60000));
     }
 
     console.log(
-      "✅ [ON-SCHEDULE] Schedule registered, next execution:",
-      nextExecutionTime
+      "✅ [ON-SCHEDULE] Executing scheduled task at:",
+      new Date().toISOString()
     );
+
+    // Proceed with any scheduled action here (not shown, you can add your logic)
 
     return {
       success: true,
       scheduled: true,
-      scheduleType: scheduleType,
+      scheduleType,
       nextExecutionTime: nextExecutionTime?.toISOString(),
       context: {
         ...context,
         scheduleResult: {
           scheduled: true,
-          scheduleType: scheduleType,
+          scheduleType,
           nextExecutionTime: nextExecutionTime?.toISOString(),
         },
       },
