@@ -79,9 +79,10 @@ class SecurityValidator {
   /**
    * Validate column name for security
    * @param {string} columnName - The column name to validate
+   * @param {boolean} allowReserved - If true, allow reserved names (for WHERE clauses, etc.)
    * @throws {Error} - If validation fails
    */
-  validateColumnName(columnName) {
+  validateColumnName(columnName, allowReserved = false) {
     if (!columnName || typeof columnName !== 'string') {
       throw new Error('Column name is required and must be a string');
     }
@@ -108,10 +109,13 @@ class SecurityValidator {
       }
     }
 
-    // Reserved column names
-    const reservedNames = ['id', 'created_at', 'updated_at', 'app_id'];
-    if (reservedNames.includes(columnName.toLowerCase())) {
-      throw new Error(`Column name '${columnName}' is reserved`);
+    // Reserved column names (only block if allowReserved is false)
+    // Reserved names can be used in WHERE clauses but not in SET clauses
+    if (!allowReserved) {
+      const reservedNames = ['id', 'created_at', 'updated_at', 'app_id'];
+      if (reservedNames.includes(columnName.toLowerCase())) {
+        throw new Error(`Column name '${columnName}' is reserved`);
+      }
     }
   }
 
@@ -197,8 +201,8 @@ class SecurityValidator {
 
       const { field, operator, value } = condition;
 
-      // Validate field name
-      this.validateColumnName(field);
+      // Validate field name (allow reserved names in WHERE conditions)
+      this.validateColumnName(field, true);
 
       // Validate operator
       const allowedOperators = ['=', '!=', '<>', '>', '<', '>=', '<=', 'LIKE', 'ILIKE', 'IN', 'NOT IN', 'IS NULL', 'IS NOT NULL'];

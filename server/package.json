@@ -4,7 +4,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js",
+    "dev": "prisma generate --schema=prisma/schema.prisma && nodemon index.js",
     "test": "jest --detectOpenHandles --forceExit",
     "test:watch": "jest --watch --detectOpenHandles",
     "test:coverage": "jest --coverage --detectOpenHandles --forceExit",
@@ -19,7 +19,8 @@
     "db:sync-models": "node sync-models.js",
     "db:sync-models:local": "node sync-models.js --local",
     "db:create-tables": "node create-tables-from-registry.js",
-    "db:seed": "node prisma/seed.js"
+    "db:seed": "node prisma/seed.js",
+    "test:upsert": "node scripts/test-db-upsert.js"
   },
   "prisma": {
     "seed": "node prisma/seed.js"

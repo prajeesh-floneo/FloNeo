@@ -160,6 +160,18 @@ class SafeQueryBuilder {
   }
 
   /**
+   * Add a raw WHERE condition (for JSONB paths, etc.)
+   * @param {string} rawCondition - The raw SQL condition (e.g., "data->>'field' = $1")
+   * @param {string} logic - AND or OR
+   */
+  addWhereRaw(rawCondition, logic = "AND") {
+    this.whereConditions.push({
+      condition: rawCondition,
+      logic: logic.toUpperCase(),
+    });
+  }
+
+  /**
    * Add ORDER BY clause
    * @param {string} field - The field to order by
    * @param {string} direction - ASC or DESC
