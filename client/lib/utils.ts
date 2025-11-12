@@ -5,6 +5,163 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+const PUBLIC_BACKEND_URL = (() => {
+  if (typeof globalThis === "undefined") return "";
+  const raw = (globalThis as any)?.process?.env?.NEXT_PUBLIC_BACKEND_URL;
+  if (typeof raw !== "string") return "";
+  return raw.replace(/\/$/, "");
+})();
+
+type Primitive = string | number | boolean | null | undefined;
+
+export interface MediaRuntimeMetadata {
+  fileId?: Primitive;
+  url?: string;
+  thumbnail?: string | null;
+  mimeType?: string;
+}
+
+export interface ElementRuntimeMetadata {
+  media?: MediaRuntimeMetadata;
+}
+
+const imageExtensions = new Set([
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "bmp",
+  "webp",
+  "svg",
+  "avif",
+]);
+
+const videoExtensions = new Set([
+  "mp4",
+  "webm",
+  "ogg",
+  "mov",
+  "m4v",
+]);
+
+const audioExtensions = new Set([
+  "mp3",
+  "wav",
+  "aac",
+  "flac",
+  "oga",
+  "ogg",
+]);
+
+const ensureLeadingSlash = (value: string) =>
+  value.startsWith("/") ? value : `/${value}`;
+
+export function normalizeMediaUrl(value?: string | null): string | undefined {
+  if (!value) return undefined;
+
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+
+  if (trimmed.startsWith("blob:")) return trimmed;
+  if (trimmed.startsWith("data:")) return trimmed;
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    if (PUBLIC_BACKEND_URL && trimmed.startsWith(PUBLIC_BACKEND_URL)) {
+      const suffix = trimmed.slice(PUBLIC_BACKEND_URL.length);
+      if (suffix.startsWith("/api/media/")) {
+        return ensureLeadingSlash(suffix);
+      }
+    }
+    return trimmed;
+  }
+
+  if (trimmed.startsWith("/api/media/")) {
+    return trimmed;
+  }
+
+  if (trimmed.startsWith("/uploads/")) {
+    const filename = trimmed.split("/").pop();
+    return filename ? `/api/media/files/${filename}` : `/api/media/files`;
+  }
+
+  if (trimmed.startsWith("uploads/")) {
+    const filename = trimmed.split("/").pop();
+    return filename ? `/api/media/files/${filename}` : `/api/media/files`;
+  }
+
+  if (trimmed.startsWith("thumbnails/")) {
+    const filename = trimmed.split("/").pop();
+    return filename
+      ? `/api/media/thumbnails/${filename}`
+      : `/api/media/thumbnails`;
+  }
+
+  if (trimmed.startsWith("files/")) {
+    return ensureLeadingSlash(trimmed);
+  }
+
+  return trimmed;
+}
+
+export const detectMediaKind = (
+  mimeType?: string,
+  url?: string | null
+): "image" | "video" | "audio" | "other" => {
+  if (mimeType) {
+    if (mimeType.toLowerCase().startsWith("image/")) return "image";
+    if (mimeType.toLowerCase().startsWith("video/")) return "video";
+    if (mimeType.toLowerCase().startsWith("audio/")) return "audio";
+  }
+
+  if (!url) return "other";
+
+  const base = url.split("?")[0];
+  const extension = base.split(".").pop()?.toLowerCase();
+
+  if (!extension) return "other";
+
+  if (imageExtensions.has(extension)) return "image";
+  if (videoExtensions.has(extension)) return "video";
+  if (audioExtensions.has(extension)) return "audio";
+
+  return "other";
+};
+
+export function deriveMediaRuntime(
+  properties?: Record<string, any>
+): ElementRuntimeMetadata | undefined {
+  if (!properties) return undefined;
+
+  const url =
+    normalizeMediaUrl(
+      properties.src ||
+        properties.url ||
+        properties.path ||
+        properties.mediaUrl ||
+        properties.fileUrl
+    ) || undefined;
+
+  const thumbnail =
+    normalizeMediaUrl(properties.thumbnail || properties.thumbUrl) ?? null;
+
+  if (!url && !thumbnail) {
+    return undefined;
+  }
+
+  return {
+    media: {
+      fileId:
+        properties.mediaId ??
+        properties.fileId ??
+        properties.id ??
+        properties.elementId,
+      url,
+      thumbnail,
+      mimeType: properties.mimeType || properties.type || undefined,
+    },
+  };
+}
+
 // Types for preview snapshot
 export interface PreviewElement {
   id: string;
@@ -19,6 +176,7 @@ export interface PreviewElement {
   pageId: string;
   groupId?: string;
   properties: Record<string, any>;
+  runtime?: ElementRuntimeMetadata;
 }
 
 export interface PreviewPage {
@@ -65,7 +223,6 @@ export async function getPreviewSnapshot(
         "Content-Type": "application/json",
       },
       cache: "no-store",
-      next: { revalidate: 0 },
     });
 
     if (!response.ok) {
@@ -103,19 +260,8 @@ export async function getPreviewSnapshot(
         image: page.canvasBackground?.image,
         type: page.canvasBackground?.type || "color",
       },
-      elements: (page.elements || []).map((element: any) => ({
-        id: element.id,
-        type: element.type,
-        x: element.x,
-        y: element.y,
-        width: element.width,
-        height: element.height,
-        rotation: element.rotation || 0,
-        opacity: element.opacity || 100,
-        zIndex: element.zIndex || 0,
-        pageId: element.pageId || page.id,
-        groupId: element.groupId,
-        properties: {
+      elements: (page.elements || []).map((element: any) => {
+        const properties: Record<string, any> = {
           ...element.properties,
           // Strip editor-only properties
           isSelected: undefined,
@@ -123,8 +269,42 @@ export async function getPreviewSnapshot(
           isResizing: undefined,
           showHandles: undefined,
           isHovered: undefined,
-        },
-      })),
+        };
+
+        const normalizedSrc = normalizeMediaUrl(
+          element.properties?.src ||
+            element.properties?.url ||
+            element.properties?.path
+        );
+
+        if (normalizedSrc) {
+          properties.src = normalizedSrc;
+        }
+
+        const normalizedThumb = normalizeMediaUrl(
+          element.properties?.thumbnail
+        );
+
+        if (normalizedThumb) {
+          properties.thumbnail = normalizedThumb;
+        }
+
+        return {
+          id: element.id,
+          type: element.type,
+          x: element.x,
+          y: element.y,
+          width: element.width,
+          height: element.height,
+          rotation: element.rotation || 0,
+          opacity: element.opacity || 100,
+          zIndex: element.zIndex || 0,
+          pageId: element.pageId || page.id,
+          groupId: element.groupId,
+          properties,
+          runtime: deriveMediaRuntime(properties),
+        };
+      }),
     }));
 
     const snapshot: PreviewSnapshot = {

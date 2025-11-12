@@ -24,6 +24,7 @@ import {
   handleApiError,
   authenticatedFetch,
 } from "@/lib/auth";
+import { deriveMediaRuntime, normalizeMediaUrl } from "@/lib/utils";
 
 // Type mapping function to convert canvas element types to renderer types
 function normalizeElementType(type: string): string {
@@ -51,6 +52,20 @@ function normalizeElementType(type: string): string {
 
 // Function to normalize element structure for CanvasRenderer
 function normalizeElement(element: any): CanvasElement {
+  const props = { ...(element.properties || {}) };
+
+  const normalizedSrc = normalizeMediaUrl(
+    props.src || props.url || props.path
+  );
+  if (normalizedSrc) {
+    props.src = normalizedSrc;
+  }
+
+  const normalizedThumb = normalizeMediaUrl(props.thumbnail);
+  if (normalizedThumb) {
+    props.thumbnail = normalizedThumb;
+  }
+
   return {
     id: element.id,
     type: normalizeElementType(element.type),
@@ -62,7 +77,8 @@ function normalizeElement(element: any): CanvasElement {
     opacity: element.opacity || 100,
     zIndex: element.zIndex || 1,
     pageId: element.pageId,
-    properties: element.properties || {},
+    properties: props,
+    runtime: deriveMediaRuntime(props),
   };
 }
 
@@ -73,15 +89,63 @@ interface Page {
   id: string;
   name: string;
   elements: CanvasElement[];
-  groups?: any[]; // Add groups property
+  groups?: FormGroup[];
   canvasBackground: any;
   canvasWidth?: number;
   canvasHeight?: number;
 }
 
+interface FormGroup {
+  id?: string | number;
+  submitButtonId?: string;
+  properties?: {
+    submitButtonId?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+type WorkflowEvent =
+  | "click"
+  | "change"
+  | "submit"
+  | "drop"
+  | "hover"
+  | "focus"
+  | "pageLoad"
+  | "login";
+
+type WorkflowNodeData = {
+  label?: string;
+  category?: string;
+  isTrigger?: boolean;
+  selectedFormGroup?: string;
+  triggerType?: WorkflowEvent;
+  targetPageId?: string | number;
+  [key: string]: unknown;
+};
+
+type WorkflowNode = {
+  id: string | number;
+  type?: string;
+  data?: WorkflowNodeData;
+  [key: string]: unknown;
+};
+
+type WorkflowEdge = {
+  id?: string | number;
+  source?: string;
+  target?: string;
+  data?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
 interface Workflow {
-  nodes: any[];
-  edges: any[];
+  id?: string | number;
+  elementId?: string | number | null;
+  pageId?: string | number | null;
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
 }
 
 // Trigger key type for workflow indexing
@@ -106,7 +170,9 @@ function RunAppContent() {
 
   const [pages, setPages] = useState<Page[]>([]);
   const [currentPageId, setCurrentPageId] = useState<string>("");
-  const [workflows, setWorkflows] = useState<Map<string, Workflow>>(new Map());
+  const [workflows, setWorkflows] = useState<Map<string, Workflow>>(
+    () => new Map<string, Workflow>()
+  );
   const [loading, setLoading] = useState(true);
   const [pageStack, setPageStack] = useState<string[]>([]); // For goBack() navigation
 
@@ -157,7 +223,6 @@ function RunAppContent() {
           `/api/canvas/${appId}?preview=true`,
           {
             cache: "no-store",
-            next: { revalidate: 0 },
           }
         );
         console.log("🔄 RUN: Canvas status", canvasResponse.status);
@@ -297,16 +362,6 @@ function RunAppContent() {
               // Instrumentation for runtime
               const currentPage =
                 pages.find((p: any) => p.id === targetPageId) || pages[0];
-              console.info(
-                "[run] page",
-                targetPageId,
-                "elements",
-                currentPage.elements?.length || 0,
-                "canvas",
-                currentPage.canvasWidth || 960,
-                currentPage.canvasHeight || 640
-              );
-              console.log("📄 RUN: Set current page to:", targetPageId);
               console.log(
                 "📄 RUN: Pages details:",
                 pages.map((p: any) => ({
@@ -357,7 +412,6 @@ function RunAppContent() {
           {
             headers: { Authorization: `Bearer ${token}` },
             cache: "no-store",
-            next: { revalidate: 0 },
           }
         );
         console.log("🔄 RUN: Workflow status", workflowResponse.status);
@@ -394,7 +448,7 @@ function RunAppContent() {
               JSON.stringify(workflowData.data).substring(0, 500)
             );
 
-            const workflowsMap = new Map();
+            const workflowsMap = new Map<string, Workflow>();
             let processedCount = 0;
             let skippedCount = 0;
 
@@ -561,7 +615,7 @@ function RunAppContent() {
         // No fallback - show empty state
         setPages([]);
         setCurrentPageId("");
-        setWorkflows(new Map());
+  setWorkflows(new Map<string, Workflow>());
         console.log("🔄 RUN: Error - no fallback data");
 
         setLoading(false);
@@ -587,7 +641,7 @@ function RunAppContent() {
       return idx;
     }
 
-    workflows.forEach((workflow, elementId) => {
+  workflows.forEach((workflow: Workflow, elementId: string) => {
       console.log(
         `[WF-INDEX] Processing workflow for elementId: ${elementId}, nodes: ${
           workflow.nodes?.length || 0
@@ -842,7 +896,7 @@ function RunAppContent() {
       console.warn(
         "[WF-INDEX] ⚠️ CRITICAL: Index is empty but workflows exist! Using emergency fallback indexing"
       );
-      workflows.forEach((workflow, elementId) => {
+  workflows.forEach((workflow: Workflow, elementId: string) => {
         // Index all workflows by their elementId with default "click" event
         const key = `${elementId}:click` as TriggerKey;
         idx.set(key, [workflow]);
@@ -871,14 +925,14 @@ function RunAppContent() {
 
       // Check if target page exists
       const targetPage = pages.find(
-        (p) => p.id === targetPageId || String(p.id) === targetPageId
+        (p: Page) => p.id === targetPageId || String(p.id) === targetPageId
       );
       if (!targetPage) {
         console.error(
           "[NAV] Target page not found:",
           targetPageId,
           "Available pages:",
-          pages.map((p) => p.id)
+          pages.map((p: Page) => p.id)
         );
         toast({
           title: "Navigation Error",
@@ -888,7 +942,7 @@ function RunAppContent() {
         return;
       }
 
-      setPageStack((s) => [...s, currentPageId]);
+  setPageStack((s: string[]) => [...s, currentPageId]);
       setCurrentPageId(targetPageId);
 
       // Update URL without reload
@@ -968,14 +1022,14 @@ function RunAppContent() {
   }, [toast]);
 
   const goBack = useCallback(() => {
-    setPageStack((s) => {
+    setPageStack((s: string[]) => {
       const prev = s[s.length - 1];
       if (prev) {
         console.log("[NAV] back to", prev, "stack=", s);
 
         // Check if previous page exists
         const prevPage = pages.find(
-          (p) => p.id === prev || String(p.id) === prev
+          (p: Page) => p.id === prev || String(p.id) === prev
         );
         if (!prevPage) {
           console.error("[NAV] Previous page not found:", prev);
@@ -1039,7 +1093,10 @@ function RunAppContent() {
     async (workflow: Workflow, initialContext?: any) => {
       console.log("[WF-RUN] Starting workflow execution:", {
         nodesCount: workflow.nodes.length,
-        nodeLabels: workflow.nodes.map((n) => n.data.label),
+        nodeLabels: workflow.nodes.map((n: WorkflowNode) => {
+          const label = n.data?.label;
+          return typeof label === "string" ? label : null;
+        }),
       });
 
       try {
@@ -1393,13 +1450,13 @@ function RunAppContent() {
         );
       } else {
         // Fallback: Look through all pages to find form groups with this button as submit button (legacy)
-        pages.forEach((page) => {
-          page.groups?.forEach((group) => {
+        pages.forEach((page: Page) => {
+          page.groups?.forEach((group: FormGroup) => {
             if (
               group.submitButtonId === element.id ||
               group.properties?.submitButtonId === element.id
             ) {
-              formGroupId = group.id;
+              formGroupId = group.id ? String(group.id) : null;
               console.log(
                 `[CLICK] Button ${element.id} is submit button for form group ${formGroupId} (legacy)`
               );
@@ -1418,8 +1475,8 @@ function RunAppContent() {
         const canvasFormValues = (window as any).__canvasFormValues || {};
         const uploadedFilesMap = (window as any).__uploadedFiles || {};
 
-        pages.forEach((page) => {
-          page.elements?.forEach((elem) => {
+        pages.forEach((page: Page) => {
+          page.elements?.forEach((elem: CanvasElement) => {
             if (elem.groupId === formGroupId) {
               // Get the input value from CanvasRenderer's state, fallback to element properties
               const inputValue =
@@ -1494,7 +1551,7 @@ function RunAppContent() {
           console.log(
             `[SUBMIT] Found ${submitWorkflows.length} workflow(s) for ${submitKey}`
           );
-          submitWorkflows.forEach((wf) =>
+          submitWorkflows.forEach((wf: Workflow) =>
             runWorkflow(wf, {
               elementId: element.id,
               formGroupId,
@@ -1515,7 +1572,7 @@ function RunAppContent() {
         console.log(
           `[CLICK] Found ${clickWorkflows.length} workflow(s) for ${clickKey}`
         );
-        clickWorkflows.forEach((wf) =>
+        clickWorkflows.forEach((wf: Workflow) =>
           runWorkflow(wf, { elementId: element.id })
         );
       } else if (!formGroupId) {
@@ -1527,7 +1584,7 @@ function RunAppContent() {
   // Try to find page by ID with type conversion
   const currentPage =
     pages.find(
-      (p) =>
+      (p: Page) =>
         p.id === currentPageId ||
         p.id === String(currentPageId) ||
         String(p.id) === currentPageId ||
@@ -1541,7 +1598,7 @@ function RunAppContent() {
     currentPageFound: !!currentPage,
     currentPageName: currentPage?.name,
     currentPageElementsCount: currentPage?.elements?.length || 0,
-    allPages: pages.map((p) => ({
+    allPages: pages.map((p: Page) => ({
       id: p.id,
       name: p.name,
       elementsCount: p.elements?.length || 0,
@@ -1603,8 +1660,8 @@ function RunAppContent() {
           });
 
           // Collect files for all elements in the form group
-          pages.forEach((page) => {
-            page.elements?.forEach((elem) => {
+          pages.forEach((page: Page) => {
+            page.elements?.forEach((elem: CanvasElement) => {
               if (elem.groupId === data.formGroupId) {
                 if (
                   (elem.type?.toUpperCase() === "UPLOAD" ||
@@ -1629,7 +1686,7 @@ function RunAppContent() {
             Object.keys(uploadedFiles).length
           );
 
-          formGroupWorkflows.forEach((wf) => {
+          formGroupWorkflows.forEach((wf: Workflow) => {
             runWorkflow(wf, {
               elementId,
               formData: data.formData,
@@ -1657,10 +1714,10 @@ function RunAppContent() {
 
         // Special handling for drop events
         if (eventType === "drop") {
-          workflowList.forEach((wf) => {
+          workflowList.forEach((wf: Workflow) => {
             // Find onDrop nodes in the workflow
             const onDropNodes = wf.nodes.filter(
-              (node) => node.data.label === "onDrop"
+              (node: WorkflowNode) => node.data?.label === "onDrop"
             );
             if (onDropNodes.length > 0) {
               console.log(
@@ -1680,7 +1737,9 @@ function RunAppContent() {
           });
         } else {
           // Execute all workflows for this trigger (in order)
-          workflowList.forEach((wf) => runWorkflow(wf, { elementId, data }));
+          workflowList.forEach((wf: Workflow) =>
+            runWorkflow(wf, { elementId, data })
+          );
         }
         return; // Workflow handled the event
       }
@@ -1747,7 +1806,7 @@ function RunAppContent() {
       );
 
       // Execute each onPageLoad workflow with page context
-      pageLoadWorkflows.forEach((wf, index) => {
+  pageLoadWorkflows.forEach((wf: Workflow, index: number) => {
         console.log(
           `[PAGE-LOAD] Executing workflow ${index + 1}/${
             pageLoadWorkflows.length
@@ -1780,14 +1839,14 @@ function RunAppContent() {
           name: currentPage.name,
           elementsCount: currentPage.elements?.length || 0,
           elements:
-            currentPage.elements?.map((el) => ({
+            currentPage.elements?.map((el: CanvasElement) => ({
               id: el.id,
               type: el.type,
             })) || [],
         }
       : null,
     workflowsCount: workflows.size,
-    availablePageIds: pages.map((p) => p.id),
+  availablePageIds: pages.map((p: Page) => p.id),
   });
 
   if (loading) {
@@ -1827,7 +1886,7 @@ function RunAppContent() {
           <p className="text-gray-600 mb-4">
             Available Pages:{" "}
             <code className="bg-gray-100 px-2 py-1 rounded">
-              {pages.map((p) => p.id).join(", ") || "None"}
+              {pages.map((p: Page) => p.id).join(", ") || "None"}
             </code>
           </p>
           <p className="text-gray-600 mb-4">
@@ -1889,7 +1948,7 @@ function RunAppContent() {
           >
             Test Quote
           </button>
-          {pages.map((page, index) => (
+          {pages.map((page: Page, index: number) => (
             <button
               key={page.id}
               onClick={() => {

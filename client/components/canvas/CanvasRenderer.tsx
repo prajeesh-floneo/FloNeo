@@ -2,10 +2,11 @@
 
 import React, { useState, useRef } from "react";
 import ReactDOM from "react-dom";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, Download } from "lucide-react";
 import { CanvasElement } from "./ElementManager";
 import { useCanvasWorkflow } from "@/lib/canvas-workflow-context";
 import { toRuntimeStyle, logElementRender } from "@/runtime/styleMap";
+import { normalizeMediaUrl, detectMediaKind } from "@/lib/utils";
 import { TextDisplay } from "./elements/TextDisplay";
 
 export interface CanvasRendererProps {
@@ -32,6 +33,35 @@ export interface CanvasRendererProps {
   // Workflow context for data display elements
   workflowContext?: Record<string, any>;
 }
+
+const resolveMediaSource = (element: CanvasElement): string | undefined => {
+  if (element.runtime?.media?.url) {
+    return element.runtime.media.url;
+  }
+
+  return normalizeMediaUrl(
+    element.properties?.src ||
+      element.properties?.url ||
+      element.properties?.path ||
+      element.properties?.mediaUrl
+  );
+};
+
+const resolveMediaThumbnail = (
+  element: CanvasElement
+): string | undefined => {
+  const runtimeThumb = element.runtime?.media?.thumbnail;
+  if (runtimeThumb) {
+    return runtimeThumb;
+  }
+
+  return normalizeMediaUrl(
+    element.properties?.thumbnail || element.properties?.thumbUrl
+  );
+};
+
+const resolveMediaMimeType = (element: CanvasElement): string | undefined =>
+  element.runtime?.media?.mimeType || element.properties?.mimeType;
 export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
   elements,
   selectedElement = null,
@@ -1079,7 +1109,13 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
         );
 
       case "IMAGE":
-      case "image":
+      case "image": {
+        const imageSrc = resolveMediaSource(element);
+        const altText =
+          element.properties.alt ||
+          element.properties.fileName ||
+          "Image";
+
         return (
           <div
             key={element.id}
@@ -1097,15 +1133,16 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             onMouseDown={handleMouseDown}
             {...dropProps}
           >
-            {element.properties.src ? (
+            {imageSrc ? (
               <img
-                src={element.properties.src}
-                alt={element.properties.alt || "Image"}
+                src={imageSrc}
+                alt={altText}
                 style={{
                   width: "100%",
                   height: "100%",
                   objectFit: "contain",
                 }}
+                loading="lazy"
               />
             ) : (
               <span style={{ color: "#6b7280", fontSize: "14px" }}>
@@ -1114,9 +1151,13 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             )}
           </div>
         );
+      }
 
       case "VIDEO":
-      case "video":
+      case "video": {
+        const videoSrc = resolveMediaSource(element);
+        const posterSrc = resolveMediaThumbnail(element);
+
         return (
           <div
             key={element.id}
@@ -1134,10 +1175,11 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             onMouseDown={handleMouseDown}
             {...dropProps}
           >
-            {element.properties.src ? (
+            {videoSrc ? (
               <video
-                src={element.properties.src}
+                src={videoSrc}
                 controls
+                poster={posterSrc}
                 style={{
                   width: "100%",
                   height: "100%",
@@ -1151,9 +1193,12 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             )}
           </div>
         );
+      }
 
       case "AUDIO":
-      case "audio":
+      case "audio": {
+        const audioSrc = resolveMediaSource(element);
+
         return (
           <div
             key={element.id}
@@ -1172,9 +1217,9 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             onMouseDown={handleMouseDown}
             {...dropProps}
           >
-            {element.properties.src ? (
+            {audioSrc ? (
               <audio
-                src={element.properties.src}
+                src={audioSrc}
                 controls
                 style={{
                   width: "100%",
@@ -1188,9 +1233,190 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             )}
           </div>
         );
+      }
 
       case "MEDIA":
-      case "media":
+      case "media": {
+        const mediaSrc = resolveMediaSource(element);
+        const thumbnailSrc = resolveMediaThumbnail(element);
+        const mimeType = resolveMediaMimeType(element);
+        const mediaKind = detectMediaKind(mimeType, mediaSrc);
+        const fileLabel =
+          element.properties.fileName ||
+          element.properties.label ||
+          mediaSrc?.split("/").pop() ||
+          "File";
+
+        const buildDownloadFileName = () => {
+          const fromUrl = mediaSrc?.split("/").pop()?.split("?")[0] || "";
+          const raw =
+            element.properties.fileName ||
+            element.properties.label ||
+            fromUrl ||
+            "download";
+          const sanitized = raw.replace(/[\\/:*?"<>|]+/g, "_");
+
+          if (!fromUrl) {
+            return sanitized;
+          }
+
+          const urlExtension = fromUrl.includes(".")
+            ? fromUrl.split(".").pop()?.toLowerCase()
+            : undefined;
+
+          if (!urlExtension) {
+            return sanitized;
+          }
+
+          return sanitized.toLowerCase().endsWith(`.${urlExtension}`)
+            ? sanitized
+            : `${sanitized}.${urlExtension}`;
+        };
+
+        const handleDownloadClick = async (
+          event: React.MouseEvent<HTMLButtonElement>
+        ) => {
+          event.preventDefault();
+          event.stopPropagation();
+
+          if (!mediaSrc) return;
+
+          try {
+            const directProtocols = ["blob:", "data:"];
+            if (directProtocols.some((prefix) => mediaSrc.startsWith(prefix))) {
+              const anchor = document.createElement("a");
+              anchor.href = mediaSrc;
+              anchor.download = buildDownloadFileName();
+              document.body.appendChild(anchor);
+              anchor.click();
+              document.body.removeChild(anchor);
+              return;
+            }
+
+            const token =
+              typeof window !== "undefined"
+                ? window.localStorage.getItem("authToken")
+                : null;
+
+            const response = await fetch(mediaSrc, {
+              headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+              credentials: "include",
+            });
+
+            if (!response.ok) {
+              console.error(
+                `[MEDIA] Download failed for ${element.id} with status`,
+                response.status
+              );
+              if (typeof window !== "undefined") {
+                window.open(mediaSrc, "_blank");
+              }
+              return;
+            }
+
+            const blob = await response.blob();
+            const blobUrl = URL.createObjectURL(blob);
+            const anchor = document.createElement("a");
+            anchor.href = blobUrl;
+            anchor.download = buildDownloadFileName();
+            document.body.appendChild(anchor);
+            anchor.click();
+            document.body.removeChild(anchor);
+
+            // Revoke the object URL after the browser has started the download
+            setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+          } catch (error) {
+            console.error(`[MEDIA] Download error for ${element.id}:`, error);
+            if (typeof window !== "undefined") {
+              window.open(mediaSrc, "_blank");
+            }
+          }
+        };
+
+        const renderMediaPreview = () => {
+          if (!mediaSrc) {
+            return (
+              <span style={{ color: "#6b7280", fontSize: "14px" }}>
+                No file
+              </span>
+            );
+          }
+
+          if (mediaKind === "image") {
+            return (
+              <img
+                src={thumbnailSrc || mediaSrc}
+                alt={fileLabel}
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "contain",
+                }}
+                loading="lazy"
+              />
+            );
+          }
+
+          if (mediaKind === "video") {
+            return (
+              <video
+                src={mediaSrc}
+                controls
+                poster={thumbnailSrc}
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "cover",
+                }}
+              />
+            );
+          }
+
+          if (mediaKind === "audio") {
+            return (
+              <audio
+                src={mediaSrc}
+                controls
+                style={{
+                  width: "100%",
+                }}
+              />
+            );
+          }
+
+          return (
+            <div
+              style={{
+                width: "100%",
+                height: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: "#e5e7eb",
+                borderRadius: "4px",
+              }}
+            >
+              <svg
+                style={{
+                  width: "40px",
+                  height: "40px",
+                  color: "#9ca3af",
+                }}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                />
+              </svg>
+            </div>
+          );
+        };
+
         return (
           <div
             key={element.id}
@@ -1204,65 +1430,59 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
               overflow: "hidden",
               flexDirection: "column",
               padding: "10px",
+              position: "relative",
             }}
             onClick={handleClick}
             onDoubleClick={handleDoubleClick}
             onMouseDown={handleMouseDown}
             {...dropProps}
           >
-            {element.properties.src ? (
-              <>
-                <div
-                  style={{
-                    width: "100%",
-                    height: "100%",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    backgroundColor: "#e5e7eb",
-                    borderRadius: "4px",
-                  }}
-                >
-                  <svg
-                    style={{
-                      width: "40px",
-                      height: "40px",
-                      color: "#9ca3af",
-                    }}
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                    />
-                  </svg>
-                </div>
-                <span
-                  style={{
-                    color: "#6b7280",
-                    fontSize: "12px",
-                    marginTop: "8px",
-                    textAlign: "center",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                    width: "100%",
-                  }}
-                >
-                  {element.properties.fileName || "File"}
-                </span>
-              </>
-            ) : (
-              <span style={{ color: "#6b7280", fontSize: "14px" }}>
-                No file
+            {renderMediaPreview()}
+            {mediaSrc && (
+              <span
+                style={{
+                  color: "#6b7280",
+                  fontSize: "12px",
+                  marginTop: "8px",
+                  textAlign: "center",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  width: "100%",
+                }}
+                title={fileLabel}
+              >
+                {fileLabel}
               </span>
+            )}
+            {isInPreviewMode && mediaKind === "other" && mediaSrc && (
+              <button
+                type="button"
+                onClick={handleDownloadClick}
+                title="Download file"
+                aria-label="Download file"
+                style={{
+                  position: "absolute",
+                  top: 8,
+                  right: 8,
+                  background: "rgba(255,255,255,0.92)",
+                  border: "1px solid rgba(148, 163, 184, 0.4)",
+                  borderRadius: "9999px",
+                  padding: "6px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor: "pointer",
+                  boxShadow: "0 2px 6px rgba(0,0,0,0.12)",
+                  pointerEvents: "auto",
+                }}
+              >
+                <Download size={16} color="#1f2937" />
+              </button>
             )}
           </div>
         );
+      }
 
       case "TEXT_DISPLAY":
       case "text_display":

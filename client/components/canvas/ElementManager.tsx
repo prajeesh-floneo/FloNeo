@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback } from "react";
+import type { ElementRuntimeMetadata } from "@/lib/utils";
 
 export interface CanvasElement {
   id: string;
@@ -15,6 +16,7 @@ export interface CanvasElement {
   pageId: string;
   groupId?: string;
   properties: Record<string, any>;
+  runtime?: ElementRuntimeMetadata;
 }
 
 export interface ElementManagerProps {
