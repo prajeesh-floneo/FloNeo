@@ -2,7 +2,7 @@
 
 import type React from "react";
 import { useState, useRef, useCallback, useEffect } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { authenticatedFetch, uploadFile } from "@/lib/auth";
 import { useToast } from "@/components/ui/use-toast";
 import { useCanvasWorkflow } from "@/lib/canvas-workflow-context";
@@ -126,6 +126,7 @@ function CanvasPageContent() {
   const router = useRouter();
   const nextRouter = useNextRouter();
   const searchParams = useSearchParams();
+  const pathname = usePathname(); 
   const { toast } = useToast();
   const {
     selectedElementId,
@@ -2094,63 +2095,20 @@ function CanvasPageContent() {
     initializeCanvas();
   }, [contextAppId]); // Re-run when context appId changes (for workflow split-screen)
 
-  // Split-screen mode detection and automatic panel hiding
+  // Detect split-screen mode based on URL pathname
   useEffect(() => {
-    const detectSplitScreenMode = () => {
-      if (typeof window !== "undefined") {
-        // Check if the component is rendered in a smaller container (split-screen)
-        // In split-screen, the Canvas is rendered in a 50% width container
-        const containerWidth = window.innerWidth;
-        const canvasContainer = document.querySelector(
-          ".h-screen.flex.flex-col.bg-gray-50"
-        );
+    const isSplitView = pathname === "/split-view";
 
-        if (canvasContainer) {
-          const containerRect = canvasContainer.getBoundingClientRect();
-          const isInSplitScreen = containerRect.width < containerWidth * 0.8; // Less than 80% of screen width
+    setIsSplitScreenMode(isSplitView);
 
-          if (isInSplitScreen !== isSplitScreenMode) {
-            setIsSplitScreenMode(isInSplitScreen);
-
-            // Automatically hide panels in split-screen mode
-            if (isInSplitScreen) {
-              setIsLeftPanelHidden(true);
-              setIsRightPanelHidden(true);
-            } else {
-              // Restore panels when exiting split-screen mode
-              setIsLeftPanelHidden(false);
-              setIsRightPanelHidden(false);
-            }
-          }
-        }
-      }
-    };
-
-    // Initial detection
-    detectSplitScreenMode();
-
-    // Set up resize observer to detect container size changes
-    let resizeObserver: ResizeObserver | null = null;
-
-    if (typeof window !== "undefined" && window.ResizeObserver) {
-      const canvasContainer = document.querySelector(
-        ".h-screen.flex.flex-col.bg-gray-50"
-      );
-      if (canvasContainer) {
-        resizeObserver = new ResizeObserver(() => {
-          detectSplitScreenMode();
-        });
-        resizeObserver.observe(canvasContainer);
-      }
+    if (isSplitView) {
+      setIsLeftPanelHidden(true);
+      setIsRightPanelHidden(true);
+    } else {
+      setIsLeftPanelHidden(false);
+      setIsRightPanelHidden(false);
     }
-
-    // Cleanup
-    return () => {
-      if (resizeObserver) {
-        resizeObserver.disconnect();
-      }
-    };
-  }, [isSplitScreenMode]); // Re-run when split-screen mode changes
+  }, [pathname]); // ✅ only depend on pathname
 
   const updateCanvasBackground = (
     background: Partial<Page["canvasBackground"]>
@@ -5665,7 +5623,7 @@ function CanvasPageContent() {
   };
 
   return (
-    <div className="h-screen w-full flex flex-col bg-gray-50 dark:bg-gray-900 overflow-hidden">
+    <div className="h-full w-full flex flex-col bg-gray-50 dark:bg-gray-900">
       {/* Header */}
       
 
@@ -5905,6 +5863,7 @@ function CanvasPageContent() {
                   {/* View Options */}
                   <div className="flex items-center space-x-1">
                     <Button
+                      className={isSplitScreenMode?"cursor-not-allowed opacity-50":""}
                       size="sm"
                       variant={isLeftPanelHidden ? "default" : "outline"}
                       title="Hide Elements Panel"
@@ -5922,6 +5881,7 @@ function CanvasPageContent() {
                       />
                     </Button>
                     <Button
+                      className={isSplitScreenMode?"cursor-not-allowed opacity-50":""}
                       size="sm"
                       variant={isRightPanelHidden ? "default" : "outline"}
                       title="Hide Properties Panel"

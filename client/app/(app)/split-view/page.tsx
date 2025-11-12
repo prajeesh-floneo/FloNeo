@@ -11,6 +11,7 @@ import dynamic from "next/dynamic";
 import { WorkflowHeader } from "@/components/Header";
 import { DataScreen } from "@/workflow-builder/components/data-screen";
 import { WorkflowBuilderSample } from "@/workflow-builder/components/workflow-builder-sample";
+import { WorkflowBuilder } from "@/workflow-builder/components/workflow-builder";
 // import { WorkflowBuilder } from "@/workflow-builder/components/workflow-builder";
 
 // Import Canvas dynamically
@@ -57,6 +58,7 @@ export default function WorkflowParent() {
           {/* Workflow - Right Half */}
           <div className="w-1/2">
             <WorkflowBuilderSample />
+            {/* <WorkflowBuilder/> */}
           </div>
         </div>
       );
@@ -75,7 +77,7 @@ export default function WorkflowParent() {
   };
 
   return (
-    <div className="flex flex-col h-screen bg-background text-foreground">
+    <div className="flex flex-col h-full bg-background text-foreground">
 
       {/* Content Area */}
       <div className="flex-1 overflow-hidden">{renderContent()}</div>

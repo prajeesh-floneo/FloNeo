@@ -37,7 +37,7 @@ const cx = (...cls: (string | false | null | undefined)[]) =>
 function RightPanel({
   isOpen,
   onToggle,
-  mode, // "sidebar" | "horizontal" | "vertical"
+  mode,
   rightPanelTab,
   setRightPanelTab,
   filters,
@@ -52,115 +52,90 @@ function RightPanel({
   setFilters: (f: any) => void;
 }) {
   const isHorizontal = mode === "horizontal";
-  const expandedSize = isHorizontal ? "h-80" : "w-96";
-  const collapsedRail = isHorizontal ? "h-8" : "w-3";
 
-  return (
-    <div
-      className={cx(
-        "relative flex shrink-0 bg-card/30",
-        isHorizontal ? "w-full" : "min-h-full",
-        !isHorizontal && "border-l border-border"
-      )}
-      style={{ transition: "all 200ms ease" }}
-    >
-      {/* Collapsed rail (stays visible) */}
-      {!isOpen && (
-        <div
-          className={cx(
-            "flex items-center justify-center bg-muted/40 hover:bg-muted/60 transition-colors",
-            collapsedRail,
-            isHorizontal ? "w-full border-t border-border" : "h-full"
-          )}
-        >
-          <button
-            onClick={onToggle}
-            className="group inline-flex items-center justify-center rounded-md p-1.5 text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-            aria-label="Expand panel"
-            title="Expand"
-          >
-            <ArrowRightIcon
-              className={cx(
-                "h-4 w-4 transition-transform",
-                !isHorizontal && "rotate-180 group-hover:translate-x-0.5"
-              )}
-            />
-          </button>
-        </div>
-      )}
-
-      {/* Panel with animated size */}
+  // When collapsed, show a thin rail
+  if (!isOpen) {
+    return (
       <div
         className={cx(
-          "overflow-hidden transition-all duration-200 ease",
-          isOpen ? expandedSize : isHorizontal ? "h-0" : "w-0"
+          "flex items-center justify-center bg-muted/40 hover:bg-muted/60 transition-colors border-l border-border",
+          isHorizontal ? "h-8 w-full" : "w-12 h-full"
         )}
       >
-        <div
-          className={cx(
-            "flex h-full w-full flex-col",
-            isHorizontal ? "" : "min-w-[16rem]"
-          )}
+        <button
+          onClick={onToggle}
+          className="group inline-flex items-center justify-center rounded-md p-1.5 text-muted-foreground hover:text-foreground"
+          aria-label="Expand panel"
         >
-          {/* Header */}
-          <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/30 px-3 py-2">
-            <div className="flex rounded-md bg-muted p-1">
-              <button
-                onClick={() => setRightPanelTab("blocks")}
-                className={cx(
-                  "px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
-                  rightPanelTab === "blocks"
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                Blocks
-              </button>
-              <button
-                onClick={() => setRightPanelTab("templates")}
-                className={cx(
-                  "px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
-                  rightPanelTab === "templates"
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                Templates
-              </button>
-            </div>
+          <ArrowRightIcon
+            className={cx(
+              "h-4 w-4 transition-transform",
+              !isHorizontal && "rotate-180 group-hover:translate-x-0.5"
+            )}
+          />
+        </button>
+      </div>
+    );
+  }
 
-            <button
-              onClick={onToggle}
-              className="inline-flex items-center rounded-md border border-border bg-background px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50"
-              aria-label="Collapse panel"
-              title="Collapse"
-            >
-              <ArrowRightIcon className="h-4 w-4 rotate-180" />
-            </button>
-          </div>
-
-          {/* Filters */}
-          {rightPanelTab === "blocks" && (
-            <div className="border-b border-border p-3">
-              <FilterPanel filters={filters} onFiltersChange={setFilters} />
-            </div>
-          )}
-
-          {/* Content */}
-          <div className="flex-1 overflow-hidden">
-            <div className="h-full overflow-auto">
-              {rightPanelTab === "blocks" ? (
-                <BlockLibrary filters={filters} />
-              ) : (
-                <TemplateLibrary />
-              )}
-            </div>
-          </div>
+  // When open, show full panel
+  return (
+    <div className="w-96 flex flex-col bg-card/30">
+      {/* Header with tabs and close button */}
+      <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/30 px-3 py-2">
+        <div className="flex rounded-md bg-muted p-1">
+          <button
+            onClick={() => setRightPanelTab("blocks")}
+            className={cx(
+              "px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
+              rightPanelTab === "blocks"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            Blocks
+          </button>
+          <button
+            onClick={() => setRightPanelTab("templates")}
+            className={cx(
+              "px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
+              rightPanelTab === "templates"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            Templates
+          </button>
         </div>
+
+        <button
+          onClick={onToggle}
+          className="inline-flex items-center rounded-md border border-border bg-background px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50"
+          aria-label="Collapse panel"
+        >
+          <ArrowRightIcon className="h-4 w-4 rotate-180" />
+        </button>
+      </div>
+
+      {/* Filters - only show for blocks tab */}
+      {rightPanelTab === "blocks" && (
+        <div className="p-4 border-b border-border">
+          <FilterPanel filters={filters} onFiltersChange={setFilters} />
+        </div>
+      )}
+
+      {/* Content area - takes remaining height and scrolls */}
+      <div className="flex-1 overflow-hidden">
+        {rightPanelTab === "blocks" ? (
+          <BlockLibrary filters={filters} />
+        ) : (
+          <TemplateLibrary />
+        )}
       </div>
     </div>
   );
 }
+
 
 function WorkflowBuilderContent() {
   const router = useRouter();
@@ -266,6 +241,8 @@ function WorkflowBuilderContent() {
     setIsCanvasWorkflowSplit((prev) => !prev);
   const handleSideBar = () => setIsSidebarOpen((v) => !v);
 
+
+  // Status Bar --->
   const statusBar = (
     <div className="flex items-center justify-between gap-4 border-b border-border bg-muted/30 px-4 py-3">
       <div className="flex items-center gap-2">
@@ -280,17 +257,6 @@ function WorkflowBuilderContent() {
       </div>
 
       <div className="flex items-center gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            const id = searchParams.get("appId");
-            router.push(`/canvas${id ? `?appId=${id}` : ""}`);
-          }}
-        >
-          <ArrowLeft className="mr-2 h-4 w-4" />
-          Back
-        </Button>
 
         {/* Always-visible sidebar toggle */}
         <Button variant="outline" size="sm" onClick={handleSideBar}>
@@ -305,31 +271,19 @@ function WorkflowBuilderContent() {
           </span>
         </Button>
 
-        <ThemeToggle />
-
-        <Button
-          size="sm"
-          onClick={() => {
-            const id = searchParams.get("appId") || "2";
-            window.open(`/run?appId=${id}`, "_blank");
-          }}
-        >
-          <Play className="mr-2 h-4 w-4" />
-          Run App
-        </Button>
-
         <Button
           size="sm"
           className="bg-blue-600 text-white hover:bg-blue-700"
           onClick={handleSaveWorkflow}
         >
           <Save className="mr-1 h-3.5 w-3.5" />
-          Save Workflow
+          Save
         </Button>
       </div>
     </div>
   );
 
+  // Canvas Section --->
   const canvasSection = (
     <div className="flex flex-1 flex-col">
       {statusBar}
@@ -356,6 +310,8 @@ function WorkflowBuilderContent() {
     </div>
   );
 
+
+  // Right Panel --->
   const panel = (
     <RightPanel
       isOpen={isSidebarOpen}
@@ -432,7 +388,7 @@ function WorkflowBuilderContent() {
   };
 
   return (
-    <div className="flex h-screen bg-background text-foreground">
+    <div className="flex h-full bg-background text-foreground">
       <div className="flex flex-1 flex-col">
         <div className="flex-1 overflow-hidden">{renderMainContent()}</div>
       </div>
@@ -442,8 +398,8 @@ function WorkflowBuilderContent() {
 
 export function WorkflowBuilder() {
   return (
-    <CanvasWorkflowProvider>
+    // <CanvasWorkflowProvider>
       <WorkflowBuilderContent />
-    </CanvasWorkflowProvider>
+    // </CanvasWorkflowProvider>
   );
 }

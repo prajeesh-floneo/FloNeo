@@ -4,7 +4,7 @@ import { WorkflowBuilder } from "../../../workflow-builder/components/workflow-b
 
 export default function WorkflowPage() {
   return (
-    <div className="h-screen bg-background">
+    <div className="h-full bg-background">
       <WorkflowBuilder />
     </div>
   )
