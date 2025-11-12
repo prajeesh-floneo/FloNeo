@@ -426,16 +426,17 @@ router.get(
           message: `Table "${tableName}" exists in metadata but not yet created by workflow`,
         });
       }
-
-      let safeColumns = [];
-      try {
-        safeColumns =
-          typeof userTable.columns === "string"
-            ? JSON.parse(userTable.columns)
-            : userTable.columns;
-      } catch {
-        safeColumns = [];
-      }
+      
+      //Remove This Due To Duplication Error OF SafeColumn
+      // let safeColumns = [];
+      // try {
+      //   safeColumns =
+      //     typeof userTable.columns === "string"
+      //       ? JSON.parse(userTable.columns)
+      //       : userTable.columns;
+      // } catch {
+      //   safeColumns = [];
+      // }
 
       console.log(
         `[DATABASE] Data fetched for table=${tableName} successfully`
