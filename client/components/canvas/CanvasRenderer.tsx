@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { CanvasElement } from "./ElementManager";
 import { useCanvasWorkflow } from "@/lib/canvas-workflow-context";
 import { toRuntimeStyle, logElementRender } from "@/runtime/styleMap";
+import { ChartElement } from "./ChartElement";
 
 export interface CanvasRendererProps {
   elements: CanvasElement[];
@@ -593,7 +594,30 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             <span>{element.properties?.label || "Checkbox"}</span>
           </label>
         );
-
+      case "chart-bar":
+      case "chart-line":
+      case "chart-pie":
+      case "chart-donut":
+      case "CHART_BAR":
+      case "CHART_LINE":
+      case "CHART_PIE":
+      case "CHART_DONUT":
+        return (
+          <div
+            key={element.id}
+            style={interactiveStyle}
+            {...dropProps}
+            onClick={mode === "preview" ? undefined : handleClick}
+            onDoubleClick={isInPreviewMode ? undefined : handleDoubleClick}
+            onMouseDown={isInPreviewMode ? undefined : handleMouseDown}
+          >
+            <ChartElement
+              type={element.type}
+              properties={element.properties}
+              showHeader={element.properties?.showHeader ?? true}
+            />
+          </div>
+        );
       case "RADIO_BUTTON":
         return (
           <label

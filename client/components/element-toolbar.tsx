@@ -31,6 +31,10 @@ import {
   Lock,
   Eye,
   Unlock,
+  BarChart3,
+  LineChart,
+  PieChart,
+  Donut,
   // Icon category icons
   Minimize2,
   Maximize2,
@@ -284,6 +288,36 @@ export function ElementToolbar({
       description: "Section divider",
     },
 
+    // Dashboard Elements
+    {
+      type: "chart-bar",
+      icon: BarChart3,
+      label: "Bar Chart",
+      category: "dashboard",
+      description: "Compare categories with bars",
+    },
+    {
+      type: "chart-line",
+      icon: LineChart,
+      label: "Line Chart",
+      category: "dashboard",
+      description: "Trend line across time",
+    },
+    {
+      type: "chart-pie",
+      icon: PieChart,
+      label: "Pie Chart",
+      category: "dashboard",
+      description: "Show proportion breakdown",
+    },
+    {
+      type: "chart-donut",
+      icon: Donut,
+      label: "Donut Chart",
+      category: "dashboard",
+      description: "Ring-style share chart",
+    },
+
     // Icon Elements - Window Controls
     {
       type: "icon-minimize",
@@ -447,7 +481,7 @@ export function ElementToolbar({
       id: "dashboard" as const,
       label: "Dashboard",
       icon: Settings,
-      description: "Dashboard components (coming soon)",
+      description: "Chart widgets and analytics",
     },
   ];
 

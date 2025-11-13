@@ -60,6 +60,7 @@ import {
 import { ThemeToggle } from "@/components/theme-toggle";
 import { PublishModal } from "@/components/publish-modal";
 import DatabaseTab from "@/components/canvas/database-tab";
+import  ChartElement  from "@/components/canvas/ChartElement";
 
 interface CanvasElement {
   id: string;
@@ -348,6 +349,10 @@ function CanvasPageContent() {
       ICON_INFO: "icon-info",
       ICON_HELP: "icon-help",
       ICON_SEARCH: "icon-search",
+      CHART_BAR: "chart-bar",
+      CHART_LINE: "chart-line",
+      CHART_PIE: "chart-pie",
+      CHART_DONUT: "chart-donut",
     };
     return typeMap[backendType] || "rectangle";
   };
@@ -3346,6 +3351,10 @@ function CanvasPageContent() {
       "icon-home": { width: 32, height: 32 },
       "icon-back": { width: 32, height: 32 },
       "icon-forward": { width: 32, height: 32 },
+      "chart-bar": { width: 360, height: 240 },
+      "chart-line": { width: 360, height: 240 },
+      "chart-pie": { width: 320, height: 240 },
+      "chart-donut": { width: 320, height: 240 },
     };
     return sizes[elementType] || { width: 100, height: 100 };
   };
@@ -3398,77 +3407,159 @@ function CanvasPageContent() {
       phone: {
         placeholder: "Phone number",
         value: "",
-        backgroundColor: "#ffffff",
-        color: "#000000",
-        borderColor: "#d1d5db",
-        borderWidth: 1,
-        borderRadius: 6,
-        padding: "8px 12px",
-        fontSize: 14,
-        fontFamily: "Poppins, system-ui, sans-serif",
       },
       password: {
-        placeholder: "Enter password",
+        placeholder: "Password",
         value: "",
-        backgroundColor: "#ffffff",
-        color: "#000000",
-        borderColor: "#d1d5db",
-        borderWidth: 1,
-        borderRadius: 6,
-        padding: "8px 12px",
-        fontSize: 14,
-        fontFamily: "Poppins, system-ui, sans-serif",
-        required: false,
-        minLength: 8,
-        maxLength: 128,
       },
-      calendar: { value: "" },
-      upload: {},
-      addfile: {},
-      media: {},
+      calendar: {
+        placeholder: "Select date",
+        value: "",
+      },
+      upload: {
+        placeholder: "Upload file",
+      },
+      addfile: {
+        placeholder: "Drop files here",
+      },
+      media: {
+        src: "",
+        alt: "Media",
+      },
       image: {
         src: "",
         alt: "Image",
-        objectFit: "cover",
       },
       video: {
         src: "",
-        controls: true,
-        autoplay: false,
-        muted: false,
       },
       audio: {
         src: "",
-        controls: true,
-        autoplay: false,
       },
-      rectangle: { backgroundColor: "#ffffff", borderRadius: 0 },
-      circle: { backgroundColor: "#ffffff" },
-      triangle: { backgroundColor: "#ffffff" },
-      line: { backgroundColor: "#000000" },
-      arrow: { backgroundColor: "#000000" },
-      star: { backgroundColor: "#fbbf24" },
-      heart: { backgroundColor: "#ef4444" },
-      frame: { backgroundColor: "#f3f4f6", borderRadius: 8, name: "Frame" },
-      divider: { backgroundColor: "#d1d5db" },
-      // Icon elements - all icons have similar default properties
-      "icon-minimize": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-maximize": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-close": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-settings": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-refresh": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-info": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-help": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-search": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-add": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-edit": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-delete": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-save": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-download": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-upload": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-home": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-back": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-forward": { color: "#6b7280", backgroundColor: "transparent" },
+      rectangle: {
+        backgroundColor: "#f3f4f6",
+        borderColor: "#d1d5db",
+        borderWidth: 1,
+      },
+      circle: {
+        backgroundColor: "#f3f4f6",
+        borderColor: "#d1d5db",
+        borderWidth: 1,
+      },
+      triangle: {
+        backgroundColor: "#f3f4f6",
+        borderColor: "#d1d5db",
+        borderWidth: 1,
+      },
+      line: {
+        strokeColor: "#1f2937",
+        strokeWidth: 2,
+        strokeStyle: "solid",
+      },
+      arrow: {
+        strokeColor: "#1f2937",
+        strokeWidth: 2,
+        strokeStyle: "solid",
+      },
+      star: {
+        backgroundColor: "#facc15",
+        borderColor: "#f59e0b",
+        borderWidth: 1,
+      },
+      heart: {
+        backgroundColor: "#f472b6",
+        borderColor: "#f43f5e",
+        borderWidth: 1,
+      },
+      frame: {
+        backgroundColor: "#ffffff",
+        borderColor: "#d1d5db",
+        borderWidth: 1,
+      },
+      divider: {
+        strokeColor: "#d1d5db",
+        strokeWidth: 1,
+      },
+      "chart-bar": {
+        title: "Monthly Revenue",
+        description: "Example dataset for drag & drop preview",
+        chartType: "bar",
+        xKey: "month",
+        legend: true,
+        showGrid: true,
+        showAxis: true,
+        series: [
+          { dataKey: "desktop", label: "Desktop" },
+          { dataKey: "mobile", label: "Mobile" },
+        ],
+        colors: ["#2563eb", "#7c3aed", "#22c55e"],
+        data: [
+          { month: "Jan", desktop: 186, mobile: 80 },
+          { month: "Feb", desktop: 305, mobile: 200 },
+          { month: "Mar", desktop: 237, mobile: 120 },
+          { month: "Apr", desktop: 173, mobile: 190 },
+          { month: "May", desktop: 209, mobile: 130 },
+          { month: "Jun", desktop: 214, mobile: 140 },
+        ],
+      },
+      "chart-line": {
+        title: "Active Users",
+        description: "Example trend line",
+        chartType: "line",
+        xKey: "month",
+        legend: true,
+        showGrid: true,
+        showAxis: true,
+        strokeCurve: "monotone",
+        series: [
+          { dataKey: "desktop", label: "Desktop", strokeWidth: 3 },
+          { dataKey: "mobile", label: "Mobile", strokeWidth: 3 },
+        ],
+        colors: ["#2563eb", "#7c3aed", "#f97316"],
+        data: [
+          { month: "Jan", desktop: 120, mobile: 80 },
+          { month: "Feb", desktop: 160, mobile: 110 },
+          { month: "Mar", desktop: 200, mobile: 140 },
+          { month: "Apr", desktop: 180, mobile: 150 },
+          { month: "May", desktop: 220, mobile: 170 },
+          { month: "Jun", desktop: 260, mobile: 210 },
+        ],
+      },
+      "chart-pie": {
+        title: "Traffic Sources",
+        description: "Distribution example",
+        chartType: "pie",
+        nameKey: "category",
+        valueKey: "value",
+        legend: true,
+        donut: false,
+        colors: ["#2563eb", "#7c3aed", "#22c55e", "#f97316", "#eab308"],
+        data: [
+          { category: "Organic", value: 45 },
+          { category: "Paid", value: 25 },
+          { category: "Referral", value: 15 },
+          { category: "Social", value: 10 },
+          { category: "Email", value: 5 },
+        ],
+      },
+      "chart-donut": {
+        title: "Plan Usage",
+        description: "Relative share of plans",
+        chartType: "donut",
+        nameKey: "plan",
+        valueKey: "value",
+        legend: true,
+        donut: true,
+        innerRadius: "55%",
+        outerRadius: "80%",
+        colors: ["#2563eb", "#7c3aed", "#22c55e", "#f97316"],
+        data: [
+          { plan: "Free", value: 40 },
+          { plan: "Starter", value: 25 },
+          { plan: "Pro", value: 22 },
+          { plan: "Enterprise", value: 13 },
+        ],
+      },
     };
     return defaults[elementType] || {};
   };
@@ -4496,7 +4587,26 @@ function CanvasPageContent() {
               )}
             </div>
           );
-
+        case "button":
+          return (
+            <button
+              style={style}
+              className="px-4 py-2 w-full h-full font-medium"
+            >
+              {element.properties.text || "Button"}
+            </button>
+          );
+        case "chart-bar":
+        case "chart-line":
+        case "chart-pie":
+        case "chart-donut":
+          return (
+            <ChartElement
+              type={element.type}
+              properties={element.properties}
+              showHeader={element.properties?.showHeader ?? true}
+            />
+          );
         default:
           return (
             <div
