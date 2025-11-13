@@ -1,0 +1,49 @@
+[33mb01f00c[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m fixed code having work of 10,11 nov,onwebhooks all things except media only
+[33md034785[m WIP: save local edits before cherry-pick
+[33md0f44bf[m upadted and resolved branch till now except media section fiix
+[33me7c6d8b[m local fix before cherry-pick 306aa40
+[33maea3e78[m save local work before cherry-picking 306aa40
+[33m2b824c9[m resolve conflicts after cherry-pick and stash pop
+[33m65711c8[m 10 nov task
+[33m5bf6e49[m Merged upstream/main, kept all upstream changes
+[33mab1915b[m Fix: Resolve Create Table modal not opening due to early return issue
+[33m39c448f[m Fix: Add missing FileText icon import for TextDisplay element
+[33ma60289c[m Restore missing UI features: Add TextDisplay element to canvas and Create Table functionality to database page
+[33m8fa9d74[m Merge branch 'int-ronak'
+[33md3af3df[m[33m ([m[1;31morigin/int-ronak[m[33m)[m Fix: Add gcompat package to Dockerfile for Next.js SWC compatibility
+[33m2df29c7[m CRITICAL FIX: Add type field to db.find results and fix context merging in workflow execution
+[33m341671f[m Restore advanced db.find UI with Simple/Advanced mode tabs and guided configuration options
+[33m62728fb[m Merge branch 'int-ronak'
+[33m857be0a[m Clean up documentation files and add database API routes with UI improvements
+[33m0f61c79[m Merge branch 'int-ronak'
+[33mb7bb5a6[m Add missing TextDisplay.tsx element file to canvas/elements directory
+[33m7310778[m Merge branch 'int-ronak'
+[33mcab638d[m Fix: Resolve circular reference error in workflow execution and implement complete workflow support in preview mode
+[33m306aa40[m fixed app name issue changed client/app/canvas/page.tsx,app/dashboard.tsx,components/rename-modal.tsx,queueWorker.js
+[33m000b9a8[m Modified workflow files and added queueWorker, webhook tests, and workflow queue utility
+[33m6aa31c4[m Backend Code Updated To Check All Backend Logic
+[33m5ee1341[m[33m ([m[1;31morigin/int-shobit[m[33m, [m[1;31morigin/int-prince[m[33m, [m[1;31morigin/int-kaushal[m[33m, [m[1;31morigin/int-aditya[m[33m)[m Add: Docker line endings fix complete - verified with fresh clone from GitHub
+[33mb9b05b0[m Fix: Correct shell syntax in start.sh - add quotes around echo variables
+[33m124d3ce[m CRITICAL: Fix start.sh line endings permanently with .gitattributes
+[33mf475c4e[m Add: Critical fix complete documentation - all issues resolved and verified
+[33mc7c6719[m CRITICAL FIX: Fix start.sh line endings and add pg_isready for proper database wait
+[33m8b48e49[m Add: Final Docker fix summary - all issues resolved and documented
+[33mca41844[m Add: Simple Docker instructions for teammates
+[33mdcbdf73[m Add: Comprehensive Docker setup guide for teammates
+[33m20e2094[m Docs: Update .env.example with Docker hostname instructions
+[33m8670ed0[m Fix: Critical Docker issues - start.sh copy and database connection
+[33m6c5bf88[m Add: Final Docker setup success report - all issues resolved and verified
+[33m2980c5e[m Clean: Remove old documentation files - replaced with updated guides
+[33m93d112f[m Fix: Remove health check from docker-compose - rely on Dockerfile health check only
+[33mca36eb6[m Add: Docker setup success documentation - all issues resolved
+[33m2bb55cc[m Fix: Critical Docker startup issues - database initialization and health checks
+[33ma8ce010[m Initial commit
+[33m8f9026c[m Add: Final summary document for project owner
+[33m245bf6e[m Add: Comprehensive step-by-step setup guides for teammates
+[33mddf3c5a[m Add: Comprehensive Docker verification and success confirmation documents
+[33m3f9cb53[m Add: Final comprehensive summary of Docker build failure fix
+[33m39de969[m Add: Comprehensive Docker fix documentation for teammates
+[33me64fdb6[m Fix: Critical Docker build failure - invalid npm flags and missing package-lock.json
+[33m0cfb2e3[m Fix: Docker issues + cleanup old documentation
+[33mc284d6c[m Fix: Docker issues + cleanup old documentation
+[33m955a40b[m Initial commit: FloNeo monorepo - Complete full-stack application with backend (Express.js) and frontend (Next.js 14)
