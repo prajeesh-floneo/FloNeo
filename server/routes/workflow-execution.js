@@ -385,64 +385,8 @@ const executeIsFilled = async (node, context, appId) => {
   }
 };
 
-// OnClick block handler
-// const executeOnClick = async (node, context, appId) => {
-//   try {
-//     console.log("🖱️ [ON-CLICK] Processing click event for app:", appId);
 
-//     const clickConfig = node.data || {};
-//     const { elementId, clickData } = context;
-
-//     console.log("🖱️ [ON-CLICK] Click configuration:", {
-//       targetElementId: clickConfig.targetElementId,
-//       elementId: elementId,
-//       clickData: clickData,
-//     });
-
-//     // Validate click event
-//     if (!elementId) {
-//       return {
-//         success: false,
-//         error: "No element ID provided in click event",
-//         context: context,
-//       };
-//     }
-
-//     // Check if this click is for the configured element (if specified)
-//     if (
-//       clickConfig.targetElementId &&
-//       clickConfig.targetElementId !== elementId
-//     ) {
-//       console.log("🖱️ [ON-CLICK] Click not for target element, skipping");
-//       return {
-//         success: false,
-//         error: "Click not for target element",
-//         context: context,
-//       };
-//     }
-
-//     console.log("✅ [ON-CLICK] Click event processed successfully");
-//     return {
-//       success: true,
-//       message: "Click event processed",
-//       context: {
-//         ...context,
-//         clickProcessed: true,
-//         clickElementId: elementId,
-//         clickTimestamp: new Date().toISOString(),
-//       },
-//     };
-//   } catch (error) {
-//     console.error("❌ [ON-CLICK] Error processing click:", error);
-//     return {
-//       success: false,
-//       error: error.message,
-//       context: context,
-//     };
-//   }
-// };
-
-//onClick
+//onClick Handler
 const executeOnClick = async (node, context, appId) => {
   try {
     console.log("🖱️ [ON-CLICK] Processing click event for app:", appId);
@@ -536,6 +480,52 @@ const executeOnPageLoad = async (node, context, appId) => {
     };
   } catch (error) {
     console.error("❌ [ON-PAGE-LOAD] Error processing page load:", error);
+    return {
+      success: false,
+      error: error.message,
+      context: context,
+    };
+  }
+};
+
+// OnWebhook block handler
+const executeOnWebhook = async (node, context, appId, userId) => {
+  try {
+    console.log("🔗 [ON-WEBHOOK] Processing webhook trigger for app:", appId);
+
+    // Webhook data should be in context (passed from webhook endpoint)
+    const webhookPayload = context.webhookPayload || context.payload || context.data || {};
+    const webhookHeaders = context.webhookHeaders || {};
+
+    console.log("🔗 [ON-WEBHOOK] Webhook payload received:", {
+      payloadKeys: Object.keys(webhookPayload),
+      hasHeaders: !!webhookHeaders,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Log the payload for debugging
+    console.log("✅ [ON-WEBHOOK] Webhook received:", webhookPayload);
+
+    // Add webhook data to context for subsequent blocks
+    const updatedContext = {
+      ...context,
+      webhookPayload,
+      webhookHeaders,
+      webhookReceivedAt: new Date().toISOString(),
+      // Also add payload data at root level for easy access in other blocks
+      ...webhookPayload,
+    };
+
+    console.log("✅ [ON-WEBHOOK] Webhook trigger processed successfully");
+
+    return {
+      success: true,
+      message: "Webhook received and processed",
+      context: updatedContext,
+      webhookData: webhookPayload,
+    };
+  } catch (error) {
+    console.error("❌ [ON-WEBHOOK] Error processing webhook:", error);
     return {
       success: false,
       error: error.message,
@@ -4795,128 +4785,128 @@ const executeOnLogin = async (node, context, appId) => {
 };
 
 
-// OnWebhook trigger handler
-const executeOnWebhook = async (node, context, appId, userId = 1) => {
-  try {
-    console.log("📬 [ON-WEBHOOK] Processing webhook trigger for app:", appId);
+// // OnWebhook trigger handler
+// const executeOnWebhook = async (node, context, appId, userId = 1) => {
+//   try {
+//     console.log("📬 [ON-WEBHOOK] Processing webhook trigger for app:", appId);
 
-    // Validate app access (don't strictly require userId for public webhooks, but keep check for owner-scoped triggers)
-    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
-    if (!hasAccess) {
-      // If access denied because no user context, still allow if node.data.allowPublic === true
-      if (!node.data || node.data.allowPublic !== true) {
-        throw new Error("Access denied to this app for webhook trigger");
-      }
-    }
+//     // Validate app access (don't strictly require userId for public webhooks, but keep check for owner-scoped triggers)
+//     const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
+//     if (!hasAccess) {
+//       // If access denied because no user context, still allow if node.data.allowPublic === true
+//       if (!node.data || node.data.allowPublic !== true) {
+//         throw new Error("Access denied to this app for webhook trigger");
+//       }
+//     }
 
-    const cfg = node.data || {};
+//     const cfg = node.data || {};
 
-    // Expect payload to be available in context under common keys
-    const payload =
-      context.webhookPayload || context.payload || context.body || context.requestBody || context.event || null;
+//     // Expect payload to be available in context under common keys
+//     const payload =
+//       context.webhookPayload || context.payload || context.body || context.requestBody || context.event || null;
 
-    const headers = context.headers || context.requestHeaders || context.httpHeaders || {};
+//     const headers = context.headers || context.requestHeaders || context.httpHeaders || {};
 
-    console.log("📬 [ON-WEBHOOK] Payload present:", !!payload);
+//     console.log("📬 [ON-WEBHOOK] Payload present:", !!payload);
 
-    // Optional secret/header validation configured on the block
-    if (cfg.secretHeader && cfg.secretValue) {
-      const provided = headers[cfg.secretHeader.toLowerCase()] || headers[cfg.secretHeader];
-      const expected = substituteContextVariables(cfg.secretValue, context);
-      if (!provided || provided !== expected) {
-        console.warn("❌ [ON-WEBHOOK] Secret header validation failed for header:", cfg.secretHeader);
-        return {
-          success: false,
-          triggered: false,
-          error: "Invalid webhook secret",
-          context: { ...context, webhookRejected: true },
-        };
-      }
-    }
+//     // Optional secret/header validation configured on the block
+//     if (cfg.secretHeader && cfg.secretValue) {
+//       const provided = headers[cfg.secretHeader.toLowerCase()] || headers[cfg.secretHeader];
+//       const expected = substituteContextVariables(cfg.secretValue, context);
+//       if (!provided || provided !== expected) {
+//         console.warn("❌ [ON-WEBHOOK] Secret header validation failed for header:", cfg.secretHeader);
+//         return {
+//           success: false,
+//           triggered: false,
+//           error: "Invalid webhook secret",
+//           context: { ...context, webhookRejected: true },
+//         };
+//       }
+//     }
 
-    // Optional filter: allow matching by event type or path
-    let matched = true;
-    if (cfg.matchPath && payload) {
-      // Extract nested value from payload using dot-path
-      const parts = cfg.matchPath.split('.');
-      let v = payload;
-      for (const p of parts) {
-        v = v?.[p];
-        if (v === undefined) break;
-      }
-      if (cfg.matchValue !== undefined && String(v) !== String(substituteContextVariables(cfg.matchValue, context))) {
-        matched = false;
-      }
-    }
+//     // Optional filter: allow matching by event type or path
+//     let matched = true;
+//     if (cfg.matchPath && payload) {
+//       // Extract nested value from payload using dot-path
+//       const parts = cfg.matchPath.split('.');
+//       let v = payload;
+//       for (const p of parts) {
+//         v = v?.[p];
+//         if (v === undefined) break;
+//       }
+//       if (cfg.matchValue !== undefined && String(v) !== String(substituteContextVariables(cfg.matchValue, context))) {
+//         matched = false;
+//       }
+//     }
 
-    if (!payload) {
-      console.warn('⚠️ [ON-WEBHOOK] No payload found in context for webhook trigger');
-      return {
-        success: false,
-        triggered: false,
-        error: 'No webhook payload provided',
-        context,
-      };
-    }
+//     if (!payload) {
+//       console.warn('⚠️ [ON-WEBHOOK] No payload found in context for webhook trigger');
+//       return {
+//         success: false,
+//         triggered: false,
+//         error: 'No webhook payload provided',
+//         context,
+//       };
+//     }
 
-    if (!matched) {
-      console.log('ℹ️ [ON-WEBHOOK] Payload did not match configured filter, skipping trigger');
-      return {
-        success: true,
-        triggered: false,
-        matched: false,
-        context: { ...context, webhookMatched: false },
-      };
-    }
+//     if (!matched) {
+//       console.log('ℹ️ [ON-WEBHOOK] Payload did not match configured filter, skipping trigger');
+//       return {
+//         success: true,
+//         triggered: false,
+//         matched: false,
+//         context: { ...context, webhookMatched: false },
+//       };
+//     }
 
-    // Optionally persist webhook payload to an app-scoped table if configured
-    if (cfg.saveToTable) {
-      try {
-        const tableName = generateTableName(appId, cfg.saveToTable || 'webhooks');
-        const exists = await dbUtils.tableExists(tableName);
-        if (!exists) {
-          await prisma.$executeRawUnsafe(
-            `CREATE TABLE "${tableName}" (id SERIAL PRIMARY KEY, data JSONB, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW());`
-          );
-        }
+//     // Optionally persist webhook payload to an app-scoped table if configured
+//     if (cfg.saveToTable) {
+//       try {
+//         const tableName = generateTableName(appId, cfg.saveToTable || 'webhooks');
+//         const exists = await dbUtils.tableExists(tableName);
+//         if (!exists) {
+//           await prisma.$executeRawUnsafe(
+//             `CREATE TABLE "${tableName}" (id SERIAL PRIMARY KEY, data JSONB, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW());`
+//           );
+//         }
 
-        await prisma.$queryRawUnsafe(`INSERT INTO "${tableName}" (data) VALUES ($1)`, JSON.stringify(payload));
-        console.log(`✅ [ON-WEBHOOK] Saved webhook payload to ${tableName}`);
-      } catch (e) {
-        console.warn('⚠️ [ON-WEBHOOK] Failed to save webhook payload:', e.message);
-      }
-    }
+//         await prisma.$queryRawUnsafe(`INSERT INTO "${tableName}" (data) VALUES ($1)`, JSON.stringify(payload));
+//         console.log(`✅ [ON-WEBHOOK] Saved webhook payload to ${tableName}`);
+//       } catch (e) {
+//         console.warn('⚠️ [ON-WEBHOOK] Failed to save webhook payload:', e.message);
+//       }
+//     }
 
-    // Add webhook data to context for downstream blocks
-    const updatedContext = {
-      ...context,
-      webhookResult: {
-        receivedAt: new Date().toISOString(),
-        payload,
-        headers,
-        matched: true,
-      },
-    };
+//     // Add webhook data to context for downstream blocks
+//     const updatedContext = {
+//       ...context,
+//       webhookResult: {
+//         receivedAt: new Date().toISOString(),
+//         payload,
+//         headers,
+//         matched: true,
+//       },
+//     };
 
-    console.log('✅ [ON-WEBHOOK] Webhook trigger processed');
+//     console.log('✅ [ON-WEBHOOK] Webhook trigger processed');
 
-    return {
-      success: true,
-      triggered: true,
-      matched: true,
-      context: updatedContext,
-      message: 'Webhook processed',
-    };
-  } catch (error) {
-    console.error('❌ [ON-WEBHOOK] Error processing webhook trigger:', error);
-    return {
-      success: false,
-      triggered: false,
-      error: error.message,
-      context,
-    };
-  }
-};
+//     return {
+//       success: true,
+//       triggered: true,
+//       matched: true,
+//       context: updatedContext,
+//       message: 'Webhook processed',
+//     };
+//   } catch (error) {
+//     console.error('❌ [ON-WEBHOOK] Error processing webhook trigger:', error);
+//     return {
+//       success: false,
+//       triggered: false,
+//       error: error.message,
+//       context,
+//     };
+//   }
+// };
 
 // Run a workflow given nodes/edges and an initial context
 const runWorkflow = async (nodes, edges, initialContext = {}, appId, userId = 1) => {
@@ -5725,6 +5715,211 @@ router.post("/execute", authenticateToken, async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Workflow execution failed",
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * @route   POST /api/workflow/webhook/:appId
+ * @desc    Webhook endpoint to receive external POST requests and trigger workflows
+ * @access  Public (with secret validation)
+ */
+router.post("/webhook/:appId", async (req, res) => {
+  try {
+    const { appId } = req.params;
+    const webhookSecret = req.headers["x-algo-secret"] || req.headers["x-webhook-secret"];
+    const payload = req.body;
+    const headers = req.headers;
+
+    console.log("🔗 [WEBHOOK] Received webhook request:", {
+      appId,
+      hasSecret: !!webhookSecret,
+      payloadKeys: Object.keys(payload),
+      timestamp: new Date().toISOString(),
+    });
+
+    // Validate webhook secret
+    const expectedSecret = process.env.ALGORITHM_WEBHOOK_SECRET;
+    if (expectedSecret && webhookSecret !== expectedSecret) {
+      console.warn("⚠️ [WEBHOOK] Invalid or missing webhook secret");
+      return res.status(403).json({
+        success: false,
+        message: "Invalid webhook secret",
+      });
+    }
+
+    // Find workflows with onWebhook trigger for this app
+    // Query workflows and check if they have onWebhook nodes
+    const allWorkflows = await prisma.workflow.findMany({
+      where: {
+        appId: parseInt(appId),
+      },
+    });
+
+    // Filter workflows that have onWebhook trigger
+    const webhookWorkflows = allWorkflows.filter((workflow) => {
+      const nodes = workflow.nodes || [];
+      return nodes.some(
+        (n) => n.data?.category === "Triggers" && n.data?.label === "onWebhook"
+      );
+    });
+
+    if (!webhookWorkflows || webhookWorkflows.length === 0) {
+      console.warn("⚠️ [WEBHOOK] No workflows found with onWebhook trigger for app:", appId);
+      return res.status(404).json({
+        success: false,
+        message: "No webhook workflows found for this app",
+      });
+    }
+
+    console.log(`🔗 [WEBHOOK] Found ${webhookWorkflows.length} webhook workflow(s) for app ${appId}`);
+
+    // Get app owner for access validation
+    const app = await prisma.app.findUnique({
+      where: { id: parseInt(appId) },
+      select: { ownerId: true },
+    });
+
+    if (!app) {
+      return res.status(404).json({
+        success: false,
+        message: "App not found",
+      });
+    }
+
+    // Execute each webhook workflow using the main execution endpoint logic
+    const results = [];
+    for (const workflow of webhookWorkflows) {
+      try {
+        const nodes = workflow.nodes || [];
+        const edges = workflow.edges || [];
+
+        // Create context with webhook payload
+        const context = {
+          webhookPayload: payload,
+          webhookHeaders: headers,
+          triggerType: "onWebhook",
+          appId: parseInt(appId),
+          // Also add payload data at root level for easy access
+          ...payload,
+        };
+
+        // Use the existing workflow execution logic
+        // Find the onWebhook trigger node
+        const webhookNode = nodes.find(
+          (n) => n.data?.category === "Triggers" && n.data?.label === "onWebhook"
+        );
+
+        if (!webhookNode) {
+          continue;
+        }
+
+        // Build edge map
+        const edgeMap = {};
+        edges.forEach((edge) => {
+          const sourceHandle = edge.sourceHandle || edge.label || "next";
+          const key = `${edge.source}:${sourceHandle}`;
+          edgeMap[key] = edge.target;
+        });
+
+        // Execute workflow starting from onWebhook node
+        const executionResults = [];
+        let currentNodeId = webhookNode.id;
+        let currentContext = context;
+        const maxIterations = 100;
+        let iteration = 0;
+
+        while (currentNodeId && iteration < maxIterations) {
+          iteration++;
+          const node = nodes.find((n) => n.id === currentNodeId);
+          if (!node) break;
+
+          try {
+            let result;
+
+            // Execute based on node type
+            if (node.data.category === "Triggers" && node.data.label === "onWebhook") {
+              result = await executeOnWebhook(node, currentContext, parseInt(appId), app.ownerId);
+            } else if (node.data.category === "Actions") {
+              switch (node.data.label) {
+                case "db.upsert":
+                  result = await executeDbUpsert(node, currentContext, parseInt(appId), app.ownerId);
+                  break;
+                case "notify.toast":
+                  result = await executeNotifyToast(node, currentContext, parseInt(appId), app.ownerId);
+                  break;
+                case "db.find":
+                  result = await executeDbFind(node, currentContext, parseInt(appId), app.ownerId);
+                  break;
+                case "db.create":
+                  result = await executeDbCreate(node, currentContext, parseInt(appId), app.ownerId);
+                  break;
+                case "db.update":
+                  result = await executeDbUpdate(node, currentContext, parseInt(appId), app.ownerId);
+                  break;
+                default:
+                  result = { success: true, message: `${node.data.label} executed` };
+              }
+            } else {
+              result = { success: true, message: `${node.data.label} processed` };
+            }
+
+            executionResults.push({
+              nodeId: node.id,
+              nodeLabel: node.data.label,
+              result,
+            });
+
+            // Update context
+            if (result && typeof result === "object" && result.context) {
+              currentContext = { ...currentContext, ...result.context };
+            }
+
+            // Find next node
+            const edgeKey = `${node.id}:next`;
+            currentNodeId = edgeMap[edgeKey] || null;
+          } catch (error) {
+            console.error(`❌ [WEBHOOK] Error in node ${node.data.label}:`, error);
+            executionResults.push({
+              nodeId: node.id,
+              nodeLabel: node.data.label,
+              error: error.message,
+            });
+            break;
+          }
+        }
+
+        results.push({
+          workflowId: workflow.id,
+          success: true,
+          results: executionResults,
+        });
+
+        console.log(`✅ [WEBHOOK] Workflow ${workflow.id} executed successfully`);
+      } catch (workflowError) {
+        console.error(`❌ [WEBHOOK] Error executing workflow ${workflow.id}:`, workflowError);
+        results.push({
+          workflowId: workflow.id,
+          success: false,
+          error: workflowError.message,
+        });
+      }
+    }
+
+    // Return success response
+    res.json({
+      success: true,
+      message: "Webhook received and processed",
+      workflowsExecuted: results.length,
+      results: results,
+      receivedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("❌ [WEBHOOK] Webhook processing error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to process webhook",
       error: error.message,
     });
   }
