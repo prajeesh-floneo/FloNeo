@@ -10,6 +10,7 @@ const { SecurityValidator } = require("../utils/security");
 const emailService = require("../utils/email");
 const io = require("../utils/io").getIO();
 const { emitDataUpdated } = require("../utils/dbEvents");
+const jwt = require("jsonwebtoken");
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -2631,85 +2632,124 @@ const executeAuthVerify = async (node, context, appId, userId) => {
     }
 
     const verifyConfig = node.data || {};
-    const { token, action = "read", requiredRole } = verifyConfig;
+    const {
+      token: tokenFromConfig,
+      requiredRole,
+      requiredRoles = [],
+      validateExpiration = true,
+      checkBlacklist = true,
+    } = verifyConfig;
 
     console.log("🔐 [AUTH-VERIFY] Verification configuration:", {
-      action,
       requiredRole,
-      validateExpiration: verifyConfig.validateExpiration !== false,
-      checkBlacklist: verifyConfig.checkBlacklist !== false,
+      requiredRoles,
+      validateExpiration,
+      checkBlacklist,
     });
 
-    // Get token from context or config
-    const authToken = context.token || token;
+    const extractToken = (candidate) => {
+      if (!candidate || typeof candidate !== "string") return null;
+      const trimmed = candidate.trim();
+      if (!trimmed) return null;
+      if (/^bearer\s+/i.test(trimmed)) {
+        return trimmed.replace(/^bearer\s+/i, "").trim();
+      }
+      return trimmed;
+    };
+
+    const tokenCandidates = [
+      context.session?.token,
+      context.token,
+      context.authToken,
+      context.accessToken,
+      context.headers?.authorization,
+      context.request?.headers?.authorization,
+      context.loginResponse?.token,
+      context.authResponse?.token,
+      context.httpResponse?.data?.token,
+      tokenFromConfig,
+    ];
+
+    let authToken = null;
+    for (const candidate of tokenCandidates) {
+      authToken = extractToken(candidate);
+      if (authToken) break;
+    }
+
+    const buildFailure = ({
+      reason,
+      message,
+      code = 401,
+      isAuthenticated = false,
+      isAuthorized = false,
+    }) => {
+      const failureContext = {
+        ...context,
+        authVerifyResult: {
+          isAuthenticated,
+          isAuthorized,
+          failureReason: reason,
+          verifiedAt: new Date().toISOString(),
+        },
+      };
+
+      return {
+        success: false,
+        isAuthenticated,
+        isAuthorized,
+        failureReason: reason,
+        errorMessage: message,
+        errorCode: code,
+        context: failureContext,
+      };
+    };
 
     if (!authToken) {
       console.warn("⚠️ [AUTH-VERIFY] No authentication token provided");
-      return {
-        success: false,
-        isAuthenticated: false,
-        isAuthorized: false,
-        error: "UNAUTHORIZED",
-        errorMessage: "No authentication token provided",
-        errorCode: 401,
-        context: context,
-      };
+      return buildFailure({
+        reason: "NO_TOKEN",
+        message: "No authentication token provided",
+      });
     }
 
-    // Verify JWT token
     let decoded;
     try {
-      decoded = jwt.verify(authToken, process.env.JWT_SECRET);
+      decoded = jwt.verify(authToken, process.env.JWT_SECRET, {
+        ignoreExpiration: validateExpiration === false,
+      });
     } catch (error) {
       if (error.name === "TokenExpiredError") {
         console.warn("⚠️ [AUTH-VERIFY] Token has expired");
-        return {
-          success: false,
-          isAuthenticated: false,
-          isAuthorized: false,
-          error: "TOKEN_EXPIRED",
-          errorMessage: "Authentication token has expired",
-          errorCode: 401,
-          context: context,
-        };
+        return buildFailure({
+          reason: "TOKEN_EXPIRED",
+          message: "Authentication token has expired",
+        });
       }
       if (error.name === "JsonWebTokenError") {
         console.warn("⚠️ [AUTH-VERIFY] Invalid token");
-        return {
-          success: false,
-          isAuthenticated: false,
-          isAuthorized: false,
-          error: "INVALID_TOKEN",
-          errorMessage: "Invalid authentication token",
-          errorCode: 401,
-          context: context,
-        };
+        return buildFailure({
+          reason: "INVALID_TOKEN",
+          message: "Invalid authentication token",
+        });
       }
       throw error;
     }
 
-    // Check if token is blacklisted
-    if (verifyConfig.checkBlacklist !== false) {
+    if (checkBlacklist !== false) {
       const blacklisted = await prisma.blacklistedToken.findUnique({
         where: { token: authToken },
       });
 
       if (blacklisted) {
         console.warn("⚠️ [AUTH-VERIFY] Token is blacklisted");
-        return {
-          success: false,
-          isAuthenticated: false,
-          isAuthorized: false,
-          error: "TOKEN_REVOKED",
-          errorMessage: "Token has been revoked. Please login again",
-          errorCode: 401,
-          context: context,
-        };
+        return buildFailure({
+          reason: "TOKEN_REVOKED",
+          message: "Token has been revoked. Please login again",
+        });
       }
     }
 
-    // Get user from database
-    const user = await prisma.user.findUnique({
+    const dbUser = await prisma.user.findUnique({
       where: { id: decoded.id },
       select: {
         id: true,
@@ -2721,73 +2761,136 @@ const executeAuthVerify = async (node, context, appId, userId) => {
       },
     });
 
-    if (!user) {
+    if (!dbUser) {
       console.warn("⚠️ [AUTH-VERIFY] User not found");
-      return {
-        success: false,
-        isAuthenticated: false,
-        isAuthorized: false,
-        error: "USER_NOT_FOUND",
-        errorMessage: "User not found",
-        errorCode: 401,
-        context: context,
-      };
+      return buildFailure({
+        reason: "USER_NOT_FOUND",
+        message: "User not found",
+      });
     }
 
-    // Check if user is verified
-    if (!user.verified) {
+    if (!dbUser.verified) {
       console.warn("⚠️ [AUTH-VERIFY] User account not verified");
-      return {
-        success: false,
+      return buildFailure({
+        reason: "ACCOUNT_NOT_VERIFIED",
+        message: "Account not verified",
+        code: 403,
         isAuthenticated: true,
-        isAuthorized: false,
-        error: "ACCOUNT_NOT_VERIFIED",
-        errorMessage: "Account not verified",
-        errorCode: 403,
-        context: context,
-      };
+      });
     }
 
-    // Check role if required
+    const roleSet = new Set();
+    if (Array.isArray(decoded?.roles)) decoded.roles.forEach((r) => r && roleSet.add(r));
+    if (decoded?.role) roleSet.add(decoded.role);
+    if (Array.isArray(dbUser?.roles)) dbUser.roles.forEach((r) => r && roleSet.add(r));
+    if (dbUser?.role) roleSet.add(dbUser.role);
+    if (Array.isArray(context.user?.roles))
+      context.user.roles.forEach((r) => r && roleSet.add(r));
+    if (context.user?.role) roleSet.add(context.user.role);
+
+    const resolvedRoles = Array.from(roleSet);
+    const requiredRoleList = [
+      ...requiredRoles,
+      ...(requiredRole ? [requiredRole] : []),
+    ].filter(Boolean);
+
     let isAuthorized = true;
-    if (requiredRole && user.role !== requiredRole) {
-      console.warn("⚠️ [AUTH-VERIFY] User role does not match required role");
-      isAuthorized = false;
+    if (requiredRoleList.length > 0) {
+      isAuthorized = requiredRoleList.some((role) =>
+        resolvedRoles.includes(role)
+      );
     }
 
-    console.log("✅ [AUTH-VERIFY] Authentication verification completed:", {
-      userId: user.id,
-      userEmail: user.email,
-      userRole: user.role,
+    const resolvedName =
+      context.session?.name ||
+      context.user?.name ||
+      decoded?.name ||
+      decoded?.fullName ||
+      decoded?.displayName ||
+      (dbUser.email ? dbUser.email.split("@")[0] : undefined);
+
+    const sanitizedUser = {
+      id: dbUser.id,
+      email: dbUser.email,
+      name: resolvedName,
+      role: resolvedRoles[0] || dbUser.role || decoded?.role || null,
+      roles: resolvedRoles.length > 0 ? resolvedRoles : [dbUser.role].filter(Boolean),
+      verified: dbUser.verified,
+      createdAt: dbUser.createdAt,
+      updatedAt: dbUser.updatedAt,
+    };
+
+    const loginTimestamp =
+      context.session?.loginTimestamp ||
+      (decoded?.loginTimestamp
+        ? new Date(decoded.loginTimestamp).toISOString()
+        : decoded?.iat
+        ? new Date(decoded.iat * 1000).toISOString()
+        : new Date().toISOString());
+
+    const verifiedAt = new Date().toISOString();
+
+    const session = {
+      ...(context.session && typeof context.session === "object"
+        ? context.session
+        : {}),
+      userId: sanitizedUser.id,
+      email: sanitizedUser.email,
+      name: sanitizedUser.name,
+      roles: sanitizedUser.roles,
+      token: authToken,
+      loginTimestamp,
+      validatedAt: verifiedAt,
+      user: sanitizedUser,
+    };
+
+    const authVerifyResult = {
       isAuthenticated: true,
-      isAuthorized: isAuthorized,
+      isAuthorized,
+      failureReason: isAuthorized ? null : "INSUFFICIENT_PERMISSIONS",
+      verifiedAt,
+      requiredRoles: requiredRoleList,
+    };
+
+    if (!isAuthorized) {
+      console.warn(
+        "⚠️ [AUTH-VERIFY] User lacks required role(s):",
+        requiredRoleList
+      );
+    }
+
+    console.log("✅ [AUTH-VERIFY] Verification outcome:", {
+      userId: sanitizedUser.id,
+      email: sanitizedUser.email,
+      roles: sanitizedUser.roles,
+      isAuthorized,
     });
+
+    const enrichedContext = {
+      ...context,
+      token: authToken,
+      isAuthenticated: true,
+      isAuthorized,
+      user: {
+        ...(context.user || {}),
+        ...sanitizedUser,
+      },
+      session,
+      authVerifyResult,
+      auth: {
+        ...(context.auth || {}),
+        ...authVerifyResult,
+      },
+    };
 
     return {
       success: isAuthorized,
       isAuthenticated: true,
-      isAuthorized: isAuthorized,
-      user: {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-        verified: user.verified,
-        createdAt: user.createdAt,
-        updatedAt: user.updatedAt,
-      },
-      context: {
-        ...context,
-        user: {
-          id: user.id,
-          email: user.email,
-          role: user.role,
-          verified: user.verified,
-          createdAt: user.createdAt,
-          updatedAt: user.updatedAt,
-        },
-        isAuthenticated: true,
-        isAuthorized: isAuthorized,
-      },
+      isAuthorized,
+      failureReason: authVerifyResult.failureReason,
+      user: sanitizedUser,
+      session,
+      context: enrichedContext,
     };
   } catch (error) {
     console.error(
@@ -2798,10 +2901,10 @@ const executeAuthVerify = async (node, context, appId, userId) => {
       success: false,
       isAuthenticated: false,
       isAuthorized: false,
-      error: "INTERNAL_ERROR",
+      failureReason: "INTERNAL_ERROR",
       errorMessage: error.message,
       errorCode: 500,
-      context: context,
+      context,
     };
   }
 };
@@ -3706,12 +3809,29 @@ const executeRoleIs = async (node, context, appId, userId) => {
 
     // Get user from context or database
     let userRole = null;
+    let userRoles = [];
 
     // First, check if user role is in context (from onLogin or auth.verify)
     if (context.user?.role) {
       userRole = context.user.role;
       console.log(`👤 [ROLE-IS] User role from context: ${userRole}`);
-    } else if (userId) {
+    }
+
+    if (Array.isArray(context.user?.roles) && context.user.roles.length > 0) {
+      userRoles = context.user.roles;
+      if (!userRole) {
+        userRole = context.user.roles[0];
+      }
+      console.log(`👤 [ROLE-IS] User roles from context: ${userRoles.join(", ")}`);
+    }
+
+    if (!userRole && Array.isArray(context.session?.roles)) {
+      userRoles = context.session.roles;
+      userRole = context.session.roles[0];
+      console.log(`👤 [ROLE-IS] User roles from session: ${userRoles.join(", ")}`);
+    }
+
+    if (!userRole && userId) {
       // Fetch user from database
       const user = await prisma.user.findUnique({
         where: { id: userId },
@@ -3720,6 +3840,7 @@ const executeRoleIs = async (node, context, appId, userId) => {
 
       if (user) {
         userRole = user.role;
+        userRoles = [user.role];
         console.log(`👤 [ROLE-IS] User role from database: ${userRole}`);
       }
     }
@@ -3734,12 +3855,14 @@ const executeRoleIs = async (node, context, appId, userId) => {
       };
     }
 
+    const effectiveUserRoles = userRoles.length > 0 ? userRoles : [userRole];
+
     // Check role based on configuration
     let isValid = false;
 
     if (checkMultiple && roles && roles.length > 0) {
       // Check if user has any of the specified roles
-      isValid = roles.includes(userRole);
+      isValid = roles.some((role) => effectiveUserRoles.includes(role));
       console.log(
         `👤 [ROLE-IS] Checking if user role "${userRole}" is in [${roles.join(
           ", "
@@ -3747,7 +3870,7 @@ const executeRoleIs = async (node, context, appId, userId) => {
       );
     } else if (requiredRole) {
       // Check if user has the required role
-      isValid = userRole === requiredRole;
+      isValid = effectiveUserRoles.includes(requiredRole);
       console.log(
         `👤 [ROLE-IS] Checking if user role "${userRole}" equals "${requiredRole}": ${isValid}`
       );
@@ -3766,6 +3889,7 @@ const executeRoleIs = async (node, context, appId, userId) => {
         ...context,
         roleCheckResult: {
           userRole: userRole,
+          userRoles: effectiveUserRoles,
           isValid: isValid,
           requiredRole: requiredRole,
           roles: roles,
@@ -4696,7 +4820,6 @@ const executeOnLogin = async (node, context, appId) => {
     console.log("🔐 [ON-LOGIN] Processing login event for app:", appId);
 
     const loginConfig = node.data || {};
-    const { user, token, loginMetadata } = context;
 
     console.log("🔐 [ON-LOGIN] Login configuration:", {
       captureUserData: loginConfig.captureUserData,
@@ -4704,82 +4827,224 @@ const executeOnLogin = async (node, context, appId) => {
       storeToken: loginConfig.storeToken,
     });
 
-    // Validate that we have user data from login
-    if (!user || !user.id) {
+    // Abort if upstream context explicitly marked the login as failed
+    const loginFailureFlag = [
+      context.loginSuccess,
+      context.loginSucceeded,
+      context.authSuccess,
+    ].some((flag) => flag === false);
+
+    const loginFailureStatus = [
+      context.loginStatus,
+      context.status,
+      context.authStatus,
+    ].some((status) =>
+      typeof status === "string"
+        ? ["failed", "error", "unauthorized"].includes(
+            status.toLowerCase()
+          )
+        : false
+    );
+
+    if (loginFailureFlag || loginFailureStatus) {
+      console.warn("⚠️ [ON-LOGIN] Login marked as unsuccessful in context");
+      return {
+        success: false,
+        triggered: false,
+        error: "Login was not successful",
+        context,
+      };
+    }
+    // Resolve user details from multiple potential sources
+    const userCandidates = [
+      context.user,
+      context.session?.user,
+      context.authUser,
+      context.loginUser,
+      context.loginResponse?.user,
+      context.authResponse?.user,
+      context.httpResponse?.data?.user,
+    ];
+
+    const rawUser = userCandidates.find((candidate) =>
+      candidate && (candidate.id || candidate.userId || candidate.email)
+    );
+
+    if (!rawUser) {
       console.warn("⚠️ [ON-LOGIN] No user data provided in login event");
       return {
         success: false,
+        triggered: false,
         error: "No user data provided in login event",
-        context: context,
+        context,
       };
     }
 
-    // Validate that we have a token
-    if (!token) {
+    const userId = rawUser.id ?? rawUser.userId;
+    const userEmail = rawUser.email ?? rawUser.userEmail ?? rawUser.username;
+
+    if (!userId || !userEmail) {
+      console.warn(
+        "⚠️ [ON-LOGIN] User data missing required identifier or email"
+      );
+      return {
+        success: false,
+        triggered: false,
+        error: "Incomplete user details for login event",
+        context,
+      };
+    }
+
+    // Resolve token from context or metadata
+    const tokenCandidates = [
+      context.token,
+      context.session?.token,
+      context.authToken,
+      context.accessToken,
+      context.loginResponse?.token,
+      context.authResponse?.token,
+      context.httpResponse?.data?.token,
+      context.headers?.authorization,
+      context.request?.headers?.authorization,
+    ];
+
+    let resolvedToken = tokenCandidates.find(
+      (candidate) => typeof candidate === "string" && candidate.trim() !== ""
+    );
+
+    if (resolvedToken && /bearer\s+/i.test(resolvedToken)) {
+      resolvedToken = resolvedToken.replace(/bearer\s+/i, "").trim();
+    }
+
+    if (!resolvedToken) {
       console.warn("⚠️ [ON-LOGIN] No authentication token provided");
       return {
         success: false,
+        triggered: false,
         error: "No authentication token provided",
-        context: context,
+        context,
       };
     }
 
-    console.log("🔐 [ON-LOGIN] Login event details:", {
-      userId: user.id,
-      userEmail: user.email,
-      userRole: user.role,
-      hasToken: !!token,
-      hasMetadata: !!loginMetadata,
-    });
+    const loginMetadata =
+      context.loginMetadata ||
+      context.authMetadata ||
+      context.metadata?.login ||
+      null;
 
-    // Build login context with user data
-    const loginContext = {
-      ...context,
-      loginProcessed: true,
-      loginTimestamp: new Date().toISOString(),
+    const nowIso = new Date().toISOString();
+
+    const resolvedName =
+      rawUser.name ||
+      rawUser.fullName ||
+      [rawUser.firstName, rawUser.lastName].filter(Boolean).join(" ") ||
+      rawUser.displayName ||
+      rawUser.username ||
+      (userEmail ? userEmail.split("@")[0] : undefined);
+
+    const resolvedRoles = Array.isArray(rawUser.roles)
+      ? rawUser.roles.filter(Boolean)
+      : rawUser.role
+      ? [rawUser.role]
+      : [];
+
+    const session = {
+      ...(context.session && typeof context.session === "object"
+        ? context.session
+        : {}),
+      userId,
+      email: userEmail,
+      name: resolvedName,
+      roles: resolvedRoles,
+      token: resolvedToken,
+      loginTimestamp:
+        context.session?.loginTimestamp ||
+        loginMetadata?.timestamp ||
+        nowIso,
+      metadata:
+        loginConfig.captureMetadata !== false && loginMetadata
+          ? {
+              ...(context.session?.metadata || {}),
+              ...loginMetadata,
+            }
+          : context.session?.metadata,
     };
 
-    // Add user data if configured
+    const enrichedUser = {
+      id: userId,
+      email: userEmail,
+      name: resolvedName,
+      role: resolvedRoles[0] || rawUser.role || null,
+      roles: resolvedRoles,
+      verified: rawUser.verified ?? rawUser.isVerified ?? true,
+      createdAt: rawUser.createdAt,
+      updatedAt: rawUser.updatedAt,
+    };
+
+    session.user = {
+      ...(session.user || {}),
+      ...enrichedUser,
+    };
+
+    const enrichedContext = {
+      ...context,
+      loginProcessed: true,
+      loginTimestamp: session.loginTimestamp,
+      isAuthenticated: true,
+      session,
+      auth: {
+        ...(context.auth || {}),
+        isAuthenticated: true,
+        verifiedAt: nowIso,
+        failureReason: null,
+      },
+    };
+
     if (loginConfig.captureUserData !== false) {
-      loginContext.user = {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-        verified: user.verified,
-        createdAt: user.createdAt,
-        updatedAt: user.updatedAt,
+      enrichedContext.user = {
+        ...(context.user || {}),
+        ...enrichedUser,
       };
+    } else {
+      enrichedContext.user = context.user;
     }
 
-    // Add token if configured
     if (loginConfig.storeToken !== false) {
-      loginContext.token = token;
-      loginContext.tokenType = "Bearer";
-      loginContext.expiresIn = 3600; // 1 hour
+      enrichedContext.token = resolvedToken;
     }
 
-    // Add login metadata if configured and available
     if (loginConfig.captureMetadata !== false && loginMetadata) {
-      loginContext.loginMetadata = {
-        timestamp: loginMetadata.timestamp || new Date().toISOString(),
+      enrichedContext.loginMetadata = {
+        timestamp: loginMetadata.timestamp || session.loginTimestamp,
         ip: loginMetadata.ip,
         device: loginMetadata.device,
         location: loginMetadata.location,
       };
     }
 
+    console.log("🔐 [ON-LOGIN] Login event details:", {
+      userId,
+      userEmail,
+      roles: resolvedRoles,
+      hasToken: !!resolvedToken,
+      hasMetadata: !!loginMetadata,
+    });
+
     console.log("✅ [ON-LOGIN] Login event processed successfully");
     return {
       success: true,
+      triggered: true,
       message: "Login event processed",
-      context: loginContext,
+      session,
+      context: enrichedContext,
     };
   } catch (error) {
     console.error("❌ [ON-LOGIN] Error processing login:", error);
     return {
       success: false,
+      triggered: false,
       error: error.message,
-      context: context,
+      context,
     };
   }
 };
