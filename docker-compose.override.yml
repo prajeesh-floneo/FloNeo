@@ -1,0 +1,44 @@
+# Docker Compose Override for Development (Hot Reload)
+# This file is automatically loaded when you run: docker compose up
+# It overrides docker-compose.yml with development settings
+
+services:
+  # Backend with hot reload
+  backend:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.dev
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://floneo:floneo123@postgres:5432/floneo_db?schema=public
+      JWT_SECRET: floneo-docker-jwt-secret-key
+      JWT_REFRESH_SECRET: floneo-docker-refresh-secret-key
+      PORT: 5000
+    volumes:
+      # Mount source code for hot reload
+      - ./server:/app
+      # Exclude node_modules to use container's node_modules
+      - /app/node_modules
+      - ./server/uploads:/app/uploads
+    command: npm run dev
+
+  # Frontend with hot reload
+  frontend:
+    build:
+      context: ./client
+      dockerfile: Dockerfile.dev
+    environment:
+      NODE_ENV: development
+      NEXT_PUBLIC_API_URL: http://localhost:5000
+      NEXT_PUBLIC_SOCKET_URL: http://localhost:5000
+      BACKEND_URL: http://backend:5000
+      WATCHPACK_POLLING: "true"  # Enable polling for file changes
+    volumes:
+      # Mount source code for hot reload
+      - ./client:/app
+      # Exclude node_modules and .next to use container's
+      - /app/node_modules
+      - /app/.next
+    command: npm run dev
+
+

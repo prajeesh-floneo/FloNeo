@@ -1,9 +1,12 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
+import ReactDOM from "react-dom";
+import { Eye, EyeOff, Download } from "lucide-react";
 import { CanvasElement } from "./ElementManager";
 import { useCanvasWorkflow } from "@/lib/canvas-workflow-context";
 import { toRuntimeStyle, logElementRender } from "@/runtime/styleMap";
+import { normalizeMediaUrl, detectMediaKind } from "@/lib/utils";
 import { TextDisplay } from "./elements/TextDisplay";
 import { getSocket } from "@/lib/socket";
 
@@ -32,6 +35,35 @@ export interface CanvasRendererProps {
   // Workflow context for data display elements
   workflowContext?: Record<string, any>;
 }
+
+const resolveMediaSource = (element: CanvasElement): string | undefined => {
+  if (element.runtime?.media?.url) {
+    return element.runtime.media.url;
+  }
+
+  return normalizeMediaUrl(
+    element.properties?.src ||
+      element.properties?.url ||
+      element.properties?.path ||
+      element.properties?.mediaUrl
+  );
+};
+
+const resolveMediaThumbnail = (
+  element: CanvasElement
+): string | undefined => {
+  const runtimeThumb = element.runtime?.media?.thumbnail;
+  if (runtimeThumb) {
+    return runtimeThumb;
+  }
+
+  return normalizeMediaUrl(
+    element.properties?.thumbnail || element.properties?.thumbUrl
+  );
+};
+
+const resolveMediaMimeType = (element: CanvasElement): string | undefined =>
+  element.runtime?.media?.mimeType || element.properties?.mimeType;
 export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
   elements,
   selectedElement = null,
@@ -52,11 +84,25 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
 }) => {
   const { isPreviewMode } = useCanvasWorkflow();
 
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const [canvasReady, setCanvasReady] = useState(false);
+
+  React.useEffect(() => {
+    // Trigger one re-render after mount so canvasRef is available for portal positioning
+    setCanvasReady(true);
+  }, []);
+
   // Determine if we're in preview mode - either from prop or context
   const isInPreviewMode = mode === "preview" || readOnly || isPreviewMode;
 
   // Runtime state for form values
   const [values, setValues] = useState<Record<string, any>>({});
+  // Per-element show-password state for password fields
+  const [showPasswordMap, setShowPasswordMap] = useState<Record<string, boolean>>({});
+
+  const toggleShowPassword = (id: string) => {
+    setShowPasswordMap((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
 
   // Handler for form value changes
   const handleValueChange = (id: string, value: any) => {
@@ -461,7 +507,12 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
           <input
             key={element.id}
             type="text"
-            style={style}
+            style={{
+              ...style,
+              pointerEvents: "auto" as React.CSSProperties["pointerEvents"],
+              zIndex: (element.zIndex ?? 1) + 1000 as React.CSSProperties["zIndex"],
+            }}
+            tabIndex={mode === "preview" ? 0 : undefined}
             {...dropProps}
             value={
               mode === "preview"
@@ -479,7 +530,8 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             placeholder={element.properties?.placeholder ?? "Enter text"}
             onChange={
               mode === "preview"
-                ? (e) => handleValueChange(element.id, e.target.value)
+                ? (e: React.ChangeEvent<HTMLInputElement>) =>
+                    handleValueChange(element.id, e.target.value)
                 : undefined
             }
             onClick={mode === "preview" ? undefined : handleClick}
@@ -499,7 +551,12 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
         return (
           <textarea
             key={element.id}
-            style={style}
+            style={{
+              ...style,
+              pointerEvents: "auto" as React.CSSProperties["pointerEvents"],
+              zIndex: (element.zIndex ?? 1) + 1000 as React.CSSProperties["zIndex"],
+            }}
+            tabIndex={mode === "preview" ? 0 : undefined}
             {...dropProps}
             placeholder={element.properties?.placeholder ?? "Enter text"}
             value={
@@ -518,7 +575,8 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             rows={element.properties?.rows ?? 4}
             onChange={
               mode === "preview"
-                ? (e) => handleValueChange(element.id, e.target.value)
+                ? (e: React.ChangeEvent<HTMLTextAreaElement>) =>
+                    handleValueChange(element.id, e.target.value)
                 : undefined
             }
             onClick={mode === "preview" ? undefined : handleClick}
@@ -537,7 +595,12 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
         return (
           <select
             key={element.id}
-            style={style}
+            style={{
+              ...style,
+              pointerEvents: "auto" as React.CSSProperties["pointerEvents"],
+              zIndex: (element.zIndex ?? 1) + 1000 as React.CSSProperties["zIndex"],
+            }}
+            tabIndex={mode === "preview" ? 0 : undefined}
             value={
               mode === "preview"
                 ? values[element.id] ?? element.properties?.value ?? ""
@@ -548,7 +611,8 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             }
             onChange={
               mode === "preview"
-                ? (e) => handleValueChange(element.id, e.target.value)
+                ? (e: React.ChangeEvent<HTMLSelectElement>) =>
+                    handleValueChange(element.id, e.target.value)
                 : undefined
             }
             onClick={mode === "preview" ? undefined : handleClick}
@@ -603,7 +667,8 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
               }
               onChange={
                 mode === "preview"
-                  ? (e) => handleValueChange(element.id, e.target.checked)
+                  ? (e: React.ChangeEvent<HTMLInputElement>) =>
+                      handleValueChange(element.id, e.target.checked)
                   : undefined
               }
               readOnly={mode === "edit"}
@@ -646,7 +711,8 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
               }
               onChange={
                 mode === "preview"
-                  ? (e) => handleValueChange(element.id, e.target.checked)
+                  ? (e: React.ChangeEvent<HTMLInputElement>) =>
+                      handleValueChange(element.id, e.target.checked)
                   : undefined
               }
               readOnly={mode === "edit"}
@@ -747,7 +813,180 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             style.fontFamily ||
             "Poppins, system-ui, sans-serif",
           outline: "none",
+          // Ensure inputs are interactive in runtime/preview
+          pointerEvents: "auto" as React.CSSProperties["pointerEvents"],
+          zIndex: (element.zIndex ?? 1) + 1000 as React.CSSProperties["zIndex"],
         };
+
+        // If this is a password field, render an input with an eye toggle inside a wrapper
+        const isPasswordType =
+          element.type === "password" || element.type === "PASSWORD_FIELD" ||
+          (typeof element.type === "string" && element.type.toLowerCase().includes("password"));
+
+        if (isPasswordType) {
+          const show = !!showPasswordMap[element.id];
+
+          // Debugging: log computed stacking values so we can diagnose visibility issues in run mode
+          try {
+            const inputZ = ((element.zIndex ?? 1) as number) + 1000;
+            const toggleZ = ((element.zIndex ?? 1) as number) + 1200;
+            console.log("[CANVAS][PASSWORD] rendering", {
+              id: element.id,
+              type: element.type,
+              elementZ: element.zIndex,
+              inputZ,
+              toggleZ,
+              mode,
+              isInPreviewMode,
+            });
+          } catch (e) {
+            console.warn("[CANVAS][PASSWORD] debug log failed", e);
+          }
+          return (
+            <div key={element.id} style={{ position: "relative" }} {...dropProps}>
+              <input
+                type={show ? "text" : "password"}
+                style={inputStyle}
+                placeholder={element.properties.placeholder || "Enter value"}
+                value={
+                  mode === "preview"
+                    ? values[element.id] ?? element.properties?.value ?? ""
+                    : undefined
+                }
+                defaultValue={
+                  mode === "edit" ? element.properties?.value ?? "" : undefined
+                }
+                onChange={
+                  mode === "preview"
+                    ? (e: React.ChangeEvent<HTMLInputElement>) =>
+                        handleValueChange(element.id, e.target.value)
+                    : undefined
+                }
+                tabIndex={mode === "preview" ? 0 : undefined}
+                onClick={mode === "preview" ? undefined : handleClick}
+                onDoubleClick={isInPreviewMode ? undefined : handleDoubleClick}
+                onMouseDown={isInPreviewMode ? undefined : handleMouseDown}
+                disabled={
+                  !!(
+                    element.properties?.style?.disabled ||
+                    element.properties?.disabled
+                  )
+                }
+                readOnly={mode !== "preview"}
+              />
+              <button
+                aria-label={show ? "Hide password" : "Show password"}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleShowPassword(element.id);
+                }}
+                style={{
+                  position: "absolute",
+                  right: 8,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  background: "rgba(255,255,255,0.6)",
+                  border: "none",
+                  padding: 4,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor: "pointer",
+                  borderRadius: "50%",
+                  // Ensure the toggle sits above the input which uses element.zIndex + 1000
+                  zIndex: ((element.zIndex ?? 1) as number) + 1200,
+                  pointerEvents: "auto",
+                }}
+              >
+                {show ? (
+                  <EyeOff size={16} color={element.properties?.iconColor || "#6b7280"} />
+                ) : (
+                  <Eye size={16} color={element.properties?.iconColor || "#6b7280"} />
+                )}
+              </button>
+            </div>
+          );
+        }
+
+        // Special handling for phone fields to enforce digits-only and 10-digit length
+        if (
+          typeof element.type === "string" &&
+          element.type.toUpperCase().includes("PHONE")
+        ) {
+          return (
+            <input
+              key={element.id}
+              type={getInputType(element.type)}
+              inputMode="numeric"
+              pattern="[0-9]*"
+              style={inputStyle}
+              {...dropProps}
+              placeholder={element.properties.placeholder || "Phone number"}
+              value={
+                mode === "preview"
+                  ? values[element.id] ?? element.properties?.value ?? ""
+                  : undefined
+              }
+              defaultValue={mode === "edit" ? element.properties?.value ?? "" : undefined}
+              onChange={
+                mode === "preview"
+                  ? (e: React.ChangeEvent<HTMLInputElement>) => {
+                      const raw = e.target.value || "";
+                      const digits = raw.replace(/\D+/g, "");
+
+                      if (raw !== digits) {
+                        // notify parent so it can show a toast/prompt
+                        onEvent?.(element.id, "invalidPhone", {
+                          message: "Not a valid phone number. Please enter digits only.",
+                        });
+                      }
+
+                      let normalized = digits;
+                      if (normalized.length > 10) {
+                        normalized = normalized.slice(0, 10);
+                        onEvent?.(element.id, "invalidPhone", {
+                          message: "Phone number must be 10 digits. Extra digits were removed.",
+                        });
+                      }
+
+                      handleValueChange(element.id, normalized);
+
+                      // Also reflect normalized value in the input for uncontrolled cases
+                      try {
+                        const input = e.target as HTMLInputElement;
+                        if (input && input.value !== normalized) input.value = normalized;
+                      } catch (err) {
+                        /* ignore DOM write errors */
+                      }
+                    }
+                  : undefined
+              }
+              onBlur={
+                mode === "preview"
+                  ? (e: React.FocusEvent<HTMLInputElement>) => {
+                      const value = (e.target as HTMLInputElement).value || "";
+                      if (value.length !== 10) {
+                        onEvent?.(element.id, "invalidPhone", {
+                          message: "Not a valid phone number. Phone number must be exactly 10 digits.",
+                        });
+                      }
+                    }
+                  : undefined
+              }
+              tabIndex={mode === "preview" ? 0 : undefined}
+              onClick={mode === "preview" ? undefined : handleClick}
+              onDoubleClick={isInPreviewMode ? undefined : handleDoubleClick}
+              onMouseDown={isInPreviewMode ? undefined : handleMouseDown}
+              disabled={
+                !!(
+                  element.properties?.style?.disabled ||
+                  element.properties?.disabled
+                )
+              }
+              readOnly={mode !== "preview"}
+            />
+          );
+        }
 
         return (
           <input
@@ -766,9 +1005,11 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             }
             onChange={
               mode === "preview"
-                ? (e) => handleValueChange(element.id, e.target.value)
+                ? (e: React.ChangeEvent<HTMLInputElement>) =>
+                    handleValueChange(element.id, e.target.value)
                 : undefined
             }
+            tabIndex={mode === "preview" ? 0 : undefined}
             onClick={mode === "preview" ? undefined : handleClick}
             onDoubleClick={isInPreviewMode ? undefined : handleDoubleClick}
             onMouseDown={isInPreviewMode ? undefined : handleMouseDown}
@@ -778,7 +1019,7 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
                 element.properties?.disabled
               )
             }
-            readOnly={mode === "edit" && !isInPreviewMode}
+            readOnly={mode !== "preview"}
           />
         );
 
@@ -880,7 +1121,13 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
         );
 
       case "IMAGE":
-      case "image":
+      case "image": {
+        const imageSrc = resolveMediaSource(element);
+        const altText =
+          element.properties.alt ||
+          element.properties.fileName ||
+          "Image";
+
         return (
           <div
             key={element.id}
@@ -898,15 +1145,16 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             onMouseDown={handleMouseDown}
             {...dropProps}
           >
-            {element.properties.src ? (
+            {imageSrc ? (
               <img
-                src={element.properties.src}
-                alt={element.properties.alt || "Image"}
+                src={imageSrc}
+                alt={altText}
                 style={{
                   width: "100%",
                   height: "100%",
                   objectFit: "contain",
                 }}
+                loading="lazy"
               />
             ) : (
               <span style={{ color: "#6b7280", fontSize: "14px" }}>
@@ -915,9 +1163,13 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             )}
           </div>
         );
+      }
 
       case "VIDEO":
-      case "video":
+      case "video": {
+        const videoSrc = resolveMediaSource(element);
+        const posterSrc = resolveMediaThumbnail(element);
+
         return (
           <div
             key={element.id}
@@ -935,10 +1187,11 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             onMouseDown={handleMouseDown}
             {...dropProps}
           >
-            {element.properties.src ? (
+            {videoSrc ? (
               <video
-                src={element.properties.src}
+                src={videoSrc}
                 controls
+                poster={posterSrc}
                 style={{
                   width: "100%",
                   height: "100%",
@@ -952,9 +1205,12 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             )}
           </div>
         );
+      }
 
       case "AUDIO":
-      case "audio":
+      case "audio": {
+        const audioSrc = resolveMediaSource(element);
+
         return (
           <div
             key={element.id}
@@ -973,9 +1229,9 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             onMouseDown={handleMouseDown}
             {...dropProps}
           >
-            {element.properties.src ? (
+            {audioSrc ? (
               <audio
-                src={element.properties.src}
+                src={audioSrc}
                 controls
                 style={{
                   width: "100%",
@@ -989,9 +1245,190 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             )}
           </div>
         );
+      }
 
       case "MEDIA":
-      case "media":
+      case "media": {
+        const mediaSrc = resolveMediaSource(element);
+        const thumbnailSrc = resolveMediaThumbnail(element);
+        const mimeType = resolveMediaMimeType(element);
+        const mediaKind = detectMediaKind(mimeType, mediaSrc);
+        const fileLabel =
+          element.properties.fileName ||
+          element.properties.label ||
+          mediaSrc?.split("/").pop() ||
+          "File";
+
+        const buildDownloadFileName = () => {
+          const fromUrl = mediaSrc?.split("/").pop()?.split("?")[0] || "";
+          const raw =
+            element.properties.fileName ||
+            element.properties.label ||
+            fromUrl ||
+            "download";
+          const sanitized = raw.replace(/[\\/:*?"<>|]+/g, "_");
+
+          if (!fromUrl) {
+            return sanitized;
+          }
+
+          const urlExtension = fromUrl.includes(".")
+            ? fromUrl.split(".").pop()?.toLowerCase()
+            : undefined;
+
+          if (!urlExtension) {
+            return sanitized;
+          }
+
+          return sanitized.toLowerCase().endsWith(`.${urlExtension}`)
+            ? sanitized
+            : `${sanitized}.${urlExtension}`;
+        };
+
+        const handleDownloadClick = async (
+          event: React.MouseEvent<HTMLButtonElement>
+        ) => {
+          event.preventDefault();
+          event.stopPropagation();
+
+          if (!mediaSrc) return;
+
+          try {
+            const directProtocols = ["blob:", "data:"];
+            if (directProtocols.some((prefix) => mediaSrc.startsWith(prefix))) {
+              const anchor = document.createElement("a");
+              anchor.href = mediaSrc;
+              anchor.download = buildDownloadFileName();
+              document.body.appendChild(anchor);
+              anchor.click();
+              document.body.removeChild(anchor);
+              return;
+            }
+
+            const token =
+              typeof window !== "undefined"
+                ? window.localStorage.getItem("authToken")
+                : null;
+
+            const response = await fetch(mediaSrc, {
+              headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+              credentials: "include",
+            });
+
+            if (!response.ok) {
+              console.error(
+                `[MEDIA] Download failed for ${element.id} with status`,
+                response.status
+              );
+              if (typeof window !== "undefined") {
+                window.open(mediaSrc, "_blank");
+              }
+              return;
+            }
+
+            const blob = await response.blob();
+            const blobUrl = URL.createObjectURL(blob);
+            const anchor = document.createElement("a");
+            anchor.href = blobUrl;
+            anchor.download = buildDownloadFileName();
+            document.body.appendChild(anchor);
+            anchor.click();
+            document.body.removeChild(anchor);
+
+            // Revoke the object URL after the browser has started the download
+            setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+          } catch (error) {
+            console.error(`[MEDIA] Download error for ${element.id}:`, error);
+            if (typeof window !== "undefined") {
+              window.open(mediaSrc, "_blank");
+            }
+          }
+        };
+
+        const renderMediaPreview = () => {
+          if (!mediaSrc) {
+            return (
+              <span style={{ color: "#6b7280", fontSize: "14px" }}>
+                No file
+              </span>
+            );
+          }
+
+          if (mediaKind === "image") {
+            return (
+              <img
+                src={thumbnailSrc || mediaSrc}
+                alt={fileLabel}
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "contain",
+                }}
+                loading="lazy"
+              />
+            );
+          }
+
+          if (mediaKind === "video") {
+            return (
+              <video
+                src={mediaSrc}
+                controls
+                poster={thumbnailSrc}
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "cover",
+                }}
+              />
+            );
+          }
+
+          if (mediaKind === "audio") {
+            return (
+              <audio
+                src={mediaSrc}
+                controls
+                style={{
+                  width: "100%",
+                }}
+              />
+            );
+          }
+
+          return (
+            <div
+              style={{
+                width: "100%",
+                height: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: "#e5e7eb",
+                borderRadius: "4px",
+              }}
+            >
+              <svg
+                style={{
+                  width: "40px",
+                  height: "40px",
+                  color: "#9ca3af",
+                }}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                />
+              </svg>
+            </div>
+          );
+        };
+
         return (
           <div
             key={element.id}
@@ -1005,65 +1442,59 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
               overflow: "hidden",
               flexDirection: "column",
               padding: "10px",
+              position: "relative",
             }}
             onClick={handleClick}
             onDoubleClick={handleDoubleClick}
             onMouseDown={handleMouseDown}
             {...dropProps}
           >
-            {element.properties.src ? (
-              <>
-                <div
-                  style={{
-                    width: "100%",
-                    height: "100%",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    backgroundColor: "#e5e7eb",
-                    borderRadius: "4px",
-                  }}
-                >
-                  <svg
-                    style={{
-                      width: "40px",
-                      height: "40px",
-                      color: "#9ca3af",
-                    }}
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                    />
-                  </svg>
-                </div>
-                <span
-                  style={{
-                    color: "#6b7280",
-                    fontSize: "12px",
-                    marginTop: "8px",
-                    textAlign: "center",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                    width: "100%",
-                  }}
-                >
-                  {element.properties.fileName || "File"}
-                </span>
-              </>
-            ) : (
-              <span style={{ color: "#6b7280", fontSize: "14px" }}>
-                No file
+            {renderMediaPreview()}
+            {mediaSrc && (
+              <span
+                style={{
+                  color: "#6b7280",
+                  fontSize: "12px",
+                  marginTop: "8px",
+                  textAlign: "center",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  width: "100%",
+                }}
+                title={fileLabel}
+              >
+                {fileLabel}
               </span>
+            )}
+            {isInPreviewMode && mediaKind === "other" && mediaSrc && (
+              <button
+                type="button"
+                onClick={handleDownloadClick}
+                title="Download file"
+                aria-label="Download file"
+                style={{
+                  position: "absolute",
+                  top: 8,
+                  right: 8,
+                  background: "rgba(255,255,255,0.92)",
+                  border: "1px solid rgba(148, 163, 184, 0.4)",
+                  borderRadius: "9999px",
+                  padding: "6px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor: "pointer",
+                  boxShadow: "0 2px 6px rgba(0,0,0,0.12)",
+                  pointerEvents: "auto",
+                }}
+              >
+                <Download size={16} color="#1f2937" />
+              </button>
             )}
           </div>
         );
+      }
 
       case "TEXT_DISPLAY":
       case "text_display":
@@ -1158,6 +1589,7 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
 
   return (
     <div
+      ref={canvasRef}
       className={`relative overflow-hidden ${
         mode === "preview" ? "runtime-reset" : ""
       }`}
@@ -1218,6 +1650,58 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
       {elements
         .sort((a, b) => a.zIndex - b.zIndex)
         .map((element) => renderElement(element))}
+
+      {/* Portal fallback for password toggle buttons (fixed positioned) */}
+  {typeof window !== "undefined" && canvasRef.current && canvasReady &&
+        elements
+          .filter((el) =>
+            (el.type || "").toString().toLowerCase().includes("password")
+          )
+          .map((el) => {
+            const show = !!showPasswordMap[el.id];
+            try {
+              const rect = canvasRef.current!.getBoundingClientRect();
+              const left = rect.left + (el.x || 0) + (el.width || 0) - 32 - window.scrollX;
+              const top = rect.top + (el.y || 0) + (el.height || 0) / 2 - 12 - window.scrollY;
+
+              const button = (
+                <button
+                  key={`portal-toggle-${el.id}`}
+                  aria-label={show ? "Hide password" : "Show password"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleShowPassword(el.id);
+                  }}
+                  style={{
+                    position: "fixed",
+                    left: `${left}px`,
+                    top: `${top}px`,
+                    background: "rgba(255,255,255,0.8)",
+                    border: "none",
+                    padding: 6,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderRadius: "50%",
+                    zIndex: 9999999,
+                    pointerEvents: "auto",
+                    cursor: "pointer",
+                    boxShadow: "0 2px 8px rgba(0,0,0,0.12)",
+                  }}
+                >
+                  {show ? (
+                    <EyeOff size={16} color={el.properties?.iconColor || "#6b7280"} />
+                  ) : (
+                    <Eye size={16} color={el.properties?.iconColor || "#6b7280"} />
+                  )}
+                </button>
+              );
+
+              return ReactDOM.createPortal(button, document.body);
+            } catch (e) {
+              return null;
+            }
+          })}
 
       {/* Editor-only overlays - only show in edit mode */}
       {showEditorChrome && (

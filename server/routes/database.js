@@ -64,11 +64,8 @@ router.get("/:appId/tables", authenticateToken, async (req, res) => {
       orderBy: { createdAt: "desc" },
     });
 
-    console.log("📋 [DATABASE] Found tables:", userTables.length);
-    console.log("📋 [DATABASE] Tables:", userTables);
-    // Handle empty tables case
-    if (userTables.length === 0) {
-      console.log("📋 [DATABASE] No tables found for app:", appId);
+    if (!userTables.length) {
+      console.log(`[DATABASE] No tables found for appId=${appIdInt}`);
       return res.json({
         success: true,
         tables: [],
@@ -150,33 +147,10 @@ router.get("/:appId/tables", authenticateToken, async (req, res) => {
           sampleData = await prisma.$queryRawUnsafe(
             `SELECT * FROM "${table.tableName}" ORDER BY id DESC LIMIT 5`
           );
-
-          return {
-            id: table.id,
-            name: table.tableName,
-            columns: parseColumns(table.columns),
-            rowCount,
-            sampleData,
-            createdAt: table.createdAt,
-            updatedAt: table.updatedAt,
-            exists: true,
-          };
-        } catch (error) {
-          console.error(
-            `Error getting data for table ${table.tableName}:`,
-            error
+        } catch {
+          console.warn(
+            `[DATABASE] Table ${table.tableName} exists in metadata but not in DB`
           );
-          return {
-            id: table.id,
-            name: table.tableName,
-            columns: parseColumns(table.columns),
-            rowCount: 0,
-            sampleData: [],
-            createdAt: table.createdAt,
-            updatedAt: table.updatedAt,
-            error: error.message,
-            exists: false,
-          };
         }
 
         let safeColumns = [];
@@ -452,27 +426,21 @@ router.get(
           message: `Table "${tableName}" exists in metadata but not yet created by workflow`,
         });
       }
+      
+      //Remove This Due To Duplication Error OF SafeColumn
+      // let safeColumns = [];
+      // try {
+      //   safeColumns =
+      //     typeof userTable.columns === "string"
+      //       ? JSON.parse(userTable.columns)
+      //       : userTable.columns;
+      // } catch {
+      //   safeColumns = [];
+      // }
 
-      // Check if table actually exists in database
-      const escapedTableName = tableName.replace(/"/g, '""');
-      const tableExistsResult = await prisma.$queryRawUnsafe(
-        `SELECT EXISTS (
-          SELECT FROM information_schema.tables 
-          WHERE table_schema = 'public' 
-          AND table_name = '${escapedTableName}'
-        ) as exists`
+      console.log(
+        `[DATABASE] Data fetched for table=${tableName} successfully`
       );
-
-      const exists = tableExistsResult[0]?.exists || false;
-
-      if (!exists) {
-        return res.status(404).json({
-          success: false,
-          message: `Table "${tableName}" is registered but does not exist in database`,
-          exists: false,
-        });
-      }
-
       console.log("✅ [DATABASE] Table data retrieved successfully");
 
       // Helper function to safely parse JSON columns

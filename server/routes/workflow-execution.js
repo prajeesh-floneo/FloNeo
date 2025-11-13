@@ -10,9 +10,11 @@ const { SecurityValidator } = require("../utils/security");
 const emailService = require("../utils/email");
 const io = require("../utils/io").getIO();
 const { emitDataUpdated } = require("../utils/dbEvents");
+const jwt = require("jsonwebtoken");
 
 const router = express.Router();
 const prisma = new PrismaClient();
+const { enqueueWorkflow } = require("../utils/workflow-queue");
 
 // Initialize utility classes
 const dbUtils = new DatabaseUtils(prisma);
@@ -384,64 +386,8 @@ const executeIsFilled = async (node, context, appId) => {
   }
 };
 
-// OnClick block handler
-// const executeOnClick = async (node, context, appId) => {
-//   try {
-//     console.log("🖱️ [ON-CLICK] Processing click event for app:", appId);
 
-//     const clickConfig = node.data || {};
-//     const { elementId, clickData } = context;
-
-//     console.log("🖱️ [ON-CLICK] Click configuration:", {
-//       targetElementId: clickConfig.targetElementId,
-//       elementId: elementId,
-//       clickData: clickData,
-//     });
-
-//     // Validate click event
-//     if (!elementId) {
-//       return {
-//         success: false,
-//         error: "No element ID provided in click event",
-//         context: context,
-//       };
-//     }
-
-//     // Check if this click is for the configured element (if specified)
-//     if (
-//       clickConfig.targetElementId &&
-//       clickConfig.targetElementId !== elementId
-//     ) {
-//       console.log("🖱️ [ON-CLICK] Click not for target element, skipping");
-//       return {
-//         success: false,
-//         error: "Click not for target element",
-//         context: context,
-//       };
-//     }
-
-//     console.log("✅ [ON-CLICK] Click event processed successfully");
-//     return {
-//       success: true,
-//       message: "Click event processed",
-//       context: {
-//         ...context,
-//         clickProcessed: true,
-//         clickElementId: elementId,
-//         clickTimestamp: new Date().toISOString(),
-//       },
-//     };
-//   } catch (error) {
-//     console.error("❌ [ON-CLICK] Error processing click:", error);
-//     return {
-//       success: false,
-//       error: error.message,
-//       context: context,
-//     };
-//   }
-// };
-
-//onClick
+//onClick Handler
 const executeOnClick = async (node, context, appId) => {
   try {
     console.log("🖱️ [ON-CLICK] Processing click event for app:", appId);
@@ -535,6 +481,52 @@ const executeOnPageLoad = async (node, context, appId) => {
     };
   } catch (error) {
     console.error("❌ [ON-PAGE-LOAD] Error processing page load:", error);
+    return {
+      success: false,
+      error: error.message,
+      context: context,
+    };
+  }
+};
+
+// OnWebhook block handler
+const executeOnWebhook = async (node, context, appId, userId) => {
+  try {
+    console.log("🔗 [ON-WEBHOOK] Processing webhook trigger for app:", appId);
+
+    // Webhook data should be in context (passed from webhook endpoint)
+    const webhookPayload = context.webhookPayload || context.payload || context.data || {};
+    const webhookHeaders = context.webhookHeaders || {};
+
+    console.log("🔗 [ON-WEBHOOK] Webhook payload received:", {
+      payloadKeys: Object.keys(webhookPayload),
+      hasHeaders: !!webhookHeaders,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Log the payload for debugging
+    console.log("✅ [ON-WEBHOOK] Webhook received:", webhookPayload);
+
+    // Add webhook data to context for subsequent blocks
+    const updatedContext = {
+      ...context,
+      webhookPayload,
+      webhookHeaders,
+      webhookReceivedAt: new Date().toISOString(),
+      // Also add payload data at root level for easy access in other blocks
+      ...webhookPayload,
+    };
+
+    console.log("✅ [ON-WEBHOOK] Webhook trigger processed successfully");
+
+    return {
+      success: true,
+      message: "Webhook received and processed",
+      context: updatedContext,
+      webhookData: webhookPayload,
+    };
+  } catch (error) {
+    console.error("❌ [ON-WEBHOOK] Error processing webhook:", error);
     return {
       success: false,
       error: error.message,
@@ -1207,6 +1199,7 @@ const executeDbUpdate = async (node, context, appId, userId) => {
       throw new Error("Rate limit exceeded. Please try again later.");
     }
 
+    // Extract configuration from node data
     // ✅ Step 2: Extract and normalize config
     let {
       tableName,
@@ -1215,6 +1208,30 @@ const executeDbUpdate = async (node, context, appId, userId) => {
       returnUpdatedRecords = true,
     } = node.data || {};
 
+    // Parse JSON strings if needed
+    if (typeof updateData === "string") {
+      try {
+        updateData = JSON.parse(updateData);
+      } catch (error) {
+        throw new Error(
+          `Invalid JSON in updateData: ${error.message}. Please provide valid JSON.`
+        );
+      }
+    }
+
+    if (typeof whereConditions === "string") {
+      try {
+        whereConditions = JSON.parse(whereConditions);
+      } catch (error) {
+        throw new Error(
+          `Invalid JSON in whereConditions: ${error.message}. Please provide valid JSON.`
+        );
+      }
+    }
+
+    if (!tableName) {
+      throw new Error("Table name is required for DbUpdate operation");
+    }
     console.log("🧩 [DB-UPDATE] Raw Inputs:", {
       tableName,
       updateData,
@@ -1264,11 +1281,22 @@ const executeDbUpdate = async (node, context, appId, userId) => {
 
     securityValidator.validateConditions(whereConditions);
 
-    // ✅ Step 5: Substitute context vars
+    // Process update data with context substitution
+    // Filter out reserved columns (id, created_at, updated_at, app_id) from update data
+    const reservedColumns = ['id', 'created_at', 'updated_at', 'app_id'];
     const processedUpdateData = {};
+    console.log(`🔄 [DB-UPDATE] Original updateData keys:`, Object.keys(updateData));
     for (const [column, value] of Object.entries(updateData)) {
-      processedUpdateData[column] = substituteContextVariables(value, context);
+      // Skip reserved columns - they shouldn't be updated
+      if (reservedColumns.includes(column.toLowerCase())) {
+        console.log(`⚠️ [DB-UPDATE] Skipping reserved column '${column}' from update data`);
+        continue;
+      }
+      // Substitute context variables in value
+      const substitutedValue = substituteContextVariables(value, context);
+      processedUpdateData[column] = substitutedValue;
     }
+    console.log(`🔄 [DB-UPDATE] Processed updateData keys:`, Object.keys(processedUpdateData));
 
     // ✅ Step 6: Build Safe Query
     const queryBuilder = new SafeQueryBuilder();
@@ -1278,6 +1306,17 @@ const executeDbUpdate = async (node, context, appId, userId) => {
       queryBuilder.addWhere(field, operator, substitutedValue, logic);
     }
 
+    // Automatically update updated_at timestamp if column exists
+    // Check if table has updated_at column
+    const hasUpdatedAt = tableSchema.some(
+      (col) => col.name === "updated_at"
+    );
+    if (hasUpdatedAt && !processedUpdateData.updated_at) {
+      // Add updated_at to update data if not already provided
+      processedUpdateData.updated_at = new Date();
+    }
+
+    // Build the update query
     const { query, params } = queryBuilder.buildUpdateQuery(
       tableName,
       processedUpdateData
@@ -1384,13 +1423,118 @@ const executeDbUpsert = async (node, context, appId, userId) => {
     }
 
     // Extract configuration from node data
-    const {
+    let {
       tableName,
       uniqueFields = [],
       updateData = {},
       insertData = {},
       returnRecord = true,
     } = node.data;
+
+    // Parse JSON strings if needed
+    if (typeof uniqueFields === "string") {
+      try {
+        uniqueFields = JSON.parse(uniqueFields);
+      } catch {
+        // If not valid JSON, try splitting by comma
+        uniqueFields = uniqueFields
+          .split(",")
+          .map((f) => f.trim())
+          .filter((f) => f.length > 0);
+      }
+    }
+
+    // Clean up uniqueFields - remove quotes and ensure they're strings
+    if (Array.isArray(uniqueFields)) {
+      uniqueFields = uniqueFields.map((field) => {
+        if (typeof field === "string") {
+          // Remove surrounding quotes if present
+          let cleaned = field.trim();
+          if ((cleaned.startsWith('"') && cleaned.endsWith('"')) || 
+              (cleaned.startsWith("'") && cleaned.endsWith("'"))) {
+            cleaned = cleaned.slice(1, -1);
+          }
+          return cleaned;
+        }
+        return String(field).trim();
+      }).filter((f) => f.length > 0);
+    }
+
+    if (typeof updateData === "string") {
+      try {
+        updateData = JSON.parse(updateData);
+      } catch (error) {
+        throw new Error(
+          `Invalid JSON in updateData: ${error.message}. Please provide valid JSON.`
+        );
+      }
+    }
+
+    // Parse insertData if it's a string
+    if (typeof insertData === "string") {
+      const trimmed = insertData.trim();
+      if (trimmed) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          // Ensure it's an object, not an array or primitive
+          if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+            throw new Error("insertData must be a JSON object, not an array or primitive");
+          }
+          insertData = parsed;
+        } catch (error) {
+          console.error("❌ [DB-UPSERT] Failed to parse insertData:", error.message);
+          console.error("❌ [DB-UPSERT] insertData value:", insertData);
+          throw new Error(
+            `Invalid JSON in insertData: ${error.message}. Please provide valid JSON object.`
+          );
+        }
+      } else {
+        insertData = {};
+      }
+    }
+
+    // Validate insertData is an object
+    if (insertData && (typeof insertData !== "object" || Array.isArray(insertData))) {
+      console.error("❌ [DB-UPSERT] insertData is not an object:", typeof insertData, insertData);
+      throw new Error("insertData must be an object, not an array or primitive");
+    }
+
+    // Ensure insertData is initialized
+    if (!insertData) {
+      insertData = {};
+    }
+
+    // Parse updateData if it's a string
+    if (typeof updateData === "string") {
+      const trimmed = updateData.trim();
+      if (trimmed && trimmed !== "{}") {
+        try {
+          const parsed = JSON.parse(trimmed);
+          // Ensure it's an object, not an array or primitive
+          if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+            throw new Error("updateData must be a JSON object, not an array or primitive");
+          }
+          updateData = parsed;
+        } catch (error) {
+          console.error("❌ [DB-UPSERT] Failed to parse updateData:", error.message);
+          throw new Error(
+            `Invalid JSON in updateData: ${error.message}. Please provide valid JSON object.`
+          );
+        }
+      } else {
+        updateData = {};
+      }
+    }
+
+    // Validate updateData is an object
+    if (updateData && (typeof updateData !== "object" || Array.isArray(updateData))) {
+      throw new Error("updateData must be an object, not an array or primitive");
+    }
+
+    // Ensure updateData is initialized
+    if (!updateData) {
+      updateData = {};
+    }
 
     if (!tableName) {
       throw new Error("Table name is required for DbUpsert operation");
@@ -1400,9 +1544,19 @@ const executeDbUpsert = async (node, context, appId, userId) => {
       throw new Error("At least one unique field is required for upsert");
     }
 
+    // Validate uniqueFields are not just numbers
+    const invalidFields = uniqueFields.filter(
+      (field) => typeof field === "string" && /^\d+$/.test(field.trim())
+    );
+    if (invalidFields.length > 0) {
+      throw new Error(
+        `Invalid unique fields: ${invalidFields.join(", ")}. Unique fields must be column names or JSONB paths (e.g., "email" or "data->>'applicationId'"), not just numbers.`
+      );
+    }
+
     if (
-      Object.keys(updateData).length === 0 &&
-      Object.keys(insertData).length === 0
+      (!updateData || Object.keys(updateData).length === 0) &&
+      (!insertData || Object.keys(insertData).length === 0)
     ) {
       throw new Error("Either updateData or insertData must be provided");
     }
@@ -1425,13 +1579,154 @@ const executeDbUpsert = async (node, context, appId, userId) => {
       processedInsertData[key] = substituteContextVariables(value, context);
     }
 
+    // Validate table name for security
+    securityValidator.validateTableName(tableName, appId);
+
+    console.log(`🔍 [DB-UPSERT] Checking table existence: ${tableName}`);
+
+    // Check if table exists - throw error if it doesn't (no auto-creation)
+    const tableExists = await dbUtils.tableExists(tableName);
+    console.log(`🔍 [DB-UPSERT] Table existence check: ${tableExists}`);
+    
+    if (!tableExists) {
+      // Verify with direct query to be sure
+      try {
+        await prisma.$queryRawUnsafe(`SELECT 1 FROM "${tableName}" LIMIT 1`);
+        // If query succeeds, table exists
+        console.log(`✅ [DB-UPSERT] Table ${tableName} verified to exist`);
+      } catch (error) {
+        if (error.code === '42P01') {
+          // Table doesn't exist - throw error
+          throw new Error(
+            `Table "${tableName}" does not exist. Please create the table first before using db.upsert.`
+          );
+        } else {
+          // Some other error - rethrow it
+          throw new Error(
+            `Cannot access table "${tableName}": ${error.message}. Please check table name and database permissions.`
+          );
+        }
+      }
+    } else {
+      // Table exists according to check, verify with direct query
+      try {
+        await prisma.$queryRawUnsafe(`SELECT 1 FROM "${tableName}" LIMIT 1`);
+        console.log(`✅ [DB-UPSERT] Table ${tableName} verified to exist`);
+      } catch (error) {
+        console.error(`❌ [DB-UPSERT] Table check said exists but query failed: ${error.message}`);
+        throw new Error(
+          `Table "${tableName}" appears to exist but cannot be queried. Error: ${error.message}. ` +
+          `Please check: 1) Table name is correct, 2) Table is in 'public' schema, 3) Database connection has proper permissions.`
+        );
+      }
+    }
+
+    // Get table schema to determine column types for proper type casting
+    let tableSchema = [];
+    try {
+      tableSchema = await dbUtils.discoverTableSchema(tableName);
+      console.log(`🔍 [DB-UPSERT] Discovered table schema with ${tableSchema.length} columns`);
+    } catch (error) {
+      console.log(`⚠️ [DB-UPSERT] Could not discover table schema: ${error.message}`);
+    }
+
     // Build WHERE clause for checking existence using unique fields
     const queryBuilder = new SafeQueryBuilder();
+    console.log(`🔍 [DB-UPSERT] Building WHERE clause with uniqueFields:`, uniqueFields);
+    console.log(`🔍 [DB-UPSERT] processedInsertData keys:`, Object.keys(processedInsertData));
+    console.log(`🔍 [DB-UPSERT] processedUpdateData keys:`, Object.keys(processedUpdateData));
+    
     for (const field of uniqueFields) {
-      const value = processedInsertData[field] || processedUpdateData[field];
+      // Clean the field name (remove any remaining quotes)
+      const cleanField = field.replace(/^["']|["']$/g, '');
+      let value = processedInsertData[cleanField] || processedUpdateData[cleanField];
+      
+      console.log(`🔍 [DB-UPSERT] Looking for field "${cleanField}" (original: "${field}"), value:`, value);
+      
       if (value !== undefined && value !== null) {
-        queryBuilder.addCondition(field, "=", value);
+        // Check if this is a JSONB field path (e.g., "data->>'applicationId'")
+        if (field.includes("->>") || field.includes("->")) {
+          // JSONB field path - use raw condition
+          // Extract the value from nested data if needed
+          let actualValue = value;
+          
+          // If field is like "data->>'applicationId'" and value is in processedInsertData["data"]
+          // we need to extract it from the nested object
+          if (field.startsWith("data->>") || field.startsWith("data->")) {
+            const jsonbKey = field.split("'")[1] || field.split('"')[1]; // Extract key from data->>'key'
+            if (processedInsertData.data && typeof processedInsertData.data === 'object') {
+              actualValue = processedInsertData.data[jsonbKey];
+            } else if (processedUpdateData.data && typeof processedUpdateData.data === 'object') {
+              actualValue = processedUpdateData.data[jsonbKey];
+            }
+          }
+          
+          const paramPlaceholder = queryBuilder.addParam(actualValue);
+          queryBuilder.addWhereRaw(`${field} = ${paramPlaceholder}`);
+        } else {
+          // Regular column - check type and cast if needed
+          // Use cleanField for schema lookup
+          const columnInfo = tableSchema.find((col) => col.name === cleanField);
+          
+          if (columnInfo) {
+            // Convert value to match column type
+            const columnType = columnInfo.type.toLowerCase();
+            
+            if (columnType.includes('int') || columnType.includes('serial') || columnType.includes('bigint')) {
+              // Integer types - convert string to number
+              if (typeof value === 'string') {
+                const numValue = parseInt(value, 10);
+                if (!isNaN(numValue)) {
+                  value = numValue;
+                  console.log(`🔧 [DB-UPSERT] Converted ${field} from string "${processedInsertData[field] || processedUpdateData[field]}" to integer ${value}`);
+                }
+              }
+            } else if (columnType.includes('numeric') || columnType.includes('decimal') || columnType.includes('real') || columnType.includes('double')) {
+              // Numeric types - convert string to number
+              if (typeof value === 'string') {
+                const numValue = parseFloat(value);
+                if (!isNaN(numValue)) {
+                  value = numValue;
+                }
+              }
+            } else if (columnType === 'boolean') {
+              // Boolean type
+              if (typeof value === 'string') {
+                value = value.toLowerCase() === 'true' || value === '1';
+              }
+            }
+          }
+          
+          // Use standard condition with properly typed value (use cleanField)
+          queryBuilder.addWhere(cleanField, "=", value);
+        }
+      } else {
+        console.warn(`⚠️ [DB-UPSERT] No value found for unique field "${cleanField}" in insertData or updateData`);
       }
+    }
+    
+    // Verify WHERE clause was built
+    const whereClause = queryBuilder.buildWhereClause();
+    if (!whereClause) {
+      throw new Error(
+        `No WHERE conditions could be built from unique fields. ` +
+        `Make sure the unique field values exist in your Insert Data or Update Data. ` +
+        `Unique fields: ${uniqueFields.join(", ")}, ` +
+        `Insert Data keys: ${Object.keys(processedInsertData).join(", ")}, ` +
+        `Update Data keys: ${Object.keys(processedUpdateData).join(", ")}`
+      );
+    }
+
+    // Verify table exists before querying
+    try {
+      await prisma.$queryRawUnsafe(`SELECT 1 FROM "${tableName}" LIMIT 1`);
+    } catch (error) {
+      if (error.code === '42P01') {
+        throw new Error(
+          `Table "${tableName}" does not exist. Please create the table first or ensure the table name is correct.`
+        );
+      }
+      throw error;
     }
 
     // Check if record exists
@@ -1441,11 +1736,23 @@ const executeDbUpsert = async (node, context, appId, userId) => {
       "🔄 [DB-UPSERT] Checking if record exists with query:",
       selectQuery
     );
-
-    const existingRecords = await prisma.$queryRawUnsafe(
-      selectQuery,
-      ...selectParams
+    console.log(
+      "🔄 [DB-UPSERT] Query params:",
+      selectParams
     );
+
+    let existingRecords;
+    try {
+      existingRecords = await prisma.$queryRawUnsafe(
+        selectQuery,
+        ...selectParams
+      );
+    } catch (error) {
+      console.error("❌ [DB-UPSERT] Query error:", error);
+      throw new Error(
+        `Failed to check if record exists: ${error.message}. Query: ${selectQuery}`
+      );
+    }
 
     let operation, result;
 
@@ -1454,15 +1761,55 @@ const executeDbUpsert = async (node, context, appId, userId) => {
       operation = "update";
       console.log("🔄 [DB-UPSERT] Record exists, performing UPDATE");
 
+      // If updateData is empty, use insertData for update (as per hint in UI)
+      const dataToUpdate = Object.keys(processedUpdateData).length > 0 
+        ? processedUpdateData 
+        : processedInsertData;
+
+      if (Object.keys(dataToUpdate).length === 0) {
+        throw new Error(
+          "No update data provided. Please provide data in either Update Data field or Insert Data field."
+        );
+      }
+
+      // Remove unique fields and reserved columns from update data
+      // Reserved columns: id, created_at, updated_at, app_id (they're auto-managed)
+      const reservedColumns = ['id', 'created_at', 'updated_at', 'app_id'];
+      const updateDataWithoutUniqueFields = { ...dataToUpdate };
+      
+      // Remove unique fields (they're used in WHERE clause, not SET)
+      for (const field of uniqueFields) {
+        // Clean the field name (remove quotes)
+        const cleanField = field.replace(/^["']|["']$/g, '');
+        // Handle JSONB paths - extract just the field name
+        const fieldName = field.includes("->>") 
+          ? field.split("'")[1] || field.split('"')[1] || cleanField
+          : cleanField;
+        delete updateDataWithoutUniqueFields[fieldName];
+        // Also try removing the full JSONB path if it exists
+        delete updateDataWithoutUniqueFields[field];
+      }
+      
+      // Remove reserved columns (they shouldn't be updated)
+      for (const reservedCol of reservedColumns) {
+        if (updateDataWithoutUniqueFields.hasOwnProperty(reservedCol)) {
+          console.log(`⚠️ [DB-UPSERT] Removing reserved column '${reservedCol}' from update data`);
+          delete updateDataWithoutUniqueFields[reservedCol];
+        }
+      }
+
       const updateNode = {
         data: {
           tableName,
-          updateData: processedUpdateData,
-          whereConditions: uniqueFields.map((field) => ({
-            field,
-            operator: "=",
-            value: processedInsertData[field] || processedUpdateData[field],
-          })),
+          updateData: updateDataWithoutUniqueFields,
+          whereConditions: uniqueFields.map((field) => {
+            const cleanField = field.replace(/^["']|["']$/g, '');
+            return {
+              field: cleanField,
+              operator: "=",
+              value: processedInsertData[cleanField] || processedUpdateData[cleanField],
+            };
+          }),
           returnUpdatedRecords: returnRecord,
         },
       };
@@ -1472,13 +1819,73 @@ const executeDbUpsert = async (node, context, appId, userId) => {
       operation = "insert";
       console.log("🔄 [DB-UPSERT] Record does not exist, performing INSERT");
 
-      const createNode = {
-        data: {
-          tableName,
-          formData: processedInsertData,
+      // Instead of calling executeDbCreate (which has table creation logic),
+      // perform the INSERT directly since we know the table exists
+      const insertColumns = [];
+      const insertValues = [];
+      const insertParams = [];
+      let paramIndex = 1;
+
+      // Map data to table columns (skip auto-generated columns)
+      for (const column of tableSchema) {
+        if (
+          column.name === "id" ||
+          column.name === "created_at" ||
+          column.name === "updated_at" ||
+          column.name === "app_id"
+        ) {
+          continue;
+        }
+
+        const dataValue = processedInsertData[column.name] || null;
+        insertColumns.push(`"${column.name}"`);
+        insertValues.push(`$${paramIndex}`);
+        insertParams.push(dataValue);
+        paramIndex++;
+      }
+
+      // Add app_id
+      insertColumns.push('"app_id"');
+      insertValues.push(`$${paramIndex}`);
+      insertParams.push(parseInt(appId));
+
+      const insertSQL = `INSERT INTO "${tableName}" (${insertColumns.join(
+        ", "
+      )}) VALUES (${insertValues.join(", ")}) RETURNING id`;
+
+      console.log("💾 [DB-UPSERT] Insert SQL:", insertSQL);
+      console.log("💾 [DB-UPSERT] Insert params:", insertParams);
+
+      const insertResult = await prisma.$queryRawUnsafe(
+        insertSQL,
+        ...insertParams
+      );
+      const insertedId = insertResult[0]?.id;
+
+      console.log(
+        "✅ [DB-UPSERT] Data inserted successfully, record ID:",
+        insertedId
+      );
+
+      result = {
+        success: true,
+        tableName,
+        recordId: insertedId,
+        tableCreated: false,
+        columnsInserted: insertColumns.length - 1, // Exclude app_id
+        message: `Data inserted into '${tableName}' (ID: ${insertedId})`,
+        context: {
+          ...context,
+          recordId: insertedId,
+          tableName: tableName,
+          dbCreateResult: {
+            tableName,
+            recordId: insertedId,
+            tableCreated: false,
+            executionTime: Date.now() - startTime,
+          },
         },
       };
-      result = await executeDbCreate(createNode, context, appId, userId);
     }
 
     const executionTime = Date.now() - startTime;
@@ -2225,85 +2632,124 @@ const executeAuthVerify = async (node, context, appId, userId) => {
     }
 
     const verifyConfig = node.data || {};
-    const { token, action = "read", requiredRole } = verifyConfig;
+    const {
+      token: tokenFromConfig,
+      requiredRole,
+      requiredRoles = [],
+      validateExpiration = true,
+      checkBlacklist = true,
+    } = verifyConfig;
 
     console.log("🔐 [AUTH-VERIFY] Verification configuration:", {
-      action,
       requiredRole,
-      validateExpiration: verifyConfig.validateExpiration !== false,
-      checkBlacklist: verifyConfig.checkBlacklist !== false,
+      requiredRoles,
+      validateExpiration,
+      checkBlacklist,
     });
 
-    // Get token from context or config
-    const authToken = context.token || token;
+    const extractToken = (candidate) => {
+      if (!candidate || typeof candidate !== "string") return null;
+      const trimmed = candidate.trim();
+      if (!trimmed) return null;
+      if (/^bearer\s+/i.test(trimmed)) {
+        return trimmed.replace(/^bearer\s+/i, "").trim();
+      }
+      return trimmed;
+    };
+
+    const tokenCandidates = [
+      context.session?.token,
+      context.token,
+      context.authToken,
+      context.accessToken,
+      context.headers?.authorization,
+      context.request?.headers?.authorization,
+      context.loginResponse?.token,
+      context.authResponse?.token,
+      context.httpResponse?.data?.token,
+      tokenFromConfig,
+    ];
+
+    let authToken = null;
+    for (const candidate of tokenCandidates) {
+      authToken = extractToken(candidate);
+      if (authToken) break;
+    }
+
+    const buildFailure = ({
+      reason,
+      message,
+      code = 401,
+      isAuthenticated = false,
+      isAuthorized = false,
+    }) => {
+      const failureContext = {
+        ...context,
+        authVerifyResult: {
+          isAuthenticated,
+          isAuthorized,
+          failureReason: reason,
+          verifiedAt: new Date().toISOString(),
+        },
+      };
+
+      return {
+        success: false,
+        isAuthenticated,
+        isAuthorized,
+        failureReason: reason,
+        errorMessage: message,
+        errorCode: code,
+        context: failureContext,
+      };
+    };
 
     if (!authToken) {
       console.warn("⚠️ [AUTH-VERIFY] No authentication token provided");
-      return {
-        success: false,
-        isAuthenticated: false,
-        isAuthorized: false,
-        error: "UNAUTHORIZED",
-        errorMessage: "No authentication token provided",
-        errorCode: 401,
-        context: context,
-      };
+      return buildFailure({
+        reason: "NO_TOKEN",
+        message: "No authentication token provided",
+      });
     }
 
-    // Verify JWT token
     let decoded;
     try {
-      decoded = jwt.verify(authToken, process.env.JWT_SECRET);
+      decoded = jwt.verify(authToken, process.env.JWT_SECRET, {
+        ignoreExpiration: validateExpiration === false,
+      });
     } catch (error) {
       if (error.name === "TokenExpiredError") {
         console.warn("⚠️ [AUTH-VERIFY] Token has expired");
-        return {
-          success: false,
-          isAuthenticated: false,
-          isAuthorized: false,
-          error: "TOKEN_EXPIRED",
-          errorMessage: "Authentication token has expired",
-          errorCode: 401,
-          context: context,
-        };
+        return buildFailure({
+          reason: "TOKEN_EXPIRED",
+          message: "Authentication token has expired",
+        });
       }
       if (error.name === "JsonWebTokenError") {
         console.warn("⚠️ [AUTH-VERIFY] Invalid token");
-        return {
-          success: false,
-          isAuthenticated: false,
-          isAuthorized: false,
-          error: "INVALID_TOKEN",
-          errorMessage: "Invalid authentication token",
-          errorCode: 401,
-          context: context,
-        };
+        return buildFailure({
+          reason: "INVALID_TOKEN",
+          message: "Invalid authentication token",
+        });
       }
       throw error;
     }
 
-    // Check if token is blacklisted
-    if (verifyConfig.checkBlacklist !== false) {
+    if (checkBlacklist !== false) {
       const blacklisted = await prisma.blacklistedToken.findUnique({
         where: { token: authToken },
       });
 
       if (blacklisted) {
         console.warn("⚠️ [AUTH-VERIFY] Token is blacklisted");
-        return {
-          success: false,
-          isAuthenticated: false,
-          isAuthorized: false,
-          error: "TOKEN_REVOKED",
-          errorMessage: "Token has been revoked. Please login again",
-          errorCode: 401,
-          context: context,
-        };
+        return buildFailure({
+          reason: "TOKEN_REVOKED",
+          message: "Token has been revoked. Please login again",
+        });
       }
     }
 
-    // Get user from database
-    const user = await prisma.user.findUnique({
+    const dbUser = await prisma.user.findUnique({
       where: { id: decoded.id },
       select: {
         id: true,
@@ -2315,73 +2761,136 @@ const executeAuthVerify = async (node, context, appId, userId) => {
       },
     });
 
-    if (!user) {
+    if (!dbUser) {
       console.warn("⚠️ [AUTH-VERIFY] User not found");
-      return {
-        success: false,
-        isAuthenticated: false,
-        isAuthorized: false,
-        error: "USER_NOT_FOUND",
-        errorMessage: "User not found",
-        errorCode: 401,
-        context: context,
-      };
+      return buildFailure({
+        reason: "USER_NOT_FOUND",
+        message: "User not found",
+      });
     }
 
-    // Check if user is verified
-    if (!user.verified) {
+    if (!dbUser.verified) {
       console.warn("⚠️ [AUTH-VERIFY] User account not verified");
-      return {
-        success: false,
+      return buildFailure({
+        reason: "ACCOUNT_NOT_VERIFIED",
+        message: "Account not verified",
+        code: 403,
         isAuthenticated: true,
-        isAuthorized: false,
-        error: "ACCOUNT_NOT_VERIFIED",
-        errorMessage: "Account not verified",
-        errorCode: 403,
-        context: context,
-      };
+      });
     }
 
-    // Check role if required
+    const roleSet = new Set();
+    if (Array.isArray(decoded?.roles)) decoded.roles.forEach((r) => r && roleSet.add(r));
+    if (decoded?.role) roleSet.add(decoded.role);
+    if (Array.isArray(dbUser?.roles)) dbUser.roles.forEach((r) => r && roleSet.add(r));
+    if (dbUser?.role) roleSet.add(dbUser.role);
+    if (Array.isArray(context.user?.roles))
+      context.user.roles.forEach((r) => r && roleSet.add(r));
+    if (context.user?.role) roleSet.add(context.user.role);
+
+    const resolvedRoles = Array.from(roleSet);
+    const requiredRoleList = [
+      ...requiredRoles,
+      ...(requiredRole ? [requiredRole] : []),
+    ].filter(Boolean);
+
     let isAuthorized = true;
-    if (requiredRole && user.role !== requiredRole) {
-      console.warn("⚠️ [AUTH-VERIFY] User role does not match required role");
-      isAuthorized = false;
+    if (requiredRoleList.length > 0) {
+      isAuthorized = requiredRoleList.some((role) =>
+        resolvedRoles.includes(role)
+      );
     }
 
-    console.log("✅ [AUTH-VERIFY] Authentication verification completed:", {
-      userId: user.id,
-      userEmail: user.email,
-      userRole: user.role,
+    const resolvedName =
+      context.session?.name ||
+      context.user?.name ||
+      decoded?.name ||
+      decoded?.fullName ||
+      decoded?.displayName ||
+      (dbUser.email ? dbUser.email.split("@")[0] : undefined);
+
+    const sanitizedUser = {
+      id: dbUser.id,
+      email: dbUser.email,
+      name: resolvedName,
+      role: resolvedRoles[0] || dbUser.role || decoded?.role || null,
+      roles: resolvedRoles.length > 0 ? resolvedRoles : [dbUser.role].filter(Boolean),
+      verified: dbUser.verified,
+      createdAt: dbUser.createdAt,
+      updatedAt: dbUser.updatedAt,
+    };
+
+    const loginTimestamp =
+      context.session?.loginTimestamp ||
+      (decoded?.loginTimestamp
+        ? new Date(decoded.loginTimestamp).toISOString()
+        : decoded?.iat
+        ? new Date(decoded.iat * 1000).toISOString()
+        : new Date().toISOString());
+
+    const verifiedAt = new Date().toISOString();
+
+    const session = {
+      ...(context.session && typeof context.session === "object"
+        ? context.session
+        : {}),
+      userId: sanitizedUser.id,
+      email: sanitizedUser.email,
+      name: sanitizedUser.name,
+      roles: sanitizedUser.roles,
+      token: authToken,
+      loginTimestamp,
+      validatedAt: verifiedAt,
+      user: sanitizedUser,
+    };
+
+    const authVerifyResult = {
       isAuthenticated: true,
-      isAuthorized: isAuthorized,
+      isAuthorized,
+      failureReason: isAuthorized ? null : "INSUFFICIENT_PERMISSIONS",
+      verifiedAt,
+      requiredRoles: requiredRoleList,
+    };
+
+    if (!isAuthorized) {
+      console.warn(
+        "⚠️ [AUTH-VERIFY] User lacks required role(s):",
+        requiredRoleList
+      );
+    }
+
+    console.log("✅ [AUTH-VERIFY] Verification outcome:", {
+      userId: sanitizedUser.id,
+      email: sanitizedUser.email,
+      roles: sanitizedUser.roles,
+      isAuthorized,
     });
+
+    const enrichedContext = {
+      ...context,
+      token: authToken,
+      isAuthenticated: true,
+      isAuthorized,
+      user: {
+        ...(context.user || {}),
+        ...sanitizedUser,
+      },
+      session,
+      authVerifyResult,
+      auth: {
+        ...(context.auth || {}),
+        ...authVerifyResult,
+      },
+    };
 
     return {
       success: isAuthorized,
       isAuthenticated: true,
-      isAuthorized: isAuthorized,
-      user: {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-        verified: user.verified,
-        createdAt: user.createdAt,
-        updatedAt: user.updatedAt,
-      },
-      context: {
-        ...context,
-        user: {
-          id: user.id,
-          email: user.email,
-          role: user.role,
-          verified: user.verified,
-          createdAt: user.createdAt,
-          updatedAt: user.updatedAt,
-        },
-        isAuthenticated: true,
-        isAuthorized: isAuthorized,
-      },
+      isAuthorized,
+      failureReason: authVerifyResult.failureReason,
+      user: sanitizedUser,
+      session,
+      context: enrichedContext,
     };
   } catch (error) {
     console.error(
@@ -2392,10 +2901,10 @@ const executeAuthVerify = async (node, context, appId, userId) => {
       success: false,
       isAuthenticated: false,
       isAuthorized: false,
-      error: "INTERNAL_ERROR",
+      failureReason: "INTERNAL_ERROR",
       errorMessage: error.message,
       errorCode: 500,
-      context: context,
+      context,
     };
   }
 };
@@ -3248,6 +3757,38 @@ const substituteContextVariables = (value, context) => {
   });
 };
 
+// Verify HMAC signature helper (uses JSON.stringify(payload) as canonical representation)
+const verifyHmacSignature = (payload, providedSignature, secret) => {
+  try {
+    if (!providedSignature || !secret) return false;
+
+    const crypto = require('crypto');
+    const payloadString = typeof payload === 'string' ? payload : JSON.stringify(payload);
+
+    // Allow headers like 'sha256=...' or raw hex
+    let expectedPrefix = 'sha256=';
+    let provided = providedSignature;
+    if (provided.startsWith('sha256=')) provided = provided.slice(7);
+
+    const hmac = crypto.createHmac('sha256', secret).update(payloadString).digest('hex');
+
+    const a = Buffer.from(hmac, 'hex');
+    let b;
+    try {
+      b = Buffer.from(provided, 'hex');
+    } catch (e) {
+      // Provided signature not hex - fail
+      return false;
+    }
+
+    if (a.length !== b.length) return false;
+
+    return crypto.timingSafeEqual(a, b);
+  } catch (e) {
+    return false;
+  }
+};
+
 // Role checking block handler
 const executeRoleIs = async (node, context, appId, userId) => {
   try {
@@ -3268,12 +3809,29 @@ const executeRoleIs = async (node, context, appId, userId) => {
 
     // Get user from context or database
     let userRole = null;
+    let userRoles = [];
 
     // First, check if user role is in context (from onLogin or auth.verify)
     if (context.user?.role) {
       userRole = context.user.role;
       console.log(`👤 [ROLE-IS] User role from context: ${userRole}`);
-    } else if (userId) {
+    }
+
+    if (Array.isArray(context.user?.roles) && context.user.roles.length > 0) {
+      userRoles = context.user.roles;
+      if (!userRole) {
+        userRole = context.user.roles[0];
+      }
+      console.log(`👤 [ROLE-IS] User roles from context: ${userRoles.join(", ")}`);
+    }
+
+    if (!userRole && Array.isArray(context.session?.roles)) {
+      userRoles = context.session.roles;
+      userRole = context.session.roles[0];
+      console.log(`👤 [ROLE-IS] User roles from session: ${userRoles.join(", ")}`);
+    }
+
+    if (!userRole && userId) {
       // Fetch user from database
       const user = await prisma.user.findUnique({
         where: { id: userId },
@@ -3282,6 +3840,7 @@ const executeRoleIs = async (node, context, appId, userId) => {
 
       if (user) {
         userRole = user.role;
+        userRoles = [user.role];
         console.log(`👤 [ROLE-IS] User role from database: ${userRole}`);
       }
     }
@@ -3296,12 +3855,14 @@ const executeRoleIs = async (node, context, appId, userId) => {
       };
     }
 
+    const effectiveUserRoles = userRoles.length > 0 ? userRoles : [userRole];
+
     // Check role based on configuration
     let isValid = false;
 
     if (checkMultiple && roles && roles.length > 0) {
       // Check if user has any of the specified roles
-      isValid = roles.includes(userRole);
+      isValid = roles.some((role) => effectiveUserRoles.includes(role));
       console.log(
         `👤 [ROLE-IS] Checking if user role "${userRole}" is in [${roles.join(
           ", "
@@ -3309,7 +3870,7 @@ const executeRoleIs = async (node, context, appId, userId) => {
       );
     } else if (requiredRole) {
       // Check if user has the required role
-      isValid = userRole === requiredRole;
+      isValid = effectiveUserRoles.includes(requiredRole);
       console.log(
         `👤 [ROLE-IS] Checking if user role "${userRole}" equals "${requiredRole}": ${isValid}`
       );
@@ -3328,6 +3889,7 @@ const executeRoleIs = async (node, context, appId, userId) => {
         ...context,
         roleCheckResult: {
           userRole: userRole,
+          userRoles: effectiveUserRoles,
           isValid: isValid,
           requiredRole: requiredRole,
           roles: roles,
@@ -3957,7 +4519,6 @@ const executeOnDrop = async (node, context, appId, userId = 1) => {
 // };
 
 // onScheduled Trigger
-
 const executeOnSchedule = async (node, context, appId, userId) => {
   try {
     console.log("⏰ [ON-SCHEDULE] Processing schedule trigger for app:", appId);
@@ -4008,32 +4569,37 @@ const executeOnSchedule = async (node, context, appId, userId) => {
 
     // Calculate next execution time
     let nextExecutionTime = null;
-
     if (scheduleType === "interval") {
       const intervalMs = calculateIntervalMs(scheduleValue, scheduleUnit);
       nextExecutionTime = new Date(Date.now() + intervalMs);
+      console.log(`⏰ [ON-SCHEDULE] Waiting for interval: ${intervalMs} ms`);
+      // Delay execution until interval
+      await new Promise((res) => setTimeout(res, intervalMs));
     } else if (scheduleType === "cron") {
-      // For cron, we would need a cron parser library
-      // For now, just log that it's scheduled
+      // You can replace this stub with a cron parser lib to calculate nextExecutionTime
       console.log("⏰ [ON-SCHEDULE] Cron schedule:", cronExpression);
-      nextExecutionTime = new Date(Date.now() + 60000); // Default to 1 minute
+      // For now, wait 1 minute as a placeholder
+      nextExecutionTime = new Date(Date.now() + 60000);
+      await new Promise((res) => setTimeout(res, 60000));
     }
 
     console.log(
-      "✅ [ON-SCHEDULE] Schedule registered, next execution:",
-      nextExecutionTime
+      "✅ [ON-SCHEDULE] Executing scheduled task at:",
+      new Date().toISOString()
     );
+
+    // Proceed with any scheduled action here (not shown, you can add your logic)
 
     return {
       success: true,
       scheduled: true,
-      scheduleType: scheduleType,
+      scheduleType,
       nextExecutionTime: nextExecutionTime?.toISOString(),
       context: {
         ...context,
         scheduleResult: {
           scheduled: true,
-          scheduleType: scheduleType,
+          scheduleType,
           nextExecutionTime: nextExecutionTime?.toISOString(),
         },
       },
@@ -4254,7 +4820,6 @@ const executeOnLogin = async (node, context, appId) => {
     console.log("🔐 [ON-LOGIN] Processing login event for app:", appId);
 
     const loginConfig = node.data || {};
-    const { user, token, loginMetadata } = context;
 
     console.log("🔐 [ON-LOGIN] Login configuration:", {
       captureUserData: loginConfig.captureUserData,
@@ -4262,83 +4827,531 @@ const executeOnLogin = async (node, context, appId) => {
       storeToken: loginConfig.storeToken,
     });
 
-    // Validate that we have user data from login
-    if (!user || !user.id) {
+    // Abort if upstream context explicitly marked the login as failed
+    const loginFailureFlag = [
+      context.loginSuccess,
+      context.loginSucceeded,
+      context.authSuccess,
+    ].some((flag) => flag === false);
+
+    const loginFailureStatus = [
+      context.loginStatus,
+      context.status,
+      context.authStatus,
+    ].some((status) =>
+      typeof status === "string"
+        ? ["failed", "error", "unauthorized"].includes(
+            status.toLowerCase()
+          )
+        : false
+    );
+
+    if (loginFailureFlag || loginFailureStatus) {
+      console.warn("⚠️ [ON-LOGIN] Login marked as unsuccessful in context");
+      return {
+        success: false,
+        triggered: false,
+        error: "Login was not successful",
+        context,
+      };
+    }
+    // Resolve user details from multiple potential sources
+    const userCandidates = [
+      context.user,
+      context.session?.user,
+      context.authUser,
+      context.loginUser,
+      context.loginResponse?.user,
+      context.authResponse?.user,
+      context.httpResponse?.data?.user,
+    ];
+
+    const rawUser = userCandidates.find((candidate) =>
+      candidate && (candidate.id || candidate.userId || candidate.email)
+    );
+
+    if (!rawUser) {
       console.warn("⚠️ [ON-LOGIN] No user data provided in login event");
       return {
         success: false,
+        triggered: false,
         error: "No user data provided in login event",
-        context: context,
+        context,
       };
     }
 
-    // Validate that we have a token
-    if (!token) {
+    const userId = rawUser.id ?? rawUser.userId;
+    const userEmail = rawUser.email ?? rawUser.userEmail ?? rawUser.username;
+
+    if (!userId || !userEmail) {
+      console.warn(
+        "⚠️ [ON-LOGIN] User data missing required identifier or email"
+      );
+      return {
+        success: false,
+        triggered: false,
+        error: "Incomplete user details for login event",
+        context,
+      };
+    }
+
+    // Resolve token from context or metadata
+    const tokenCandidates = [
+      context.token,
+      context.session?.token,
+      context.authToken,
+      context.accessToken,
+      context.loginResponse?.token,
+      context.authResponse?.token,
+      context.httpResponse?.data?.token,
+      context.headers?.authorization,
+      context.request?.headers?.authorization,
+    ];
+
+    let resolvedToken = tokenCandidates.find(
+      (candidate) => typeof candidate === "string" && candidate.trim() !== ""
+    );
+
+    if (resolvedToken && /bearer\s+/i.test(resolvedToken)) {
+      resolvedToken = resolvedToken.replace(/bearer\s+/i, "").trim();
+    }
+
+    if (!resolvedToken) {
       console.warn("⚠️ [ON-LOGIN] No authentication token provided");
       return {
         success: false,
+        triggered: false,
         error: "No authentication token provided",
-        context: context,
+        context,
       };
     }
 
-    console.log("🔐 [ON-LOGIN] Login event details:", {
-      userId: user.id,
-      userEmail: user.email,
-      userRole: user.role,
-      hasToken: !!token,
-      hasMetadata: !!loginMetadata,
-    });
+    const loginMetadata =
+      context.loginMetadata ||
+      context.authMetadata ||
+      context.metadata?.login ||
+      null;
 
-    // Build login context with user data
-    const loginContext = {
-      ...context,
-      loginProcessed: true,
-      loginTimestamp: new Date().toISOString(),
+    const nowIso = new Date().toISOString();
+
+    const resolvedName =
+      rawUser.name ||
+      rawUser.fullName ||
+      [rawUser.firstName, rawUser.lastName].filter(Boolean).join(" ") ||
+      rawUser.displayName ||
+      rawUser.username ||
+      (userEmail ? userEmail.split("@")[0] : undefined);
+
+    const resolvedRoles = Array.isArray(rawUser.roles)
+      ? rawUser.roles.filter(Boolean)
+      : rawUser.role
+      ? [rawUser.role]
+      : [];
+
+    const session = {
+      ...(context.session && typeof context.session === "object"
+        ? context.session
+        : {}),
+      userId,
+      email: userEmail,
+      name: resolvedName,
+      roles: resolvedRoles,
+      token: resolvedToken,
+      loginTimestamp:
+        context.session?.loginTimestamp ||
+        loginMetadata?.timestamp ||
+        nowIso,
+      metadata:
+        loginConfig.captureMetadata !== false && loginMetadata
+          ? {
+              ...(context.session?.metadata || {}),
+              ...loginMetadata,
+            }
+          : context.session?.metadata,
     };
 
-    // Add user data if configured
+    const enrichedUser = {
+      id: userId,
+      email: userEmail,
+      name: resolvedName,
+      role: resolvedRoles[0] || rawUser.role || null,
+      roles: resolvedRoles,
+      verified: rawUser.verified ?? rawUser.isVerified ?? true,
+      createdAt: rawUser.createdAt,
+      updatedAt: rawUser.updatedAt,
+    };
+
+    session.user = {
+      ...(session.user || {}),
+      ...enrichedUser,
+    };
+
+    const enrichedContext = {
+      ...context,
+      loginProcessed: true,
+      loginTimestamp: session.loginTimestamp,
+      isAuthenticated: true,
+      session,
+      auth: {
+        ...(context.auth || {}),
+        isAuthenticated: true,
+        verifiedAt: nowIso,
+        failureReason: null,
+      },
+    };
+
     if (loginConfig.captureUserData !== false) {
-      loginContext.user = {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-        verified: user.verified,
-        createdAt: user.createdAt,
-        updatedAt: user.updatedAt,
+      enrichedContext.user = {
+        ...(context.user || {}),
+        ...enrichedUser,
       };
+    } else {
+      enrichedContext.user = context.user;
     }
 
-    // Add token if configured
     if (loginConfig.storeToken !== false) {
-      loginContext.token = token;
-      loginContext.tokenType = "Bearer";
-      loginContext.expiresIn = 3600; // 1 hour
+      enrichedContext.token = resolvedToken;
     }
 
-    // Add login metadata if configured and available
     if (loginConfig.captureMetadata !== false && loginMetadata) {
-      loginContext.loginMetadata = {
-        timestamp: loginMetadata.timestamp || new Date().toISOString(),
+      enrichedContext.loginMetadata = {
+        timestamp: loginMetadata.timestamp || session.loginTimestamp,
         ip: loginMetadata.ip,
         device: loginMetadata.device,
         location: loginMetadata.location,
       };
     }
 
+    console.log("🔐 [ON-LOGIN] Login event details:", {
+      userId,
+      userEmail,
+      roles: resolvedRoles,
+      hasToken: !!resolvedToken,
+      hasMetadata: !!loginMetadata,
+    });
+
     console.log("✅ [ON-LOGIN] Login event processed successfully");
     return {
       success: true,
+      triggered: true,
       message: "Login event processed",
-      context: loginContext,
+      session,
+      context: enrichedContext,
     };
   } catch (error) {
     console.error("❌ [ON-LOGIN] Error processing login:", error);
     return {
       success: false,
+      triggered: false,
       error: error.message,
-      context: context,
+      context,
     };
+  }
+};
+
+
+// // OnWebhook trigger handler
+// const executeOnWebhook = async (node, context, appId, userId = 1) => {
+//   try {
+//     console.log("📬 [ON-WEBHOOK] Processing webhook trigger for app:", appId);
+
+//     // Validate app access (don't strictly require userId for public webhooks, but keep check for owner-scoped triggers)
+//     const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
+//     if (!hasAccess) {
+//       // If access denied because no user context, still allow if node.data.allowPublic === true
+//       if (!node.data || node.data.allowPublic !== true) {
+//         throw new Error("Access denied to this app for webhook trigger");
+//       }
+//     }
+
+//     const cfg = node.data || {};
+
+//     // Expect payload to be available in context under common keys
+//     const payload =
+//       context.webhookPayload || context.payload || context.body || context.requestBody || context.event || null;
+
+//     const headers = context.headers || context.requestHeaders || context.httpHeaders || {};
+
+//     console.log("📬 [ON-WEBHOOK] Payload present:", !!payload);
+
+//     // Optional secret/header validation configured on the block
+//     if (cfg.secretHeader && cfg.secretValue) {
+//       const provided = headers[cfg.secretHeader.toLowerCase()] || headers[cfg.secretHeader];
+//       const expected = substituteContextVariables(cfg.secretValue, context);
+//       if (!provided || provided !== expected) {
+//         console.warn("❌ [ON-WEBHOOK] Secret header validation failed for header:", cfg.secretHeader);
+//         return {
+//           success: false,
+//           triggered: false,
+//           error: "Invalid webhook secret",
+//           context: { ...context, webhookRejected: true },
+//         };
+//       }
+//     }
+
+//     // Optional filter: allow matching by event type or path
+//     let matched = true;
+//     if (cfg.matchPath && payload) {
+//       // Extract nested value from payload using dot-path
+//       const parts = cfg.matchPath.split('.');
+//       let v = payload;
+//       for (const p of parts) {
+//         v = v?.[p];
+//         if (v === undefined) break;
+//       }
+//       if (cfg.matchValue !== undefined && String(v) !== String(substituteContextVariables(cfg.matchValue, context))) {
+//         matched = false;
+//       }
+//     }
+
+//     if (!payload) {
+//       console.warn('⚠️ [ON-WEBHOOK] No payload found in context for webhook trigger');
+//       return {
+//         success: false,
+//         triggered: false,
+//         error: 'No webhook payload provided',
+//         context,
+//       };
+//     }
+
+//     if (!matched) {
+//       console.log('ℹ️ [ON-WEBHOOK] Payload did not match configured filter, skipping trigger');
+//       return {
+//         success: true,
+//         triggered: false,
+//         matched: false,
+//         context: { ...context, webhookMatched: false },
+//       };
+//     }
+
+//     // Optionally persist webhook payload to an app-scoped table if configured
+//     if (cfg.saveToTable) {
+//       try {
+//         const tableName = generateTableName(appId, cfg.saveToTable || 'webhooks');
+//         const exists = await dbUtils.tableExists(tableName);
+//         if (!exists) {
+//           await prisma.$executeRawUnsafe(
+//             `CREATE TABLE "${tableName}" (id SERIAL PRIMARY KEY, data JSONB, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW());`
+//           );
+//         }
+
+//         await prisma.$queryRawUnsafe(`INSERT INTO "${tableName}" (data) VALUES ($1)`, JSON.stringify(payload));
+//         console.log(`✅ [ON-WEBHOOK] Saved webhook payload to ${tableName}`);
+//       } catch (e) {
+//         console.warn('⚠️ [ON-WEBHOOK] Failed to save webhook payload:', e.message);
+//       }
+//     }
+
+//     // Add webhook data to context for downstream blocks
+//     const updatedContext = {
+//       ...context,
+//       webhookResult: {
+//         receivedAt: new Date().toISOString(),
+//         payload,
+//         headers,
+//         matched: true,
+//       },
+//     };
+
+//     console.log('✅ [ON-WEBHOOK] Webhook trigger processed');
+
+//     return {
+//       success: true,
+//       triggered: true,
+//       matched: true,
+//       context: updatedContext,
+//       message: 'Webhook processed',
+//     };
+//   } catch (error) {
+//     console.error('❌ [ON-WEBHOOK] Error processing webhook trigger:', error);
+//     return {
+//       success: false,
+//       triggered: false,
+//       error: error.message,
+//       context,
+//     };
+//   }
+// };
+
+// Run a workflow given nodes/edges and an initial context
+const runWorkflow = async (nodes, edges, initialContext = {}, appId, userId = 1) => {
+  try {
+    const results = [];
+    let currentContext = initialContext || {};
+
+    // Build edge map
+    const edgeMap = {};
+    if (edges && Array.isArray(edges)) {
+      edges.forEach((edge) => {
+        const connectorLabel = edge.label || edge.sourceHandle || "next";
+        const key = `${edge.source}:${connectorLabel}`;
+        edgeMap[key] = edge.target;
+      });
+    }
+
+    // Build node map
+    const nodeMap = {};
+    nodes.forEach((node) => {
+      nodeMap[node.id] = node;
+    });
+
+    // Find starting trigger node
+    let currentNodeId = null;
+    for (const node of nodes) {
+      if (node.data && node.data.category === "Triggers") {
+        // Prefer explicit onWebhook trigger when webhook context present
+        if (currentContext.webhookPayload && node.data.label === "onWebhook") {
+          currentNodeId = node.id;
+          break;
+        }
+        if (!currentNodeId) currentNodeId = node.id;
+      }
+    }
+
+    if (!currentNodeId) {
+      return { success: false, message: "No trigger node found in workflow", results: [] };
+    }
+
+    const executedNodeIds = new Set();
+    let maxIterations = 200;
+    let iteration = 0;
+
+    while (currentNodeId && iteration < maxIterations) {
+      iteration++;
+      const node = nodeMap[currentNodeId];
+
+      if (!node) break;
+      if (executedNodeIds.has(currentNodeId)) break;
+      executedNodeIds.add(currentNodeId);
+
+      try {
+        let result = null;
+
+        // Actions
+        if (node.data.category === "Actions") {
+          switch (node.data.label) {
+            case "db.create":
+              result = await executeDbCreate(node, currentContext, appId, userId);
+              break;
+            case "db.find":
+              result = await executeDbFind(node, currentContext, appId, userId);
+              break;
+            case "db.update":
+              result = await executeDbUpdate(node, currentContext, appId, userId);
+              break;
+            case "db.upsert":
+              result = await executeDbUpsert(node, currentContext, appId, userId);
+              break;
+            case "email.send":
+              result = await executeEmailSend(node, currentContext, appId, userId);
+              break;
+            case "http.request":
+              result = await executeHttpRequest(node, currentContext, appId, userId);
+              break;
+            case "ai.summarize":
+              result = await executeAiSummarize(node, currentContext, appId, userId);
+              break;
+            default:
+              result = { success: true, message: `${node.data.label} executed (placeholder)` };
+          }
+        } else if (node.data.category === "Conditions") {
+          switch (node.data.label) {
+            case "isFilled":
+              result = await executeIsFilled(node, currentContext, appId);
+              break;
+            case "dateValid":
+              result = await executeDateValid(node, currentContext, appId);
+              break;
+            case "match":
+              result = await executeMatch(node, currentContext, appId, userId);
+              break;
+            case "roleIs":
+              result = await executeRoleIs(node, currentContext, appId, userId);
+              break;
+            case "switch":
+              result = await executeSwitch(node, currentContext, appId, userId);
+              break;
+            case "expr":
+              result = await executeExpr(node, currentContext, appId, userId);
+              break;
+            default:
+              result = { success: true, isFilled: true, message: `${node.data.label} processed (placeholder)` };
+          }
+        } else if (node.data.category === "Triggers") {
+          switch (node.data.label) {
+            case "onClick":
+              result = await executeOnClick(node, currentContext, appId);
+              break;
+            case "onPageLoad":
+              result = await executeOnPageLoad(node, currentContext, appId);
+              break;
+            case "onSubmit":
+              result = await executeOnSubmit(node, currentContext, appId);
+              break;
+            case "onDrop":
+              result = await executeOnDrop(node, currentContext, appId, userId);
+              break;
+            case "onLogin":
+              result = await executeOnLogin(node, currentContext, appId);
+              break;
+            case "onSchedule":
+              result = await executeOnSchedule(node, currentContext, appId, userId);
+              break;
+            case "onRecordCreate":
+              result = await executeOnRecordCreate(node, currentContext, appId, userId);
+              break;
+            case "onRecordUpdate":
+              result = await executeOnRecordUpdate(node, currentContext, appId, userId);
+              break;
+            case "onWebhook":
+              result = await executeOnWebhook(node, currentContext, appId, userId);
+              break;
+            default:
+              result = { success: true, message: `${node.data.label} triggered (placeholder)` };
+          }
+        } else {
+          result = { success: true, message: `${node.data.label} processed` };
+        }
+
+        results.push({ nodeId: node.id, nodeLabel: node.data.label, result });
+
+        if (result && typeof result === "object") {
+          currentContext = { ...currentContext, ...result.context, ...result };
+        }
+
+        // Determine next node
+        let nextNodeId = null;
+        if (node.data.category === "Conditions") {
+          if (node.data.label === "switch") {
+            const matchedCase = result?.matchedCase || "default";
+            const edgeKey = `${node.id}:${matchedCase}`;
+            nextNodeId = edgeMap[edgeKey];
+          } else if (node.data.label === "expr") {
+            const conditionResult = result?.result || false;
+            const connectorLabel = conditionResult ? "yes" : "no";
+            const edgeKey = `${node.id}:${connectorLabel}`;
+            nextNodeId = edgeMap[edgeKey];
+          } else {
+            const conditionResult = result?.isFilled || result?.isValid || result?.match || false;
+            const connectorLabel = conditionResult ? "yes" : "no";
+            const edgeKey = `${node.id}:${connectorLabel}`;
+            nextNodeId = edgeMap[edgeKey];
+          }
+        } else {
+          const edgeKey = `${node.id}:next`;
+          nextNodeId = edgeMap[edgeKey];
+        }
+
+        currentNodeId = nextNodeId;
+      } catch (err) {
+        results.push({ nodeId: currentNodeId, nodeLabel: nodeMap[currentNodeId]?.data?.label, error: err.message });
+        break;
+      }
+    }
+
+    return { success: true, results, context: currentContext };
+  } catch (error) {
+    return { success: false, error: error.message };
   }
 };
 
@@ -4800,6 +5813,10 @@ router.post("/execute", authenticateToken, async (req, res) => {
               result = await executeOnLogin(node, currentContext, appId);
               break;
 
+            case "onWebhook":
+              result = await executeOnWebhook(node, currentContext, appId, userId);
+              break;
+
             case "onSchedule":
               result = await executeOnSchedule(
                 node,
@@ -4968,4 +5985,1457 @@ router.post("/execute", authenticateToken, async (req, res) => {
   }
 });
 
+/**
+ * @route   POST /api/workflow/webhook/:appId
+ * @desc    Webhook endpoint to receive external POST requests and trigger workflows
+ * @access  Public (with secret validation)
+ */
+router.post("/webhook/:appId", async (req, res) => {
+  try {
+    const { appId } = req.params;
+    const webhookSecret = req.headers["x-algo-secret"] || req.headers["x-webhook-secret"];
+    const payload = req.body;
+    const headers = req.headers;
+
+    console.log("🔗 [WEBHOOK] Received webhook request:", {
+      appId,
+      hasSecret: !!webhookSecret,
+      payloadKeys: Object.keys(payload),
+      timestamp: new Date().toISOString(),
+    });
+
+    // Validate webhook secret
+    const expectedSecret = process.env.ALGORITHM_WEBHOOK_SECRET;
+    if (expectedSecret && webhookSecret !== expectedSecret) {
+      console.warn("⚠️ [WEBHOOK] Invalid or missing webhook secret");
+      return res.status(403).json({
+        success: false,
+        message: "Invalid webhook secret",
+      });
+    }
+
+    // Find workflows with onWebhook trigger for this app
+    // Query workflows and check if they have onWebhook nodes
+    const allWorkflows = await prisma.workflow.findMany({
+      where: {
+        appId: parseInt(appId),
+      },
+    });
+
+    // Filter workflows that have onWebhook trigger
+    const webhookWorkflows = allWorkflows.filter((workflow) => {
+      const nodes = workflow.nodes || [];
+      return nodes.some(
+        (n) => n.data?.category === "Triggers" && n.data?.label === "onWebhook"
+      );
+    });
+
+    if (!webhookWorkflows || webhookWorkflows.length === 0) {
+      console.warn("⚠️ [WEBHOOK] No workflows found with onWebhook trigger for app:", appId);
+      return res.status(404).json({
+        success: false,
+        message: "No webhook workflows found for this app",
+      });
+    }
+
+    console.log(`🔗 [WEBHOOK] Found ${webhookWorkflows.length} webhook workflow(s) for app ${appId}`);
+
+    // Get app owner for access validation
+    const app = await prisma.app.findUnique({
+      where: { id: parseInt(appId) },
+      select: { ownerId: true },
+    });
+
+    if (!app) {
+      return res.status(404).json({
+        success: false,
+        message: "App not found",
+      });
+    }
+
+    // Execute each webhook workflow using the main execution endpoint logic
+    const results = [];
+    for (const workflow of webhookWorkflows) {
+      try {
+        const nodes = workflow.nodes || [];
+        const edges = workflow.edges || [];
+
+        // Create context with webhook payload
+        const context = {
+          webhookPayload: payload,
+          webhookHeaders: headers,
+          triggerType: "onWebhook",
+          appId: parseInt(appId),
+          // Also add payload data at root level for easy access
+          ...payload,
+        };
+
+        // Use the existing workflow execution logic
+        // Find the onWebhook trigger node
+        const webhookNode = nodes.find(
+          (n) => n.data?.category === "Triggers" && n.data?.label === "onWebhook"
+        );
+
+        if (!webhookNode) {
+          continue;
+        }
+
+        // Build edge map
+        const edgeMap = {};
+        edges.forEach((edge) => {
+          const sourceHandle = edge.sourceHandle || edge.label || "next";
+          const key = `${edge.source}:${sourceHandle}`;
+          edgeMap[key] = edge.target;
+        });
+
+        // Execute workflow starting from onWebhook node
+        const executionResults = [];
+        let currentNodeId = webhookNode.id;
+        let currentContext = context;
+        const maxIterations = 100;
+        let iteration = 0;
+
+        while (currentNodeId && iteration < maxIterations) {
+          iteration++;
+          const node = nodes.find((n) => n.id === currentNodeId);
+          if (!node) break;
+
+          try {
+            let result;
+
+            // Execute based on node type
+            if (node.data.category === "Triggers" && node.data.label === "onWebhook") {
+              result = await executeOnWebhook(node, currentContext, parseInt(appId), app.ownerId);
+            } else if (node.data.category === "Actions") {
+              switch (node.data.label) {
+                case "db.upsert":
+                  result = await executeDbUpsert(node, currentContext, parseInt(appId), app.ownerId);
+                  break;
+                case "notify.toast":
+                  result = await executeNotifyToast(node, currentContext, parseInt(appId), app.ownerId);
+                  break;
+                case "db.find":
+                  result = await executeDbFind(node, currentContext, parseInt(appId), app.ownerId);
+                  break;
+                case "db.create":
+                  result = await executeDbCreate(node, currentContext, parseInt(appId), app.ownerId);
+                  break;
+                case "db.update":
+                  result = await executeDbUpdate(node, currentContext, parseInt(appId), app.ownerId);
+                  break;
+                default:
+                  result = { success: true, message: `${node.data.label} executed` };
+              }
+            } else {
+              result = { success: true, message: `${node.data.label} processed` };
+            }
+
+            executionResults.push({
+              nodeId: node.id,
+              nodeLabel: node.data.label,
+              result,
+            });
+
+            // Update context
+            if (result && typeof result === "object" && result.context) {
+              currentContext = { ...currentContext, ...result.context };
+            }
+
+            // Find next node
+            const edgeKey = `${node.id}:next`;
+            currentNodeId = edgeMap[edgeKey] || null;
+          } catch (error) {
+            console.error(`❌ [WEBHOOK] Error in node ${node.data.label}:`, error);
+            executionResults.push({
+              nodeId: node.id,
+              nodeLabel: node.data.label,
+              error: error.message,
+            });
+            break;
+          }
+        }
+
+        results.push({
+          workflowId: workflow.id,
+          success: true,
+          results: executionResults,
+        });
+
+        console.log(`✅ [WEBHOOK] Workflow ${workflow.id} executed successfully`);
+      } catch (workflowError) {
+        console.error(`❌ [WEBHOOK] Error executing workflow ${workflow.id}:`, workflowError);
+        results.push({
+          workflowId: workflow.id,
+          success: false,
+          error: workflowError.message,
+        });
+      }
+    }
+
+    // Return success response
+    res.json({
+      success: true,
+      message: "Webhook received and processed",
+      workflowsExecuted: results.length,
+      results: results,
+      receivedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("❌ [WEBHOOK] Webhook processing error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to process webhook",
+      error: error.message,
+    });
+  }
+});
+
+
+
+
+
+/**
+ * @route   POST /api/webhook/algorithm
+ * @desc    Public webhook endpoint for Algorithm to push applicant + quote data
+ * @access  Public (secured by shared secret header)
+ */
+router.post("/webhook/algorithm", async (req, res) => {
+  try {
+    // Expect a shared secret in header 'x-algo-secret' or Authorization: Bearer <secret>
+    const headerSecret = req.header("x-algo-secret") || req.header("authorization");
+
+    if (!process.env.ALGORITHM_WEBHOOK_SECRET) {
+      console.warn("⚠️ ALGORTHM webhook secret is not configured (ALGORITHM_WEBHOOK_SECRET)");
+      return res.status(500).json({ success: false, message: "Server misconfiguration" });
+    }
+
+    let provided = headerSecret || "";
+    if (provided.startsWith("Bearer ")) provided = provided.slice(7).trim();
+
+    // If the simple header secret is provided, verify it first
+    if (!provided || provided !== process.env.ALGORITHM_WEBHOOK_SECRET) {
+      console.warn("❌ [WEBHOOK] Invalid or missing webhook secret");
+      return res.status(403).json({ success: false, message: "Invalid webhook secret" });
+    }
+
+    // Additionally support HMAC signature verification when signature header present
+    const sigHeader = req.header('x-hub-signature-256') || req.header('x-hub-signature') || req.header('x-signature') || req.header('x-signature-256');
+    if (sigHeader) {
+      const secretForHmac = process.env.ALGORITHM_WEBHOOK_SECRET;
+      const ok = verifyHmacSignature(req.body, sigHeader, secretForHmac);
+      if (!ok) {
+        console.warn('❌ [WEBHOOK] HMAC signature verification failed');
+        return res.status(403).json({ success: false, message: 'Invalid webhook signature' });
+      }
+    }
+
+    const payload = req.body;
+    if (!payload || Object.keys(payload).length === 0) {
+      return res.status(400).json({ success: false, message: "Empty payload" });
+    }
+
+    // Determine target appId: prefer payload.appId, then query param, then env LOS_APP_ID
+    const appId = payload.appId || req.query.appId || process.env.LOS_APP_ID;
+    if (!appId) {
+      return res.status(400).json({ success: false, message: "appId is required either in payload or query param" });
+    }
+
+    // Use a standard table base name for storing applications inside each app namespace
+    const baseTableName = "applications";
+    const tableName = generateTableName(appId, baseTableName);
+
+    // Ensure table exists. If missing, create a simple JSONB-backed table to store payloads.
+    const exists = await dbUtils.tableExists(tableName);
+    if (!exists) {
+      console.log(`🛠️ [WEBHOOK] Creating table ${tableName} to store incoming applications`);
+      await prisma.$executeRawUnsafe(
+        `CREATE TABLE "${tableName}" (
+          id SERIAL PRIMARY KEY,
+          data JSONB,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );`
+      );
+    }
+
+    // We'll try to upsert by applicant email if available, otherwise insert
+    const applicantEmail =
+      payload.applicant?.email || payload.applicantEmail || payload.email || null;
+
+    if (applicantEmail) {
+      // Check several possible JSON paths for applicant email to support different payload shapes
+      const selectQuery = `SELECT id FROM "${tableName}" WHERE (data->'applicant'->>'email' = $1) OR (data->>'applicantEmail' = $1) OR (data->>'email' = $1) LIMIT 1`;
+      const existing = await prisma.$queryRawUnsafe(selectQuery, applicantEmail);
+
+      if (existing && existing.length > 0) {
+        // Update existing record
+        const updateQuery = `UPDATE "${tableName}" SET data = $1, updated_at = NOW() WHERE id = $2 RETURNING *`;
+        const updated = await prisma.$queryRawUnsafe(updateQuery, JSON.stringify(payload), existing[0].id);
+        console.log(`✅ [WEBHOOK] Updated record id=${existing[0].id} in ${tableName}`);
+
+        // Trigger workflows after update (async)
+        try {
+          const workflows = await prisma.workflow.findMany({ where: { appId: parseInt(appId) } });
+          for (const wf of workflows) {
+            let nodes = wf.nodes;
+            let edges = wf.edges;
+            if (typeof nodes === 'string') {
+              try { nodes = JSON.parse(nodes); } catch (e) { nodes = []; }
+            }
+            if (typeof edges === 'string') {
+              try { edges = JSON.parse(edges); } catch (e) { edges = []; }
+            }
+
+            const initialContext = {
+              webhookPayload: payload,
+              payload,
+              body: payload,
+              headers: req.headers,
+              requestBody: payload,
+              workflowId: wf.id,
+              updatedRecordId: updated[0].id,
+            };
+
+            // enqueue job for processing by the workflow queue
+            enqueueWorkflow(nodes || [], edges || [], initialContext, appId);
+          }
+        } catch (e) {
+          console.warn('⚠️ [WEBHOOK] Failed to trigger workflows after update:', e.message || e);
+        }
+
+        return res.json({ success: true, operation: "update", record: updated[0] });
+      } else {
+        // Insert new
+        const insertQuery = `INSERT INTO "${tableName}" (data) VALUES ($1) RETURNING *`;
+        const inserted = await prisma.$queryRawUnsafe(insertQuery, JSON.stringify(payload));
+        console.log(`✅ [WEBHOOK] Inserted new record id=${inserted[0].id} in ${tableName}`);
+
+        // Trigger workflows after insert (async)
+        try {
+          const workflows = await prisma.workflow.findMany({ where: { appId: parseInt(appId) } });
+          for (const wf of workflows) {
+            let nodes = wf.nodes;
+            let edges = wf.edges;
+            if (typeof nodes === 'string') {
+              try { nodes = JSON.parse(nodes); } catch (e) { nodes = []; }
+            }
+            if (typeof edges === 'string') {
+              try { edges = JSON.parse(edges); } catch (e) { edges = []; }
+            }
+
+            const initialContext = {
+              webhookPayload: payload,
+              payload,
+              body: payload,
+              headers: req.headers,
+              requestBody: payload,
+              workflowId: wf.id,
+              insertedRecordId: inserted[0].id,
+            };
+
+            // enqueue job for processing by the workflow queue
+            enqueueWorkflow(nodes || [], edges || [], initialContext, appId);
+          }
+        } catch (e) {
+          console.warn('⚠️ [WEBHOOK] Failed to trigger workflows after insert:', e.message || e);
+        }
+
+        return res.json({ success: true, operation: "insert", record: inserted[0] });
+      }
+    } else {
+      // No unique key available; perform blind insert
+      const insertQuery = `INSERT INTO "${tableName}" (data) VALUES ($1) RETURNING *`;
+      const inserted = await prisma.$queryRawUnsafe(insertQuery, JSON.stringify(payload));
+      console.log(`✅ [WEBHOOK] Inserted new record id=${inserted[0].id} in ${tableName} (no unique key)`);
+
+      // After storing, optionally trigger workflows configured for this app
+      try {
+        const workflows = await prisma.workflow.findMany({ where: { appId: parseInt(appId) } });
+        for (const wf of workflows) {
+          let nodes = wf.nodes;
+          let edges = wf.edges;
+          if (typeof nodes === 'string') {
+            try { nodes = JSON.parse(nodes); } catch (e) { nodes = []; }
+          }
+          if (typeof edges === 'string') {
+            try { edges = JSON.parse(edges); } catch (e) { edges = []; }
+          }
+
+          const initialContext = {
+            webhookPayload: payload,
+            payload,
+            body: payload,
+            headers: req.headers,
+            requestBody: payload,
+            workflowId: wf.id,
+          };
+
+          // enqueue job for processing by the workflow queue
+          enqueueWorkflow(nodes || [], edges || [], initialContext, appId);
+        }
+      } catch (e) {
+        console.warn('⚠️ [WEBHOOK] Failed to trigger workflows after insert:', e.message || e);
+      }
+
+      return res.json({ success: true, operation: "insert", record: inserted[0] });
+    }
+  } catch (error) {
+    console.error("❌ [WEBHOOK] Error processing algorithm webhook:", error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * @route POST /api/workflow/fetch-quote
+ * @desc  Fetch latest quote from external Algorithm API for a specific record and update DB
+ * @access Private (banker)
+ */
+router.post("/fetch-quote", authenticateToken, async (req, res) => {
+  try {
+    const { appId, recordId, url, authType, authConfig } = req.body;
+    const userId = req.user.id;
+
+    if (!appId || !recordId || !url) {
+      return res.status(400).json({ success: false, message: "appId, recordId and url are required" });
+    }
+
+    // Verify user has access to this app
+    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
+    if (!hasAccess) return res.status(403).json({ success: false, message: "Access denied to this app" });
+
+    const tableName = generateTableName(appId, "applications");
+    const exists = await dbUtils.tableExists(tableName);
+    if (!exists) return res.status(404).json({ success: false, message: "Applications table not found for this app" });
+
+    // Fetch record
+    const selectQuery = `SELECT id, data FROM "${tableName}" WHERE id = $1 LIMIT 1`;
+    const rows = await prisma.$queryRawUnsafe(selectQuery, recordId);
+    if (!rows || rows.length === 0) return res.status(404).json({ success: false, message: "Record not found" });
+
+    const record = rows[0];
+
+    // Prepare HTTP request using executeHttpRequest helper
+    const node = {
+      data: {
+        url,
+        method: "POST",
+        headers: [],
+        bodyType: "json",
+        body: JSON.stringify({ applicant: record.data?.applicant || record.data?.applicant || {} }),
+        authType: authType || "bearer",
+        authConfig: authConfig || {},
+        timeout: 30000,
+        saveResponseTo: "httpResponse",
+      },
+    };
+
+    const httpResult = await executeHttpRequest(node, { token: req.header("authorization") }, appId, userId);
+
+    if (!httpResult || !httpResult.context || !httpResult.context.httpResponse) {
+      return res.status(500).json({ success: false, message: "Failed to fetch quote" });
+    }
+
+    const responseData = httpResult.context.httpResponse.data;
+
+    // Merge quote into record.data.quote (replace existing quote)
+    const updateQuery = `UPDATE "${tableName}" SET data = jsonb_set(coalesce(data, '{}'::jsonb), '{quote}', $1::jsonb, true), updated_at = NOW() WHERE id = $2 RETURNING *`;
+    const updated = await prisma.$queryRawUnsafe(updateQuery, JSON.stringify(responseData), record.id);
+
+    // Audit log
+    try {
+      const fs = require('fs');
+      const logDir = 'server/logs';
+      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+      const logEntry = `${new Date().toISOString()}: FETCH_QUOTE app:${appId} record:${recordId} user:${userId} status:success\n`;
+      fs.appendFileSync(`${logDir}/audit.log`, logEntry);
+    } catch (e) {
+      console.warn('⚠️ Audit log write failed', e.message);
+    }
+
+    // Notify app owner
+    try {
+      const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+      if (app && app.ownerId) {
+        const message = `Latest quote fetched for record ${recordId}`;
+        await prisma.notification.create({ data: { userId: app.ownerId, type: 'system', message } });
+        if (global.emitNotification) {
+          global.emitNotification({ userId: app.ownerId, type: 'system', message, id: Date.now(), createdAt: new Date() });
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ Notification failed', e.message);
+    }
+
+    return res.json({ success: true, updated: updated[0] });
+  } catch (error) {
+    console.error('❌ [FETCH-QUOTE] Error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+/**
+ * @route POST /api/workflow/update-status
+ * @desc  Update application status (Completed / Rejected) and record audit & notify
+ * @access Private (banker)
+ */
+router.post("/update-status", authenticateToken, async (req, res) => {
+  try {
+    const { appId, recordId, status } = req.body;
+    const userId = req.user.id;
+    if (!appId || !recordId || !status) return res.status(400).json({ success: false, message: 'appId, recordId and status required' });
+
+    const allowed = ['Completed', 'Rejected', 'Pending'];
+    if (!allowed.includes(status)) return res.status(400).json({ success: false, message: 'Invalid status' });
+
+    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
+    if (!hasAccess) return res.status(403).json({ success: false, message: 'Access denied' });
+
+    const tableName = generateTableName(appId, 'applications');
+    const exists = await dbUtils.tableExists(tableName);
+    if (!exists) return res.status(404).json({ success: false, message: 'Applications table not found' });
+
+    const updateQuery = `UPDATE "${tableName}" SET data = jsonb_set(coalesce(data, '{}'::jsonb), '{status}', to_jsonb($1::text), true), updated_at = NOW() WHERE id = $2 RETURNING *`;
+    const updated = await prisma.$queryRawUnsafe(updateQuery, status, recordId);
+
+    // Write audit log
+    try {
+      const fs = require('fs');
+      const logDir = 'server/logs';
+      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+      const logEntry = `${new Date().toISOString()}: UPDATE_STATUS app:${appId} record:${recordId} user:${userId} status:${status}\n`;
+      fs.appendFileSync(`${logDir}/audit.log`, logEntry);
+    } catch (e) {
+      console.warn('⚠️ Audit log write failed', e.message);
+    }
+
+    // Notify owner
+    try {
+      const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+      if (app && app.ownerId) {
+        const message = `Application ${recordId} marked ${status}`;
+        await prisma.notification.create({ data: { userId: app.ownerId, type: 'system', message } });
+        if (global.emitNotification) {
+          global.emitNotification({ userId: app.ownerId, type: 'system', message, id: Date.now(), createdAt: new Date() });
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ Notification failed', e.message);
+    }
+
+    return res.json({ success: true, updated: updated[0] });
+  } catch (error) {
+    console.error('❌ [UPDATE-STATUS] Error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+/**
+ * @route POST /api/workflow/send-daily-summary
+ * @desc  Send daily summary email to app owner (records in last 24h)
+ * @access Private (banker or scheduled system user)
+ */
+router.post('/send-daily-summary', authenticateToken, async (req, res) => {
+  try {
+    const { appId } = req.body;
+    const userId = req.user.id;
+    if (!appId) return res.status(400).json({ success: false, message: 'appId required' });
+
+    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
+    if (!hasAccess) return res.status(403).json({ success: false, message: 'Access denied' });
+
+    const tableName = generateTableName(appId, 'applications');
+    const exists = await dbUtils.tableExists(tableName);
+    if (!exists) return res.status(404).json({ success: false, message: 'Applications table not found' });
+
+    // Fetch records from last 24 hours
+    const selectQuery = `SELECT id, data, created_at FROM "${tableName}" WHERE created_at >= NOW() - INTERVAL '24 hours' ORDER BY created_at DESC`;
+    const recent = await prisma.$queryRawUnsafe(selectQuery);
+
+    const count = recent ? recent.length : 0;
+
+    // Build summary
+    let message = `Daily summary for app ${appId}: ${count} new application(s) in last 24 hours.`;
+    if (count > 0) {
+      const rows = recent.slice(0, 10).map(r => {
+        const applicantName = (r.data && (r.data.applicant?.name || r.data.applicantName || r.data.name)) || 'Unknown';
+        const email = (r.data && (r.data.applicant?.email || r.data.applicantEmail || r.data.email)) || 'Unknown';
+        return `#${r.id} - ${applicantName} <${email}>`;
+      });
+      message += '\n\nRecent applications:\n' + rows.join('\n');
+    }
+
+    // Find app owner email
+    const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+    if (!app || !app.ownerId) return res.status(404).json({ success: false, message: 'App owner not found' });
+
+    const owner = await prisma.user.findUnique({ where: { id: app.ownerId }, select: { email: true, id: true, role: true } });
+    if (!owner || !owner.email) return res.status(404).json({ success: false, message: 'Owner email not found' });
+
+    // Send email (emailService handles console fallback in dev)
+    const emailResult = await emailService.sendNotificationEmail(owner.email, 'system', message, owner.email.split('@')[0]);
+
+    // Log and notify
+    try {
+      const fs = require('fs');
+      const logDir = 'server/logs';
+      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+      const logEntry = `${new Date().toISOString()}: DAILY_SUMMARY app:${appId} user:${userId} emailsent:${emailResult.success}\n`;
+      fs.appendFileSync(`${logDir}/audit.log`, logEntry);
+    } catch (e) {
+      console.warn('⚠️ Audit log write failed', e.message);
+    }
+
+    if (global.emitNotification) {
+      global.emitNotification({ userId: app.ownerId, type: 'system', message: `Daily summary: ${count} new application(s)`, id: Date.now(), createdAt: new Date() });
+    }
+
+    return res.json({ success: true, emailed: emailResult.success, details: emailResult });
+  } catch (error) {
+    console.error('❌ [DAILY-SUMMARY] Error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * @route POST /api/workflow/fetch-quote
+ * @desc  Fetch latest quote from external Algorithm API for a specific record and update DB
+ * @access Private (banker)
+ */
+router.post("/workflow/fetch-quote", authenticateToken, async (req, res) => {
+  try {
+    const { appId, recordId, url, authType, authConfig } = req.body;
+    const userId = req.user.id;
+
+    if (!appId || !recordId || !url) {
+      return res.status(400).json({ success: false, message: "appId, recordId and url are required" });
+    }
+
+    // Verify user has access to this app
+    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
+    if (!hasAccess) return res.status(403).json({ success: false, message: "Access denied to this app" });
+
+    const tableName = generateTableName(appId, "applications");
+    const exists = await dbUtils.tableExists(tableName);
+    if (!exists) return res.status(404).json({ success: false, message: "Applications table not found for this app" });
+
+    // Fetch record
+    const selectQuery = `SELECT id, data FROM "${tableName}" WHERE id = $1 LIMIT 1`;
+    const rows = await prisma.$queryRawUnsafe(selectQuery, recordId);
+    if (!rows || rows.length === 0) return res.status(404).json({ success: false, message: "Record not found" });
+
+    const record = rows[0];
+
+    // Build HTTP request node and execute using existing HTTP handler
+    const node = {
+      data: {
+        url,
+        method: "POST",
+        headers: [],
+        bodyType: "json",
+        body: JSON.stringify({ applicant: record.data?.applicant || record.data?.applicant || {} }),
+        authType: authType || "bearer",
+        authConfig: authConfig || {},
+        timeout: 30000,
+        saveResponseTo: "httpResponse",
+      },
+    };
+
+    const httpResult = await executeHttpRequest(node, { token: req.header("authorization") }, appId, userId);
+
+    if (!httpResult || !httpResult.context || !httpResult.context.httpResponse) {
+      return res.status(500).json({ success: false, message: "Failed to fetch quote" });
+    }
+
+    const responseData = httpResult.context.httpResponse.data;
+
+    // Merge quote into record.data.quote (replace existing quote)
+    const updateQuery = `UPDATE "${tableName}" SET data = jsonb_set(coalesce(data, '{}'::jsonb), '{quote}', $1::jsonb, true), updated_at = NOW() WHERE id = $2 RETURNING *`;
+    const updated = await prisma.$queryRawUnsafe(updateQuery, JSON.stringify(responseData), record.id);
+
+    // Audit log (file)
+    try {
+      const fs = require('fs');
+      const logDir = 'server/logs';
+      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+      const logEntry = `${new Date().toISOString()}: FETCH_QUOTE app:${appId} record:${recordId} user:${userId} status:success\n`;
+      fs.appendFileSync(`${logDir}/audit.log`, logEntry);
+    } catch (e) {
+      console.warn('⚠️ Audit log write failed', e.message);
+    }
+
+    // Notify app owner
+    try {
+      const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+      if (app && app.ownerId) {
+        const message = `Latest quote fetched for record ${recordId}`;
+        await prisma.notification.create({ data: { userId: app.ownerId, type: 'system', message } });
+        if (global.emitNotification) {
+          global.emitNotification({ userId: app.ownerId, type: 'system', message, id: Date.now(), createdAt: new Date() });
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ Notification failed', e.message);
+    }
+
+    return res.json({ success: true, updated: updated[0] });
+  } catch (error) {
+    console.error('❌ [FETCH-QUOTE] Error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+/**
+ * @route POST /api/workflow/update-status
+ * @desc  Update application status (Completed / Rejected) and record audit & notify
+ * @access Private (banker)
+ */
+router.post("/workflow/update-status", authenticateToken, async (req, res) => {
+  try {
+    const { appId, recordId, status } = req.body;
+    const userId = req.user.id;
+    if (!appId || !recordId || !status) return res.status(400).json({ success: false, message: 'appId, recordId and status required' });
+
+    const allowed = ['Completed', 'Rejected', 'Pending'];
+    if (!allowed.includes(status)) return res.status(400).json({ success: false, message: 'Invalid status' });
+
+    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
+    if (!hasAccess) return res.status(403).json({ success: false, message: 'Access denied' });
+
+    const tableName = generateTableName(appId, 'applications');
+    const exists = await dbUtils.tableExists(tableName);
+    if (!exists) return res.status(404).json({ success: false, message: 'Applications table not found' });
+
+    const updateQuery = `UPDATE "${tableName}" SET data = jsonb_set(coalesce(data, '{}'::jsonb), '{status}', to_jsonb($1::text), true), updated_at = NOW() WHERE id = $2 RETURNING *`;
+    const updated = await prisma.$queryRawUnsafe(updateQuery, status, recordId);
+
+    // Write audit log
+    try {
+      const fs = require('fs');
+      const logDir = 'server/logs';
+      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+      const logEntry = `${new Date().toISOString()}: UPDATE_STATUS app:${appId} record:${recordId} user:${userId} status:${status}\n`;
+      fs.appendFileSync(`${logDir}/audit.log`, logEntry);
+    } catch (e) {
+      console.warn('⚠️ Audit log write failed', e.message);
+    }
+
+    // Notify owner
+    try {
+      const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+      if (app && app.ownerId) {
+        const message = `Application ${recordId} marked ${status}`;
+        await prisma.notification.create({ data: { userId: app.ownerId, type: 'system', message } });
+        if (global.emitNotification) {
+          global.emitNotification({ userId: app.ownerId, type: 'system', message, id: Date.now(), createdAt: new Date() });
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ Notification failed', e.message);
+    }
+
+    return res.json({ success: true, updated: updated[0] });
+  } catch (error) {
+    console.error('❌ [UPDATE-STATUS] Error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+/**
+ * @route POST /api/workflow/send-daily-summary
+ * @desc  Send daily summary email to app owner (records in last 24h)
+ * @access Private (banker or scheduled system user)
+ */
+router.post('/workflow/send-daily-summary', authenticateToken, async (req, res) => {
+  try {
+    const { appId } = req.body;
+    const userId = req.user.id;
+    if (!appId) return res.status(400).json({ success: false, message: 'appId required' });
+
+    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
+    if (!hasAccess) return res.status(403).json({ success: false, message: 'Access denied' });
+
+    const tableName = generateTableName(appId, 'applications');
+    const exists = await dbUtils.tableExists(tableName);
+    if (!exists) return res.status(404).json({ success: false, message: 'Applications table not found' });
+
+    // Fetch records from last 24 hours
+    const selectQuery = `SELECT id, data, created_at FROM "${tableName}" WHERE created_at >= NOW() - INTERVAL '24 hours' ORDER BY created_at DESC`;
+    const recent = await prisma.$queryRawUnsafe(selectQuery);
+
+    const count = recent ? recent.length : 0;
+
+    // Build summary
+    let message = `Daily summary for app ${appId}: ${count} new application(s) in last 24 hours.`;
+    if (count > 0) {
+      const rows = recent.slice(0, 10).map(r => {
+        const applicantName = (r.data && (r.data.applicant?.name || r.data.applicantName || r.data.name)) || 'Unknown';
+        const email = (r.data && (r.data.applicant?.email || r.data.applicantEmail || r.data.email)) || 'Unknown';
+        return `#${r.id} - ${applicantName} <${email}>`;
+      });
+      message += '\n\nRecent applications:\n' + rows.join('\n');
+    }
+
+    // Find app owner email
+    const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+    if (!app || !app.ownerId) return res.status(404).json({ success: false, message: 'App owner not found' });
+
+    const owner = await prisma.user.findUnique({ where: { id: app.ownerId }, select: { email: true, id: true, role: true } });
+    if (!owner || !owner.email) return res.status(404).json({ success: false, message: 'Owner email not found' });
+
+    // Send email (emailService handles console fallback in dev)
+    const emailResult = await emailService.sendNotificationEmail(owner.email, 'system', message, owner.email.split('@')[0]);
+
+    // Log and notify
+    try {
+      const fs = require('fs');
+      const logDir = 'server/logs';
+      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+      const logEntry = `${new Date().toISOString()}: DAILY_SUMMARY app:${appId} user:${userId} emailsent:${emailResult.success}\n`;
+      fs.appendFileSync(`${logDir}/audit.log`, logEntry);
+    } catch (e) {
+      console.warn('⚠️ Audit log write failed', e.message);
+    }
+
+    if (global.emitNotification) {
+      global.emitNotification({ userId: app.ownerId, type: 'system', message: `Daily summary: ${count} new application(s)`, id: Date.now(), createdAt: new Date() });
+    }
+
+    return res.json({ success: true, emailed: emailResult.success, details: emailResult });
+  } catch (error) {
+    console.error('❌ [DAILY-SUMMARY] Error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+
+
+
+/**
+ * @route   POST /api/webhook/algorithm
+ * @desc    Public webhook endpoint for Algorithm to push applicant + quote data
+ * @access  Public (secured by shared secret header)
+ */
+router.post("/webhook/algorithm", async (req, res) => {
+  try {
+    // Expect a shared secret in header 'x-algo-secret' or Authorization: Bearer <secret>
+    const headerSecret = req.header("x-algo-secret") || req.header("authorization");
+
+    if (!process.env.ALGORITHM_WEBHOOK_SECRET) {
+      console.warn("⚠️ ALGORTHM webhook secret is not configured (ALGORITHM_WEBHOOK_SECRET)");
+      return res.status(500).json({ success: false, message: "Server misconfiguration" });
+    }
+
+    let provided = headerSecret || "";
+    if (provided.startsWith("Bearer ")) provided = provided.slice(7).trim();
+
+    // If the simple header secret is provided, verify it first
+    if (!provided || provided !== process.env.ALGORITHM_WEBHOOK_SECRET) {
+      console.warn("❌ [WEBHOOK] Invalid or missing webhook secret");
+      return res.status(403).json({ success: false, message: "Invalid webhook secret" });
+    }
+
+    // Additionally support HMAC signature verification when signature header present
+    const sigHeader = req.header('x-hub-signature-256') || req.header('x-hub-signature') || req.header('x-signature') || req.header('x-signature-256');
+    if (sigHeader) {
+      const secretForHmac = process.env.ALGORITHM_WEBHOOK_SECRET;
+      const ok = verifyHmacSignature(req.body, sigHeader, secretForHmac);
+      if (!ok) {
+        console.warn('❌ [WEBHOOK] HMAC signature verification failed');
+        return res.status(403).json({ success: false, message: 'Invalid webhook signature' });
+      }
+    }
+
+    const payload = req.body;
+    if (!payload || Object.keys(payload).length === 0) {
+      return res.status(400).json({ success: false, message: "Empty payload" });
+    }
+
+    // Determine target appId: prefer payload.appId, then query param, then env LOS_APP_ID
+    const appId = payload.appId || req.query.appId || process.env.LOS_APP_ID;
+    if (!appId) {
+      return res.status(400).json({ success: false, message: "appId is required either in payload or query param" });
+    }
+
+    // Use a standard table base name for storing applications inside each app namespace
+    const baseTableName = "applications";
+    const tableName = generateTableName(appId, baseTableName);
+
+    // Ensure table exists. If missing, create a simple JSONB-backed table to store payloads.
+    const exists = await dbUtils.tableExists(tableName);
+    if (!exists) {
+      console.log(`🛠️ [WEBHOOK] Creating table ${tableName} to store incoming applications`);
+      await prisma.$executeRawUnsafe(
+        `CREATE TABLE "${tableName}" (
+          id SERIAL PRIMARY KEY,
+          data JSONB,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );`
+      );
+    }
+
+    // We'll try to upsert by applicant email if available, otherwise insert
+    const applicantEmail =
+      payload.applicant?.email || payload.applicantEmail || payload.email || null;
+
+    if (applicantEmail) {
+      // Check several possible JSON paths for applicant email to support different payload shapes
+      const selectQuery = `SELECT id FROM "${tableName}" WHERE (data->'applicant'->>'email' = $1) OR (data->>'applicantEmail' = $1) OR (data->>'email' = $1) LIMIT 1`;
+      const existing = await prisma.$queryRawUnsafe(selectQuery, applicantEmail);
+
+      if (existing && existing.length > 0) {
+        // Update existing record
+        const updateQuery = `UPDATE "${tableName}" SET data = $1, updated_at = NOW() WHERE id = $2 RETURNING *`;
+        const updated = await prisma.$queryRawUnsafe(updateQuery, JSON.stringify(payload), existing[0].id);
+        console.log(`✅ [WEBHOOK] Updated record id=${existing[0].id} in ${tableName}`);
+
+        // Trigger workflows after update (async)
+        try {
+          const workflows = await prisma.workflow.findMany({ where: { appId: parseInt(appId) } });
+          for (const wf of workflows) {
+            let nodes = wf.nodes;
+            let edges = wf.edges;
+            if (typeof nodes === 'string') {
+              try { nodes = JSON.parse(nodes); } catch (e) { nodes = []; }
+            }
+            if (typeof edges === 'string') {
+              try { edges = JSON.parse(edges); } catch (e) { edges = []; }
+            }
+
+            const initialContext = {
+              webhookPayload: payload,
+              payload,
+              body: payload,
+              headers: req.headers,
+              requestBody: payload,
+              workflowId: wf.id,
+              updatedRecordId: updated[0].id,
+            };
+
+            // enqueue job for processing by the workflow queue
+            enqueueWorkflow(nodes || [], edges || [], initialContext, appId);
+          }
+        } catch (e) {
+          console.warn('⚠️ [WEBHOOK] Failed to trigger workflows after update:', e.message || e);
+        }
+
+        return res.json({ success: true, operation: "update", record: updated[0] });
+      } else {
+        // Insert new
+        const insertQuery = `INSERT INTO "${tableName}" (data) VALUES ($1) RETURNING *`;
+        const inserted = await prisma.$queryRawUnsafe(insertQuery, JSON.stringify(payload));
+        console.log(`✅ [WEBHOOK] Inserted new record id=${inserted[0].id} in ${tableName}`);
+
+        // Trigger workflows after insert (async)
+        try {
+          const workflows = await prisma.workflow.findMany({ where: { appId: parseInt(appId) } });
+          for (const wf of workflows) {
+            let nodes = wf.nodes;
+            let edges = wf.edges;
+            if (typeof nodes === 'string') {
+              try { nodes = JSON.parse(nodes); } catch (e) { nodes = []; }
+            }
+            if (typeof edges === 'string') {
+              try { edges = JSON.parse(edges); } catch (e) { edges = []; }
+            }
+
+            const initialContext = {
+              webhookPayload: payload,
+              payload,
+              body: payload,
+              headers: req.headers,
+              requestBody: payload,
+              workflowId: wf.id,
+              insertedRecordId: inserted[0].id,
+            };
+
+            // enqueue job for processing by the workflow queue
+            enqueueWorkflow(nodes || [], edges || [], initialContext, appId);
+          }
+        } catch (e) {
+          console.warn('⚠️ [WEBHOOK] Failed to trigger workflows after insert:', e.message || e);
+        }
+
+        return res.json({ success: true, operation: "insert", record: inserted[0] });
+      }
+    } else {
+      // No unique key available; perform blind insert
+      const insertQuery = `INSERT INTO "${tableName}" (data) VALUES ($1) RETURNING *`;
+      const inserted = await prisma.$queryRawUnsafe(insertQuery, JSON.stringify(payload));
+      console.log(`✅ [WEBHOOK] Inserted new record id=${inserted[0].id} in ${tableName} (no unique key)`);
+
+      // After storing, optionally trigger workflows configured for this app
+      try {
+        const workflows = await prisma.workflow.findMany({ where: { appId: parseInt(appId) } });
+        for (const wf of workflows) {
+          let nodes = wf.nodes;
+          let edges = wf.edges;
+          if (typeof nodes === 'string') {
+            try { nodes = JSON.parse(nodes); } catch (e) { nodes = []; }
+          }
+          if (typeof edges === 'string') {
+            try { edges = JSON.parse(edges); } catch (e) { edges = []; }
+          }
+
+          const initialContext = {
+            webhookPayload: payload,
+            payload,
+            body: payload,
+            headers: req.headers,
+            requestBody: payload,
+            workflowId: wf.id,
+          };
+
+          // enqueue job for processing by the workflow queue
+          enqueueWorkflow(nodes || [], edges || [], initialContext, appId);
+        }
+      } catch (e) {
+        console.warn('⚠️ [WEBHOOK] Failed to trigger workflows after insert:', e.message || e);
+      }
+
+      return res.json({ success: true, operation: "insert", record: inserted[0] });
+    }
+  } catch (error) {
+    console.error("❌ [WEBHOOK] Error processing algorithm webhook:", error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * @route POST /api/workflow/fetch-quote
+ * @desc  Fetch latest quote from external Algorithm API for a specific record and update DB
+ * @access Private (banker)
+ */
+router.post("/fetch-quote", authenticateToken, async (req, res) => {
+  try {
+    const { appId, recordId, url, authType, authConfig } = req.body;
+    const userId = req.user.id;
+
+    if (!appId || !recordId || !url) {
+      return res.status(400).json({ success: false, message: "appId, recordId and url are required" });
+    }
+
+    // Verify user has access to this app
+    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
+    if (!hasAccess) return res.status(403).json({ success: false, message: "Access denied to this app" });
+
+    const tableName = generateTableName(appId, "applications");
+    const exists = await dbUtils.tableExists(tableName);
+    if (!exists) return res.status(404).json({ success: false, message: "Applications table not found for this app" });
+
+    // Fetch record
+    const selectQuery = `SELECT id, data FROM "${tableName}" WHERE id = $1 LIMIT 1`;
+    const rows = await prisma.$queryRawUnsafe(selectQuery, recordId);
+    if (!rows || rows.length === 0) return res.status(404).json({ success: false, message: "Record not found" });
+
+    const record = rows[0];
+
+    // Prepare HTTP request using executeHttpRequest helper
+    const node = {
+      data: {
+        url,
+        method: "POST",
+        headers: [],
+        bodyType: "json",
+        body: JSON.stringify({ applicant: record.data?.applicant || record.data?.applicant || {} }),
+        authType: authType || "bearer",
+        authConfig: authConfig || {},
+        timeout: 30000,
+        saveResponseTo: "httpResponse",
+      },
+    };
+
+    const httpResult = await executeHttpRequest(node, { token: req.header("authorization") }, appId, userId);
+
+    if (!httpResult || !httpResult.context || !httpResult.context.httpResponse) {
+      return res.status(500).json({ success: false, message: "Failed to fetch quote" });
+    }
+
+    const responseData = httpResult.context.httpResponse.data;
+
+    // Merge quote into record.data.quote (replace existing quote)
+    const updateQuery = `UPDATE "${tableName}" SET data = jsonb_set(coalesce(data, '{}'::jsonb), '{quote}', $1::jsonb, true), updated_at = NOW() WHERE id = $2 RETURNING *`;
+    const updated = await prisma.$queryRawUnsafe(updateQuery, JSON.stringify(responseData), record.id);
+
+    // Audit log
+    try {
+      const fs = require('fs');
+      const logDir = 'server/logs';
+      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+      const logEntry = `${new Date().toISOString()}: FETCH_QUOTE app:${appId} record:${recordId} user:${userId} status:success\n`;
+      fs.appendFileSync(`${logDir}/audit.log`, logEntry);
+    } catch (e) {
+      console.warn('⚠️ Audit log write failed', e.message);
+    }
+
+    // Notify app owner
+    try {
+      const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+      if (app && app.ownerId) {
+        const message = `Latest quote fetched for record ${recordId}`;
+        await prisma.notification.create({ data: { userId: app.ownerId, type: 'system', message } });
+        if (global.emitNotification) {
+          global.emitNotification({ userId: app.ownerId, type: 'system', message, id: Date.now(), createdAt: new Date() });
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ Notification failed', e.message);
+    }
+
+    return res.json({ success: true, updated: updated[0] });
+  } catch (error) {
+    console.error('❌ [FETCH-QUOTE] Error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+/**
+ * @route POST /api/workflow/update-status
+ * @desc  Update application status (Completed / Rejected) and record audit & notify
+ * @access Private (banker)
+ */
+router.post("/update-status", authenticateToken, async (req, res) => {
+  try {
+    const { appId, recordId, status } = req.body;
+    const userId = req.user.id;
+    if (!appId || !recordId || !status) return res.status(400).json({ success: false, message: 'appId, recordId and status required' });
+
+    const allowed = ['Completed', 'Rejected', 'Pending'];
+    if (!allowed.includes(status)) return res.status(400).json({ success: false, message: 'Invalid status' });
+
+    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
+    if (!hasAccess) return res.status(403).json({ success: false, message: 'Access denied' });
+
+    const tableName = generateTableName(appId, 'applications');
+    const exists = await dbUtils.tableExists(tableName);
+    if (!exists) return res.status(404).json({ success: false, message: 'Applications table not found' });
+
+    const updateQuery = `UPDATE "${tableName}" SET data = jsonb_set(coalesce(data, '{}'::jsonb), '{status}', to_jsonb($1::text), true), updated_at = NOW() WHERE id = $2 RETURNING *`;
+    const updated = await prisma.$queryRawUnsafe(updateQuery, status, recordId);
+
+    // Write audit log
+    try {
+      const fs = require('fs');
+      const logDir = 'server/logs';
+      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+      const logEntry = `${new Date().toISOString()}: UPDATE_STATUS app:${appId} record:${recordId} user:${userId} status:${status}\n`;
+      fs.appendFileSync(`${logDir}/audit.log`, logEntry);
+    } catch (e) {
+      console.warn('⚠️ Audit log write failed', e.message);
+    }
+
+    // Notify owner
+    try {
+      const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+      if (app && app.ownerId) {
+        const message = `Application ${recordId} marked ${status}`;
+        await prisma.notification.create({ data: { userId: app.ownerId, type: 'system', message } });
+        if (global.emitNotification) {
+          global.emitNotification({ userId: app.ownerId, type: 'system', message, id: Date.now(), createdAt: new Date() });
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ Notification failed', e.message);
+    }
+
+    return res.json({ success: true, updated: updated[0] });
+  } catch (error) {
+    console.error('❌ [UPDATE-STATUS] Error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+/**
+ * @route POST /api/workflow/send-daily-summary
+ * @desc  Send daily summary email to app owner (records in last 24h)
+ * @access Private (banker or scheduled system user)
+ */
+router.post('/send-daily-summary', authenticateToken, async (req, res) => {
+  try {
+    const { appId } = req.body;
+    const userId = req.user.id;
+    if (!appId) return res.status(400).json({ success: false, message: 'appId required' });
+
+    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
+    if (!hasAccess) return res.status(403).json({ success: false, message: 'Access denied' });
+
+    const tableName = generateTableName(appId, 'applications');
+    const exists = await dbUtils.tableExists(tableName);
+    if (!exists) return res.status(404).json({ success: false, message: 'Applications table not found' });
+
+    // Fetch records from last 24 hours
+    const selectQuery = `SELECT id, data, created_at FROM "${tableName}" WHERE created_at >= NOW() - INTERVAL '24 hours' ORDER BY created_at DESC`;
+    const recent = await prisma.$queryRawUnsafe(selectQuery);
+
+    const count = recent ? recent.length : 0;
+
+    // Build summary
+    let message = `Daily summary for app ${appId}: ${count} new application(s) in last 24 hours.`;
+    if (count > 0) {
+      const rows = recent.slice(0, 10).map(r => {
+        const applicantName = (r.data && (r.data.applicant?.name || r.data.applicantName || r.data.name)) || 'Unknown';
+        const email = (r.data && (r.data.applicant?.email || r.data.applicantEmail || r.data.email)) || 'Unknown';
+        return `#${r.id} - ${applicantName} <${email}>`;
+      });
+      message += '\n\nRecent applications:\n' + rows.join('\n');
+    }
+
+    // Find app owner email
+    const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+    if (!app || !app.ownerId) return res.status(404).json({ success: false, message: 'App owner not found' });
+
+    const owner = await prisma.user.findUnique({ where: { id: app.ownerId }, select: { email: true, id: true, role: true } });
+    if (!owner || !owner.email) return res.status(404).json({ success: false, message: 'Owner email not found' });
+
+    // Send email (emailService handles console fallback in dev)
+    const emailResult = await emailService.sendNotificationEmail(owner.email, 'system', message, owner.email.split('@')[0]);
+
+    // Log and notify
+    try {
+      const fs = require('fs');
+      const logDir = 'server/logs';
+      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+      const logEntry = `${new Date().toISOString()}: DAILY_SUMMARY app:${appId} user:${userId} emailsent:${emailResult.success}\n`;
+      fs.appendFileSync(`${logDir}/audit.log`, logEntry);
+    } catch (e) {
+      console.warn('⚠️ Audit log write failed', e.message);
+    }
+
+    if (global.emitNotification) {
+      global.emitNotification({ userId: app.ownerId, type: 'system', message: `Daily summary: ${count} new application(s)`, id: Date.now(), createdAt: new Date() });
+    }
+
+    return res.json({ success: true, emailed: emailResult.success, details: emailResult });
+  } catch (error) {
+    console.error('❌ [DAILY-SUMMARY] Error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * @route POST /api/workflow/fetch-quote
+ * @desc  Fetch latest quote from external Algorithm API for a specific record and update DB
+ * @access Private (banker)
+ */
+router.post("/workflow/fetch-quote", authenticateToken, async (req, res) => {
+  try {
+    const { appId, recordId, url, authType, authConfig } = req.body;
+    const userId = req.user.id;
+
+    if (!appId || !recordId || !url) {
+      return res.status(400).json({ success: false, message: "appId, recordId and url are required" });
+    }
+
+    // Verify user has access to this app
+    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
+    if (!hasAccess) return res.status(403).json({ success: false, message: "Access denied to this app" });
+
+    const tableName = generateTableName(appId, "applications");
+    const exists = await dbUtils.tableExists(tableName);
+    if (!exists) return res.status(404).json({ success: false, message: "Applications table not found for this app" });
+
+    // Fetch record
+    const selectQuery = `SELECT id, data FROM "${tableName}" WHERE id = $1 LIMIT 1`;
+    const rows = await prisma.$queryRawUnsafe(selectQuery, recordId);
+    if (!rows || rows.length === 0) return res.status(404).json({ success: false, message: "Record not found" });
+
+    const record = rows[0];
+
+    // Build HTTP request node and execute using existing HTTP handler
+    const node = {
+      data: {
+        url,
+        method: "POST",
+        headers: [],
+        bodyType: "json",
+        body: JSON.stringify({ applicant: record.data?.applicant || record.data?.applicant || {} }),
+        authType: authType || "bearer",
+        authConfig: authConfig || {},
+        timeout: 30000,
+        saveResponseTo: "httpResponse",
+      },
+    };
+
+    const httpResult = await executeHttpRequest(node, { token: req.header("authorization") }, appId, userId);
+
+    if (!httpResult || !httpResult.context || !httpResult.context.httpResponse) {
+      return res.status(500).json({ success: false, message: "Failed to fetch quote" });
+    }
+
+    const responseData = httpResult.context.httpResponse.data;
+
+    // Merge quote into record.data.quote (replace existing quote)
+    const updateQuery = `UPDATE "${tableName}" SET data = jsonb_set(coalesce(data, '{}'::jsonb), '{quote}', $1::jsonb, true), updated_at = NOW() WHERE id = $2 RETURNING *`;
+    const updated = await prisma.$queryRawUnsafe(updateQuery, JSON.stringify(responseData), record.id);
+
+    // Audit log (file)
+    try {
+      const fs = require('fs');
+      const logDir = 'server/logs';
+      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+      const logEntry = `${new Date().toISOString()}: FETCH_QUOTE app:${appId} record:${recordId} user:${userId} status:success\n`;
+      fs.appendFileSync(`${logDir}/audit.log`, logEntry);
+    } catch (e) {
+      console.warn('⚠️ Audit log write failed', e.message);
+    }
+
+    // Notify app owner
+    try {
+      const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+      if (app && app.ownerId) {
+        const message = `Latest quote fetched for record ${recordId}`;
+        await prisma.notification.create({ data: { userId: app.ownerId, type: 'system', message } });
+        if (global.emitNotification) {
+          global.emitNotification({ userId: app.ownerId, type: 'system', message, id: Date.now(), createdAt: new Date() });
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ Notification failed', e.message);
+    }
+
+    return res.json({ success: true, updated: updated[0] });
+  } catch (error) {
+    console.error('❌ [FETCH-QUOTE] Error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+/**
+ * @route POST /api/workflow/update-status
+ * @desc  Update application status (Completed / Rejected) and record audit & notify
+ * @access Private (banker)
+ */
+router.post("/workflow/update-status", authenticateToken, async (req, res) => {
+  try {
+    const { appId, recordId, status } = req.body;
+    const userId = req.user.id;
+    if (!appId || !recordId || !status) return res.status(400).json({ success: false, message: 'appId, recordId and status required' });
+
+    const allowed = ['Completed', 'Rejected', 'Pending'];
+    if (!allowed.includes(status)) return res.status(400).json({ success: false, message: 'Invalid status' });
+
+    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
+    if (!hasAccess) return res.status(403).json({ success: false, message: 'Access denied' });
+
+    const tableName = generateTableName(appId, 'applications');
+    const exists = await dbUtils.tableExists(tableName);
+    if (!exists) return res.status(404).json({ success: false, message: 'Applications table not found' });
+
+    const updateQuery = `UPDATE "${tableName}" SET data = jsonb_set(coalesce(data, '{}'::jsonb), '{status}', to_jsonb($1::text), true), updated_at = NOW() WHERE id = $2 RETURNING *`;
+    const updated = await prisma.$queryRawUnsafe(updateQuery, status, recordId);
+
+    // Write audit log
+    try {
+      const fs = require('fs');
+      const logDir = 'server/logs';
+      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+      const logEntry = `${new Date().toISOString()}: UPDATE_STATUS app:${appId} record:${recordId} user:${userId} status:${status}\n`;
+      fs.appendFileSync(`${logDir}/audit.log`, logEntry);
+    } catch (e) {
+      console.warn('⚠️ Audit log write failed', e.message);
+    }
+
+    // Notify owner
+    try {
+      const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+      if (app && app.ownerId) {
+        const message = `Application ${recordId} marked ${status}`;
+        await prisma.notification.create({ data: { userId: app.ownerId, type: 'system', message } });
+        if (global.emitNotification) {
+          global.emitNotification({ userId: app.ownerId, type: 'system', message, id: Date.now(), createdAt: new Date() });
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ Notification failed', e.message);
+    }
+
+    return res.json({ success: true, updated: updated[0] });
+  } catch (error) {
+    console.error('❌ [UPDATE-STATUS] Error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+/**
+ * @route POST /api/workflow/send-daily-summary
+ * @desc  Send daily summary email to app owner (records in last 24h)
+ * @access Private (banker or scheduled system user)
+ */
+router.post('/workflow/send-daily-summary', authenticateToken, async (req, res) => {
+  try {
+    const { appId } = req.body;
+    const userId = req.user.id;
+    if (!appId) return res.status(400).json({ success: false, message: 'appId required' });
+
+    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
+    if (!hasAccess) return res.status(403).json({ success: false, message: 'Access denied' });
+
+    const tableName = generateTableName(appId, 'applications');
+    const exists = await dbUtils.tableExists(tableName);
+    if (!exists) return res.status(404).json({ success: false, message: 'Applications table not found' });
+
+    // Fetch records from last 24 hours
+    const selectQuery = `SELECT id, data, created_at FROM "${tableName}" WHERE created_at >= NOW() - INTERVAL '24 hours' ORDER BY created_at DESC`;
+    const recent = await prisma.$queryRawUnsafe(selectQuery);
+
+    const count = recent ? recent.length : 0;
+
+    // Build summary
+    let message = `Daily summary for app ${appId}: ${count} new application(s) in last 24 hours.`;
+    if (count > 0) {
+      const rows = recent.slice(0, 10).map(r => {
+        const applicantName = (r.data && (r.data.applicant?.name || r.data.applicantName || r.data.name)) || 'Unknown';
+        const email = (r.data && (r.data.applicant?.email || r.data.applicantEmail || r.data.email)) || 'Unknown';
+        return `#${r.id} - ${applicantName} <${email}>`;
+      });
+      message += '\n\nRecent applications:\n' + rows.join('\n');
+    }
+
+    // Find app owner email
+    const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+    if (!app || !app.ownerId) return res.status(404).json({ success: false, message: 'App owner not found' });
+
+    const owner = await prisma.user.findUnique({ where: { id: app.ownerId }, select: { email: true, id: true, role: true } });
+    if (!owner || !owner.email) return res.status(404).json({ success: false, message: 'Owner email not found' });
+
+    // Send email (emailService handles console fallback in dev)
+    const emailResult = await emailService.sendNotificationEmail(owner.email, 'system', message, owner.email.split('@')[0]);
+
+    // Log and notify
+    try {
+      const fs = require('fs');
+      const logDir = 'server/logs';
+      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+      const logEntry = `${new Date().toISOString()}: DAILY_SUMMARY app:${appId} user:${userId} emailsent:${emailResult.success}\n`;
+      fs.appendFileSync(`${logDir}/audit.log`, logEntry);
+    } catch (e) {
+      console.warn('⚠️ Audit log write failed', e.message);
+    }
+
+    if (global.emitNotification) {
+      global.emitNotification({ userId: app.ownerId, type: 'system', message: `Daily summary: ${count} new application(s)`, id: Date.now(), createdAt: new Date() });
+    }
+
+    return res.json({ success: true, emailed: emailResult.success, details: emailResult });
+  } catch (error) {
+    console.error('❌ [DAILY-SUMMARY] Error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 module.exports = router;
+// Export runWorkflow for background worker to invoke
+try {
+  module.exports.runWorkflow = runWorkflow;
+} catch (e) {
+  // If runWorkflow is not defined (shouldn't happen), skip export
+}

@@ -458,6 +458,9 @@ const isBlockConfigured = (data: WorkflowNodeData): boolean => {
     case "onSchedule":
       return !!data.cronExpression;
 
+    case "onWebhook":
+      return true; // Always configured - webhook URL is auto-generated
+
     case "onRecordCreate":
     case "onRecordUpdate":
       return !!data.tableName;
@@ -484,9 +487,8 @@ const isBlockConfigured = (data: WorkflowNodeData): boolean => {
     case "db.upsert":
       return !!(
         data.tableName &&
-        data.insertData &&
-        data.updateData &&
-        data.uniqueFields
+        data.uniqueFields &&
+        (data.insertData || data.updateData)
       );
 
     case "email.send":
@@ -1447,6 +1449,59 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
               <label htmlFor="enabled" className="text-sm">
                 Enabled
               </label>
+            </div>
+          </div>
+        );
+
+      case "onWebhook":
+        // Get appId from component state (set from URL params)
+        const webhookAppId = appId || "1";
+        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://backend:5000";
+        const webhookUrl = `${backendUrl}/api/workflow/webhook/${webhookAppId}`;
+        
+        return (
+          <div className="space-y-4">
+            <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+              <div className="space-y-3">
+                <div>
+                  <label className="text-sm font-medium text-blue-700 dark:text-blue-300">
+                    Webhook URL:
+                  </label>
+                  <div className="mt-1 flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={webhookUrl}
+                      className="flex-1 px-3 py-2 text-sm border rounded-md bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(webhookUrl);
+                        // You might want to show a toast here
+                      }}
+                      className="px-3 py-2 text-sm bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
+                
+                <div className="text-xs text-blue-600 dark:text-blue-400 space-y-1">
+                  <p className="font-medium">How to use:</p>
+                  <ul className="list-disc list-inside space-y-1 ml-2">
+                    <li>Send a POST request to this URL</li>
+                    <li>Include header: <code className="bg-blue-100 dark:bg-blue-900 px-1 rounded">x-algo-secret: YOUR_SECRET</code></li>
+                    <li>Send JSON payload in request body</li>
+                    <li>Payload will be available in workflow context</li>
+                  </ul>
+                </div>
+
+                <div className="p-2 bg-yellow-50 dark:bg-yellow-900/20 rounded text-xs text-yellow-700 dark:text-yellow-300 border border-yellow-200 dark:border-yellow-800">
+                  <p className="font-medium mb-1">⚠️ Security Note:</p>
+                  <p>Set <code className="bg-yellow-100 dark:bg-yellow-900 px-1 rounded">ALGORITHM_WEBHOOK_SECRET</code> in your backend environment variables to enable secret validation.</p>
+                </div>
+              </div>
             </div>
           </div>
         );
@@ -3138,6 +3193,218 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
                 </div>
               </div>
             )}
+          </div>
+        );
+
+      case "db.upsert":
+        return (
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Table Name:</label>
+              {tableSuggestions.length > 0 ? (
+                <select
+                  value={data.tableName || ""}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setNodes((nodes) =>
+                      nodes.map((node) =>
+                        node.id === id
+                          ? {
+                              ...node,
+                              data: { ...node.data, tableName: value },
+                            }
+                          : node
+                      )
+                    );
+                  }}
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">Select table...</option>
+                  {tableSuggestions.map((table) => (
+                    <option key={table.value} value={table.value}>
+                      {table.label}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  placeholder="Enter table name..."
+                  value={data.tableName || ""}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setNodes((nodes) =>
+                      nodes.map((node) =>
+                        node.id === id
+                          ? {
+                              ...node,
+                              data: { ...node.data, tableName: value },
+                            }
+                          : node
+                      )
+                    );
+                  }}
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Unique Fields:</label>
+              <div className="text-xs text-muted-foreground mb-2">
+                Comma-separated list of fields to use for matching records (e.g., "email,username")
+              </div>
+              <input
+                type="text"
+                placeholder='["email", "username"] or email,username'
+                value={
+                  Array.isArray(data.uniqueFields)
+                    ? data.uniqueFields.join(",")
+                    : typeof data.uniqueFields === "string"
+                    ? data.uniqueFields
+                    : ""
+                }
+                onChange={(e) => {
+                  const value = e.target.value;
+                  // Store as string while user is typing to allow commas
+                  // Only parse when we need to (on save/validation)
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: { ...node.data, uniqueFields: value },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                onBlur={(e) => {
+                  // Parse and normalize when user leaves the field
+                  const value = e.target.value.trim();
+                  if (!value) {
+                    return;
+                  }
+                  
+                  let parsedValue;
+                  try {
+                    // Try to parse as JSON array
+                    parsedValue = JSON.parse(value);
+                    if (!Array.isArray(parsedValue)) {
+                      throw new Error("Not an array");
+                    }
+                  } catch {
+                    // If not valid JSON, split by comma and trim
+                    parsedValue = value
+                      .split(",")
+                      .map((f) => f.trim())
+                      .filter((f) => f.length > 0);
+                  }
+                  
+                  // Update with parsed value
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: { ...node.data, uniqueFields: parsedValue },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+              />
+              <div className="text-xs text-muted-foreground">
+                💡 These fields will be used to check if a record already exists
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Insert Data:</label>
+              <div className="text-xs text-muted-foreground mb-2">
+                Data to insert when record doesn't exist
+              </div>
+              <textarea
+                placeholder='{"name": "John", "email": "john@example.com"}'
+                value={
+                  typeof data.insertData === "string"
+                    ? data.insertData
+                    : JSON.stringify(data.insertData || {}, null, 2)
+                }
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: { ...node.data, insertData: value },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                rows={4}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Update Data:</label>
+              <div className="text-xs text-muted-foreground mb-2">
+                Data to update when record exists (optional - will use insertData if not provided)
+              </div>
+              <textarea
+                placeholder='{"status": "active", "updated_at": "{{now}}"}'
+                value={
+                  typeof data.updateData === "string"
+                    ? data.updateData
+                    : JSON.stringify(data.updateData || {}, null, 2)
+                }
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: { ...node.data, updateData: value },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                rows={4}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={data.returnRecord !== false}
+                  onChange={(e) => {
+                    setNodes((nodes) =>
+                      nodes.map((node) =>
+                        node.id === id
+                          ? {
+                              ...node,
+                              data: {
+                                ...node.data,
+                                returnRecord: e.target.checked,
+                              },
+                            }
+                          : node
+                      )
+                    );
+                  }}
+                  className="w-4 h-4"
+                />
+                Return the created/updated record
+              </label>
+            </div>
           </div>
         );
 
