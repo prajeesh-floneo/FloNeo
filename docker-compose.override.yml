@@ -10,7 +10,7 @@ services:
       dockerfile: Dockerfile.dev
     environment:
       NODE_ENV: development
-      DATABASE_URL: postgresql://floneo:floneo123@postgres:5432/floneo_db?schema=public
+      DATABASE_URL: postgresql://floneo:floneo123@postgres:5432/floneo?schema=public
       JWT_SECRET: floneo-docker-jwt-secret-key
       JWT_REFRESH_SECRET: floneo-docker-refresh-secret-key
       PORT: 5000
@@ -32,7 +32,7 @@ services:
       NEXT_PUBLIC_API_URL: http://localhost:5000
       NEXT_PUBLIC_SOCKET_URL: http://localhost:5000
       BACKEND_URL: http://backend:5000
-      WATCHPACK_POLLING: "true"  # Enable polling for file changes
+      WATCHPACK_POLLING: "true" # Enable polling for file changes
     volumes:
       # Mount source code for hot reload
       - ./client:/app
@@ -40,5 +40,3 @@ services:
       - /app/node_modules
       - /app/.next
     command: npm run dev
-
-
