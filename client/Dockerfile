@@ -7,7 +7,9 @@ WORKDIR /app
 
 # Install dependencies based on the preferred package manager
 COPY package*.json ./
-RUN npm ci --no-cache --prefer-offline
+# Note: --no-cache is invalid for npm ci and causes build failures
+# Using --prefer-offline for better Docker layer caching
+RUN npm ci --prefer-offline --no-audit
 RUN npm install sharp --platform=linux --arch=x64
 
 # Rebuild the source code only when needed
