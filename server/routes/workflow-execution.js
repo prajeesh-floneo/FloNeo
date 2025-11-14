@@ -550,6 +550,15 @@ const executeOnSubmit = async (node, context, appId) => {
     const formData = context.formData || {};
     const triggerElement = context.triggerElement;
 
+    console.log("🧾 [ON-SUBMIT] Incoming context snapshot:", {
+      formGroupId,
+      contextKeys: Object.keys(context || {}),
+      formDataPreview: formData,
+      rawContext: {
+        ...context,
+      },
+    });
+
     console.log("📋 [ON-SUBMIT] Form submission details:", {
       formGroupId,
       formDataKeys: Object.keys(formData),
@@ -3247,6 +3256,230 @@ const executeMatch = async (node, context, appId, userId) => {
   }
 };
 
+// inList block handler
+const executeInList = async (node, context, appId, userId) => {
+  try {
+    console.log("📋 [IN-LIST] Starting list membership check for app:", appId);
+
+    const hasAccess = await securityValidator.validateAppAccess(
+      appId,
+      userId,
+      prisma
+    );
+    if (!hasAccess) {
+      throw new Error("Access denied to this app");
+    }
+
+    const {
+      inListValue,
+      inListMode = "static",
+      inListStaticList = "",
+      inListContextPath = "",
+      inListTableName = "",
+      inListTableColumn = "name",
+      inListIgnoreCase = true,
+      inListTrimValues = true,
+    } = node.data || {};
+
+    if (
+      inListValue === undefined ||
+      inListValue === null ||
+      (typeof inListValue === "string" && inListValue.trim() === "")
+    ) {
+      throw new Error("Value to check is required for inList");
+    }
+
+    const rawValue =
+      typeof inListValue === "string"
+        ? inListValue
+        : JSON.stringify(inListValue);
+    const substitutedValue = substituteContextVariables(rawValue, context);
+    const preparedValue =
+      typeof substitutedValue === "string" && inListTrimValues
+        ? substitutedValue.trim()
+        : substitutedValue;
+
+  console.log("📋 [IN-LIST] Value resolution:", {
+    rawValue,
+    substitutedValue,
+    preparedValue,
+    hasFormData: Boolean(context?.formData),
+  });
+
+    const normalizeText = (value) => {
+      if (value === undefined || value === null) {
+        return "";
+      }
+      let text = typeof value === "string" ? value : String(value);
+      if (inListTrimValues) {
+        text = text.trim();
+      }
+      return inListIgnoreCase ? text.toLowerCase() : text;
+    };
+
+    const normalizedInput = normalizeText(preparedValue);
+
+    let isInList = false;
+    const sourceDetails = {
+      mode: inListMode,
+      totalItems: null,
+      table: null,
+    };
+
+    if (inListMode === "table") {
+      if (!inListTableName) {
+        throw new Error("Table name is required when list mode is 'table'");
+      }
+
+      const columnName =
+        (inListTableColumn && inListTableColumn.trim()) || "name";
+
+      const fullTableName = inListTableName.startsWith("app_")
+        ? inListTableName
+        : `app_${appId}_${inListTableName}`;
+
+      securityValidator.validateTableName(fullTableName, appId);
+
+      const tableExists = await dbUtils.tableExists(fullTableName);
+      if (!tableExists) {
+        throw new Error(`Table '${fullTableName}' does not exist`);
+      }
+
+      const tableSchema = await dbUtils.discoverTableSchema(fullTableName);
+      if (!tableSchema || tableSchema.length === 0) {
+        throw new Error(
+          `Unable to discover schema for table '${fullTableName}'`
+        );
+      }
+
+      const columnInfo = tableSchema.find((col) => col.name === columnName);
+      if (!columnInfo) {
+        throw new Error(
+          `Column '${columnName}' not found on table '${fullTableName}'`
+        );
+      }
+
+      const columnIdentifier = `"${columnInfo.name}"`;
+      const textTypes = [
+        "text",
+        "character varying",
+        "varchar",
+        "char",
+        "character",
+      ];
+      const isTextColumn = textTypes.includes(
+        (columnInfo.type || "").toLowerCase()
+      );
+
+      let query;
+      let params;
+      let queryValue = preparedValue;
+
+      if (typeof queryValue === "string") {
+        queryValue = inListTrimValues ? queryValue.trim() : queryValue;
+      }
+
+      if (isTextColumn && typeof queryValue !== "string") {
+        queryValue =
+          queryValue === undefined || queryValue === null
+            ? ""
+            : String(queryValue);
+      }
+
+      if (isTextColumn && inListIgnoreCase) {
+        query = `SELECT 1 FROM "${fullTableName}" WHERE LOWER(${columnIdentifier}) = LOWER($1) LIMIT 1`;
+        params = [queryValue];
+      } else {
+        const typedValue = dbUtils.convertValue(queryValue, columnInfo.type);
+        query = `SELECT 1 FROM "${fullTableName}" WHERE ${columnIdentifier} = $1 LIMIT 1`;
+        params = [typedValue];
+      }
+
+      console.log(
+        `📋 [IN-LIST] Checking table ${fullTableName}.${columnInfo.name} for value:`,
+        queryValue
+      );
+
+      const rows = await prisma.$queryRawUnsafe(query, ...params);
+      isInList = Array.isArray(rows) && rows.length > 0;
+
+      sourceDetails.table = {
+        tableName: fullTableName,
+        column: columnInfo.name,
+      };
+    } else {
+      let values = [];
+
+      if (inListMode === "context") {
+        if (!inListContextPath) {
+          throw new Error(
+            "Context path is required when list mode is 'context'"
+          );
+        }
+
+        const resolved = resolveContextPathValue(context, inListContextPath);
+        if (Array.isArray(resolved)) {
+          values = resolved;
+        } else if (resolved && typeof resolved === "object") {
+          values = Object.values(resolved);
+        } else if (resolved !== undefined && resolved !== null) {
+          values = [resolved];
+        } else {
+          values = [];
+        }
+      } else {
+        const staticListString = substituteContextVariables(
+          String(inListStaticList || ""),
+          context
+        );
+
+        values = staticListString
+          .split(/[\n,]+/)
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0);
+
+        if (values.length === 0) {
+          throw new Error("Provide at least one list value to compare against");
+        }
+      }
+
+      const normalizedList = values.map((item) => normalizeText(item));
+      sourceDetails.totalItems = normalizedList.length;
+      sourceDetails.sample = values.slice(0, 20);
+
+      isInList = normalizedList.includes(normalizedInput);
+    }
+
+    console.log(
+      `📋 [IN-LIST] Result: ${isInList ? "✅ value found" : "❌ value missing"}`
+    );
+
+    return {
+      success: true,
+      isInList,
+      checkedValue: preparedValue,
+      source: sourceDetails,
+      context: {
+        ...context,
+        inListResult: {
+          isInList,
+          checkedValue: preparedValue,
+          source: sourceDetails,
+          evaluatedAt: new Date().toISOString(),
+        },
+      },
+    };
+  } catch (error) {
+    console.error("❌ [IN-LIST] Error:", error.message);
+    return {
+      success: false,
+      isInList: false,
+      error: error.message,
+      context,
+    };
+  }
+};
+
 // Text comparison helper function
 const performTextComparison = (left, right, operator, options = {}) => {
   const { ignoreCase = false, trimSpaces = false } = options;
@@ -3514,20 +3747,67 @@ const performListComparison = (left, right, operator, options = {}) => {
   }
 };
 
+// Context path resolution helpers
+const normalizeContextPath = (path) => {
+  if (!path || typeof path !== "string") return "";
+  let normalized = path.trim();
+  if (!normalized) return "";
+  if (normalized.startsWith("{{") && normalized.endsWith("}}")) {
+    normalized = normalized.slice(2, -2).trim();
+  }
+  if (!normalized) return "";
+  normalized = normalized.replace(/\[(\d+)\]/g, ".$1");
+  normalized = normalized.replace(/\[["']([^"']+)["']\]/g, ".$1");
+  normalized = normalized.replace(/\.{2,}/g, ".");
+  normalized = normalized.replace(/^\./, "");
+  return normalized;
+};
+
+const resolveContextPathValue = (context, path) => {
+  const normalizedPath = normalizeContextPath(path);
+  if (!normalizedPath) return undefined;
+
+  const runtimeContext = context || {};
+  const root = {
+    context: runtimeContext,
+    formData: runtimeContext.formData || {},
+    ...runtimeContext,
+  };
+
+  const segments = normalizedPath.split(".").filter(Boolean);
+  let current = root;
+
+  for (const segment of segments) {
+    if (current === null || current === undefined) {
+      return undefined;
+    }
+    current = current[segment];
+  }
+
+  return current;
+};
+
+const resolveContextDateValue = (context, path) => {
+  return resolveContextPathValue(context, path);
+};
+
 // Context variable substitution helper
 const substituteContextVariables = (value, context) => {
   if (typeof value !== "string") return value;
 
-  return value.replace(/\{\{([^}]+)\}\}/g, (match, path) => {
-    const keys = path.split(".");
-    let result = context;
-
-    for (const key of keys) {
-      result = result?.[key];
-      if (result === undefined) break;
+  return value.replace(/\{\{([^}]+)\}\}/g, (match, pathExpression) => {
+    const resolvedValue = resolveContextPathValue(context, pathExpression);
+    if (resolvedValue === undefined || resolvedValue === null) {
+      return match;
     }
-
-    return result !== undefined ? result : match;
+    if (typeof resolvedValue === "object") {
+      try {
+        return JSON.stringify(resolvedValue);
+      } catch (error) {
+        return match;
+      }
+    }
+    return resolvedValue;
   });
 };
 
@@ -3762,21 +4042,36 @@ const validateDateValue = (dateValue, rules, format) => {
   let isValid = true;
   let parsedDate = null;
   let formattedDate = null;
+  const hasValue =
+    dateValue instanceof Date
+      ? true
+      : typeof dateValue === "string"
+      ? dateValue.trim() !== ""
+      : dateValue !== null &&
+        dateValue !== undefined &&
+        String(dateValue).trim() !== "";
 
   // Check if value is provided when required
-  if (rules.required && (!dateValue || dateValue.trim() === "")) {
+  if (rules.required && !hasValue) {
     errors.push("Date is required");
     return { isValid: false, errors, parsedDate, formattedDate };
   }
 
   // If not required and empty, consider it valid
-  if (!rules.required && (!dateValue || dateValue.trim() === "")) {
+  if (!rules.required && !hasValue) {
     return { isValid: true, errors: [], parsedDate: null, formattedDate: null };
   }
 
+  const valueForParsing =
+    dateValue instanceof Date
+      ? dateValue
+      : typeof dateValue === "string"
+      ? dateValue.trim()
+      : String(dateValue).trim();
+
   // Parse the date value
   try {
-    parsedDate = parseDate(dateValue, format);
+    parsedDate = parseDate(valueForParsing, format);
     if (!parsedDate || isNaN(parsedDate.getTime())) {
       errors.push(
         `Invalid date format. Expected: ${
@@ -3795,7 +4090,8 @@ const validateDateValue = (dateValue, rules, format) => {
 
   // Validate date range - minimum date
   if (rules.minDate) {
-    const minDate = parseDate(rules.minDate, format);
+    const minDate =
+      parseDate(rules.minDate, format) || parseDate(rules.minDate, undefined);
     if (minDate && parsedDate < minDate) {
       errors.push(
         `Date must be after ${formatDate(minDate, format || "YYYY-MM-DD")}`
@@ -3806,7 +4102,8 @@ const validateDateValue = (dateValue, rules, format) => {
 
   // Validate date range - maximum date
   if (rules.maxDate) {
-    const maxDate = parseDate(rules.maxDate, format);
+    const maxDate =
+      parseDate(rules.maxDate, format) || parseDate(rules.maxDate, undefined);
     if (maxDate && parsedDate > maxDate) {
       errors.push(
         `Date must be before ${formatDate(maxDate, format || "YYYY-MM-DD")}`
@@ -3913,13 +4210,27 @@ const executeDateValid = async (node, context, appId) => {
     console.log("📅 [DATE-VALID] Starting date validation for app:", appId);
 
     const dateConfig = node.data || {};
-    const { selectedElementIds, dateFormat, validationRules } = dateConfig;
+    const {
+      selectedElementIds,
+      dateFormat,
+      validationRules,
+      customDateFields,
+    } = dateConfig;
 
-    if (!selectedElementIds || selectedElementIds.length === 0) {
-      console.warn("⚠️ [DATE-VALID] No date elements selected");
+    const selectedElements = Array.isArray(selectedElementIds)
+      ? selectedElementIds.filter(Boolean)
+      : [];
+    const contextFields = Array.isArray(customDateFields)
+      ? customDateFields.filter(
+          (field) => typeof field === "string" && field.trim() !== ""
+        )
+      : [];
+
+    if (selectedElements.length === 0 && contextFields.length === 0) {
+      console.warn("⚠️ [DATE-VALID] No date sources configured");
       return {
         success: false,
-        error: "No date elements selected for validation",
+        error: "No date inputs or context fields selected for validation",
         isValid: false,
         context: context,
       };
@@ -3932,14 +4243,16 @@ const executeDateValid = async (node, context, appId) => {
     let anyValid = false;
 
     console.log("📋 [DATE-VALID] Validation details:", {
-      selectedElementIds,
+      selectedElementIds: selectedElements,
+      customDateFields: contextFields,
       dateFormat: dateFormat || "auto-detect",
       validationRules: validationRules || {},
       formDataKeys: Object.keys(formData),
+      contextKeys: Object.keys(context || {}),
     });
 
     // Validate each selected date element
-    for (const elementId of selectedElementIds) {
+    for (const elementId of selectedElements) {
       const dateValue = formData[elementId];
       console.log(
         `📅 [DATE-VALID] Validating element ${elementId}:`,
@@ -3959,6 +4272,38 @@ const executeDateValid = async (node, context, appId) => {
         errors: validation.errors,
         parsedDate: validation.parsedDate,
         formattedDate: validation.formattedDate,
+        sourceType: "formElement",
+      });
+
+      if (!validation.isValid) {
+        allValid = false;
+      } else {
+        anyValid = true;
+      }
+    }
+
+    // Validate context/record fields
+    for (const fieldPath of contextFields) {
+      const resolvedValue = resolveContextDateValue(context, fieldPath);
+      console.log(
+        `📅 [DATE-VALID] Validating context field ${fieldPath}:`,
+        resolvedValue
+      );
+
+      const validation = validateDateValue(
+        resolvedValue,
+        validationRules || {},
+        dateFormat
+      );
+
+      validationResults.push({
+        elementId: fieldPath,
+        value: resolvedValue,
+        isValid: validation.isValid,
+        errors: validation.errors,
+        parsedDate: validation.parsedDate,
+        formattedDate: validation.formattedDate,
+        sourceType: "context",
       });
 
       if (!validation.isValid) {
@@ -3975,17 +4320,18 @@ const executeDateValid = async (node, context, appId) => {
       totalCount: validationResults.length,
     });
 
+    const totalSources = Math.max(validationResults.length, 1);
+    const validCount = validationResults.filter((r) => r.isValid).length;
+
     return {
       success: true,
       isValid: allValid,
       allValid,
       anyValid,
       validationResults,
-      elementCount: selectedElementIds.length,
-      validCount: validationResults.filter((r) => r.isValid).length,
-      message: `${validationResults.filter((r) => r.isValid).length}/${
-        selectedElementIds.length
-      } dates are valid`,
+      elementCount: totalSources,
+      validCount,
+      message: `${validCount}/${totalSources} dates are valid`,
       context: {
         ...context,
         dateValidation: {
@@ -3993,6 +4339,10 @@ const executeDateValid = async (node, context, appId) => {
           allValid,
           anyValid,
           validatedAt: new Date().toISOString(),
+          sources: {
+            formElements: selectedElements,
+            customFields: contextFields,
+          },
         },
       },
     };
@@ -4876,6 +5226,10 @@ router.post("/execute", authenticateToken, async (req, res) => {
               result = await executeMatch(node, currentContext, appId, userId);
               break;
 
+        case "inList":
+          result = await executeInList(node, currentContext, appId, userId);
+          break;
+
             case "roleIs":
               result = await executeRoleIs(node, currentContext, appId, userId);
               break;
@@ -5011,7 +5365,12 @@ router.post("/execute", authenticateToken, async (req, res) => {
           } else {
             // For other condition nodes, check the result and follow appropriate connector
             const conditionResult =
-              result?.isFilled || result?.isValid || result?.match || false;
+              result?.isFilled ||
+              result?.isValid ||
+              result?.match ||
+              result?.matches ||
+              result?.isInList ||
+              false;
             const connectorLabel = conditionResult ? "yes" : "no";
             const edgeKey = `${node.id}:${connectorLabel}`;
             nextNodeId = edgeMap[edgeKey];

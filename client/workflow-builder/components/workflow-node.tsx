@@ -29,6 +29,7 @@ import {
   AlertCircle,
   Check,
   Sparkles,
+  CheckSquare,
 } from "lucide-react";
 import {
   Dialog,
@@ -300,6 +301,7 @@ const getBlockIcon = (label: string) => {
     dateValid: Calendar,
     isFilled: CheckCircle,
     match: Shuffle,
+    inList: CheckSquare,
     roleIs: UserCheck,
     "auth.verify": Shield,
 
@@ -343,7 +345,10 @@ const isBlockConfigured = (data: WorkflowNodeData): boolean => {
       return !!data.targetElementId;
 
     case "dateValid":
-      return !!(data.selectedElementIds && data.selectedElementIds.length > 0);
+      return !!(
+        (data.selectedElementIds && data.selectedElementIds.length > 0) ||
+        (data.customDateFields && data.customDateFields.length > 0)
+      );
 
     case "onSubmit":
       return !!data.selectedFormGroup;
@@ -398,6 +403,18 @@ const isBlockConfigured = (data: WorkflowNodeData): boolean => {
 
     case "match":
       return !!(data.leftValue && data.rightValue);
+
+    case "inList": {
+      if (!data.inListValue) return false;
+      const mode = data.inListMode || "static";
+      if (mode === "context") {
+        return !!data.inListContextPath;
+      }
+      if (mode === "table") {
+        return !!data.inListTableName;
+      }
+      return !!data.inListStaticList;
+    }
 
     case "roleIs":
       return !!data.requiredRole;
@@ -495,6 +512,7 @@ export interface WorkflowNodeData {
     minDate?: string;
     maxDate?: string;
   };
+  customDateFields?: string[];
   tableName?: string;
   triggerType?: string;
   // DbFind configuration properties
@@ -583,6 +601,16 @@ export interface WorkflowNodeData {
     allowPartialMatches?: boolean;
   };
 
+  // inList configuration properties
+  inListValue?: string;
+  inListMode?: "static" | "context" | "table";
+  inListStaticList?: string;
+  inListContextPath?: string;
+  inListTableName?: string;
+  inListTableColumn?: string;
+  inListIgnoreCase?: boolean;
+  inListTrimValues?: boolean;
+
   // auth.verify configuration properties
   tokenSource?: "context" | "header" | "config";
   requireVerified?: boolean;
@@ -656,6 +684,9 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
       pageName: string;
     }>
   >([]);
+
+  const [customDateFieldInput, setCustomDateFieldInput] = useState("");
+  const [selectedInListFieldId, setSelectedInListFieldId] = useState("");
 
   // State for db.find simple mode
   const [dbFindSimpleState, setDbFindSimpleState] = useState<DbFindSimpleState>(
@@ -2926,6 +2957,247 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
           </div>
         );
 
+      case "inList": {
+        const listMode = data.inListMode || "static";
+        const updateField = (field: string, value: any) => {
+          setNodes((nodes) =>
+            nodes.map((node) =>
+              node.id === id
+                ? { ...node, data: { ...node.data, [field]: value } }
+                : node
+            )
+          );
+        };
+
+        const TEXT_INPUT_TYPES = [
+          "textfield",
+          "text_field",
+          "text",
+          "input",
+          "textarea",
+          "textarea_field",
+        ];
+
+        const formTextFields =
+          formGroups.length > 0
+            ? formGroups.flatMap((group) => {
+                const groupElements = formElements.filter((el) =>
+                  group.elementIds?.includes(el.id)
+                );
+                return groupElements
+                  .filter((element) =>
+                    TEXT_INPUT_TYPES.includes(
+                      (element.type || "").toLowerCase()
+                    )
+                  )
+                  .map((element) => ({
+                    value: element.id,
+                    label: `${group.name || "Form"} • ${
+                      element.name || element.id
+                    }`,
+                  }));
+              })
+            : formElements
+                .filter((element) =>
+                  TEXT_INPUT_TYPES.includes((element.type || "").toLowerCase())
+                )
+                .map((element) => ({
+                  value: element.id,
+                  label: element.name || element.id,
+                }));
+
+        const handleInsertSelectedField = () => {
+          if (!selectedInListFieldId) return;
+          const template = `{{context.formData["${selectedInListFieldId}"]}}`;
+          updateField("inListValue", template);
+          setSelectedInListFieldId("");
+        };
+
+        return (
+          <div className="space-y-4">
+            <div className="text-xs text-muted-foreground">
+              Determine whether a value exists within a static list, workflow
+              context array, or database table before continuing.
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Value to check</label>
+              <input
+                type="text"
+                placeholder="{{context.formData.name}}"
+                value={data.inListValue || ""}
+                onChange={(e) => updateField("inListValue", e.target.value)}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <div className="text-xs text-muted-foreground">
+                Accepts plain text or context variables (e.g.{" "}
+                {`{{context.dbFindResult[0].name}}`}).
+              </div>
+            </div>
+
+            {formTextFields.length > 0 ? (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Form text fields</label>
+                <div className="flex gap-2">
+                  <select
+                    value={selectedInListFieldId}
+                    onChange={(e) => setSelectedInListFieldId(e.target.value)}
+                    className="flex-1 px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">Select form field…</option>
+                    {formTextFields.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={handleInsertSelectedField}
+                    disabled={!selectedInListFieldId}
+                    className="px-3 py-2 text-sm font-medium border rounded-md bg-muted hover:bg-muted/80 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Insert
+                  </button>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Inserts {`{{context.formData["fieldId"]}}`} so you don’t have to
+                  remember element IDs.
+                </div>
+              </div>
+            ) : (
+              <div className="text-xs text-muted-foreground">
+                Add a form group with text fields to enable quick insertion.
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">List source</label>
+              <select
+                value={listMode}
+                onChange={(e) => {
+                  const nextMode = e.target.value;
+                  updateField("inListMode", nextMode);
+                  if (nextMode === "table" && !data.inListTableColumn) {
+                    updateField("inListTableColumn", "name");
+                  }
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="static">Static list (comma separated)</option>
+                <option value="context">Context / record field</option>
+                <option value="table">Database table column</option>
+              </select>
+            </div>
+
+            {listMode === "static" && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">List values</label>
+                <textarea
+                  rows={3}
+                  placeholder="Rahul, John, Shobhit"
+                  value={data.inListStaticList || ""}
+                  onChange={(e) => updateField("inListStaticList", e.target.value)}
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                />
+                <div className="text-xs text-muted-foreground">
+                  Separate entries with commas or new lines. You can embed
+                  variables like {`{{context.allowedNames}}`}.
+                </div>
+              </div>
+            )}
+
+            {listMode === "context" && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Context path</label>
+                <input
+                  type="text"
+                  placeholder="context.dbFindResult[0].name"
+                  value={data.inListContextPath || ""}
+                  onChange={(e) => updateField("inListContextPath", e.target.value)}
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <div className="text-xs text-muted-foreground">
+                  Use dot/bracket notation or wrap in {`{{ }}`} (e.g.{" "}
+                  {`{{context.formData.favoriteColors}}`}). Arrays and CSV
+                  strings are supported.
+                </div>
+              </div>
+            )}
+
+            {listMode === "table" && (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Table name</label>
+                  <input
+                    type="text"
+                    placeholder="app_3_demo or demo"
+                    value={data.inListTableName || ""}
+                    onChange={(e) => updateField("inListTableName", e.target.value)}
+                    className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <div className="text-xs text-muted-foreground">
+                    Enter the full table name or a short name to auto-prefix with
+                    your app ID.
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Column name</label>
+                  <input
+                    type="text"
+                    placeholder="name"
+                    value={data.inListTableColumn || ""}
+                    onChange={(e) =>
+                      updateField("inListTableColumn", e.target.value)
+                    }
+                    className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <div className="text-xs text-muted-foreground">
+                    Column searched for the matching value (defaults to "name").
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={data.inListIgnoreCase !== false}
+                  onChange={(e) =>
+                    updateField("inListIgnoreCase", e.target.checked)
+                  }
+                  className="rounded"
+                />
+                Ignore letter casing
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={data.inListTrimValues !== false}
+                  onChange={(e) =>
+                    updateField("inListTrimValues", e.target.checked)
+                  }
+                  className="rounded"
+                />
+                Trim whitespace
+              </label>
+            </div>
+
+            <div className="text-xs text-muted-foreground space-y-1">
+              <div>• Static/context lists run locally.</div>
+              <div>
+                • Table mode performs a fast `SELECT 1` lookup on the specified
+                column.
+              </div>
+              <div>
+                • Route "yes" for allowed items and "no" for fallback logic.
+              </div>
+            </div>
+          </div>
+        );
+      }
+
       case "roleIs":
         return (
           <div className="space-y-4">
@@ -3298,60 +3570,308 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
           </div>
         );
 
-      case "dateValid":
+      case "dateValid": {
+        const dateElements = formElements.filter((element) => {
+          const type = (element.type || "").toLowerCase();
+          return [
+            "date",
+            "datetime",
+            "datetime-local",
+            "datepicker",
+            "date_picker",
+            "calendar",
+            "date_field",
+          ].includes(type);
+        });
+        const selectedIds = data.selectedElementIds || [];
+        const customFields = data.customDateFields || [];
+
+        const toggleDateElement = (elementId: string, isChecked: boolean) => {
+          const currentIds = data.selectedElementIds || [];
+          const newIds = isChecked
+            ? Array.from(new Set([...currentIds, elementId]))
+            : currentIds.filter((idValue) => idValue !== elementId);
+
+          setNodes((nodes) =>
+            nodes.map((node) =>
+              node.id === id
+                ? {
+                    ...node,
+                    data: {
+                      ...node.data,
+                      selectedElementIds: newIds,
+                    },
+                  }
+                : node
+            )
+          );
+        };
+
+        const handleAddCustomField = () => {
+          const value = customDateFieldInput.trim();
+          if (!value) return;
+          if (customFields.includes(value)) {
+            setCustomDateFieldInput("");
+            return;
+          }
+
+          setNodes((nodes) =>
+            nodes.map((node) =>
+              node.id === id
+                ? {
+                    ...node,
+                    data: {
+                      ...node.data,
+                      customDateFields: [...customFields, value],
+                    },
+                  }
+                : node
+            )
+          );
+          setCustomDateFieldInput("");
+        };
+
+        const handleRemoveCustomField = (field: string) => {
+          setNodes((nodes) =>
+            nodes.map((node) =>
+              node.id === id
+                ? {
+                    ...node,
+                    data: {
+                      ...node.data,
+                      customDateFields: customFields.filter(
+                        (item) => item !== field
+                      ),
+                    },
+                  }
+                : node
+            )
+          );
+        };
+
+        const updateValidationRule = (
+          ruleKey: keyof NonNullable<WorkflowNodeData["validationRules"]>,
+          value: string | boolean
+        ) => {
+          setNodes((nodes) =>
+            nodes.map((node) => {
+              if (node.id !== id) return node;
+              const nextRules = { ...(node.data.validationRules || {}) };
+
+              const shouldRemove =
+                value === "" ||
+                value === null ||
+                value === undefined ||
+                (typeof value === "boolean" && !value);
+
+              if (shouldRemove) {
+                delete nextRules[ruleKey];
+              } else {
+                nextRules[ruleKey] = value;
+              }
+
+              return {
+                ...node,
+                data: {
+                  ...node.data,
+                  validationRules:
+                    Object.keys(nextRules).length > 0 ? nextRules : undefined,
+                },
+              };
+            })
+          );
+        };
+
         return (
-          <div className="space-y-4">
+          <div className="space-y-5">
+            <div className="text-xs text-muted-foreground">
+              Validate one or more date fields before letting the workflow
+              continue. Combine form inputs with values pulled from database
+              records or previous steps.
+            </div>
+
             <div className="space-y-2">
-              <label className="text-sm font-medium">Date Elements:</label>
-              <div className="text-xs text-muted-foreground mb-2">
-                Select date input elements to validate
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium">
+                  Form Date Elements
+                </label>
+                <span className="text-xs text-muted-foreground">
+                  {selectedIds.length} selected
+                </span>
               </div>
-              <div className="max-h-40 overflow-y-auto border rounded-md p-2 space-y-1">
-                {formElements
-                  .filter(
-                    (el) => el.type === "date" || el.type === "datetime-local"
-                  )
-                  .map((element) => (
-                    <label
-                      key={element.id}
-                      className="flex items-center gap-2 p-2 hover:bg-muted rounded cursor-pointer"
+              {dateElements.length === 0 ? (
+                <div className="w-full px-3 py-2 text-sm border rounded-md bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800 text-yellow-800 dark:text-yellow-200">
+                  No date inputs detected on your canvas. Add a Date Picker or
+                  Date/Time element to enable form validation.
+                </div>
+              ) : (
+                <div className="max-h-44 overflow-y-auto border rounded-md p-2 space-y-1">
+                  {dateElements.map((element) => {
+                    const isChecked = selectedIds.includes(element.id);
+                    return (
+                      <label
+                        key={element.id}
+                        className="flex items-center gap-2 p-2 hover:bg-muted rounded cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(event) =>
+                            toggleDateElement(element.id, event.target.checked)
+                          }
+                          className="rounded"
+                        />
+                        <span className="text-sm">
+                          {element.name || element.id}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">
+                Record / Context Fields
+              </label>
+              <div className="flex flex-col gap-2">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={customDateFieldInput}
+                    onChange={(e) => setCustomDateFieldInput(e.target.value)}
+                    placeholder="e.g., context.dbFindResult[0].dateOfBirth"
+                    className="flex-1 px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddCustomField}
+                    className="px-3 py-2 text-sm font-medium border rounded-md bg-muted hover:bg-muted/80"
+                  >
+                    Add
+                  </button>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Reference values returned from previous blocks (e.g.
+                  {` {{context.dbFindResult[0].dob}} `} or{" "}
+                  {`context.record.enrollmentDate`}). These will be validated
+                  alongside form inputs.
+                </div>
+              </div>
+              {customFields.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {customFields.map((field) => (
+                    <span
+                      key={field}
+                      className="inline-flex items-center gap-2 px-2 py-1 text-xs border rounded-full bg-muted"
                     >
-                      <input
-                        type="checkbox"
-                        checked={(data.selectedElementIds || []).includes(
-                          element.id
-                        )}
-                        onChange={(e) => {
-                          const checked = e.target.checked;
-                          const currentIds = data.selectedElementIds || [];
-                          const newIds = checked
-                            ? [...currentIds, element.id]
-                            : currentIds.filter((id) => id !== element.id);
-                          setNodes((nodes) =>
-                            nodes.map((node) =>
-                              node.id === id
-                                ? {
-                                    ...node,
-                                    data: {
-                                      ...node.data,
-                                      selectedElementIds: newIds,
-                                    },
-                                  }
-                                : node
-                            )
-                          );
-                        }}
-                        className="rounded"
-                      />
-                      <span className="text-sm">
-                        {element.name || element.id}
-                      </span>
-                    </label>
+                      {field}
+                      <button
+                        type="button"
+                        className="text-muted-foreground hover:text-foreground"
+                        onClick={() => handleRemoveCustomField(field)}
+                        aria-label={`Remove ${field}`}
+                      >
+                        ×
+                      </button>
+                    </span>
                   ))}
+                </div>
+              )}
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Date Format</label>
+                <select
+                  value={data.dateFormat || "auto-detect"}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setNodes((nodes) =>
+                      nodes.map((node) =>
+                        node.id === id
+                          ? {
+                              ...node,
+                              data: { ...node.data, dateFormat: value },
+                            }
+                          : node
+                      )
+                    );
+                  }}
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="auto-detect">Auto detect (recommended)</option>
+                  <option value="YYYY-MM-DD">YYYY-MM-DD</option>
+                  <option value="MM/DD/YYYY">MM/DD/YYYY</option>
+                  <option value="DD/MM/YYYY">DD/MM/YYYY</option>
+                  <option value="DD-MM-YYYY">DD-MM-YYYY</option>
+                </select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Require a value?</label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(data.validationRules?.required)}
+                    onChange={(e) =>
+                      updateValidationRule("required", e.target.checked)
+                    }
+                    className="rounded"
+                  />
+                  Must provide a valid date
+                </label>
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">
+                  Min Date (optional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="YYYY-MM-DD or {{context.minDate}}"
+                  value={data.validationRules?.minDate || ""}
+                  onChange={(e) =>
+                    updateValidationRule("minDate", e.target.value)
+                  }
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">
+                  Max Date (optional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="YYYY-MM-DD or {{context.maxDate}}"
+                  value={data.validationRules?.maxDate || ""}
+                  onChange={(e) =>
+                    updateValidationRule("maxDate", e.target.value)
+                  }
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            <div className="text-xs text-muted-foreground space-y-1 pt-1">
+              <div>
+                • Use with <code>onSubmit → dateValid → notify.toast</code> to
+                block invalid submissions.
+              </div>
+              <div>
+                • Chain <code>dateValid → db.create</code> to only persist valid
+                records.
+              </div>
+              <div>
+                • Route <code>dateValid → page.redirect</code> to guide users to
+                the next step when the date is acceptable.
               </div>
             </div>
           </div>
         );
+      }
 
       case "ai.summarize":
         return (
