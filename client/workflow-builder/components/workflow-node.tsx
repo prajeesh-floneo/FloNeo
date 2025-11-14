@@ -346,8 +346,14 @@ const isBlockConfigured = (data: WorkflowNodeData): boolean => {
       return !!(data.selectedElementIds && data.selectedElementIds.length > 0);
 
     case "onSubmit":
-    case "isFilled":
       return !!data.selectedFormGroup;
+
+    case "isFilled":
+      return !!(
+        data.selectedFormGroup &&
+        data.selectedElementIds &&
+        data.selectedElementIds.length > 0
+      );
 
     case "db.create":
       return !!(data.tableName && data.insertData);
@@ -616,6 +622,11 @@ export interface WorkflowNodeData {
   // roleIs configuration properties
   checkMultiple?: boolean;
   roles?: string[];
+
+  // isFilled configuration properties
+  showToastOnFail?: boolean;
+  failureMessage?: string;
+  failureTitle?: string;
 }
 
 const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
@@ -3102,7 +3113,6 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
         );
 
       case "onSubmit":
-      case "isFilled":
         return (
           <div className="space-y-4">
             <div className="space-y-2">
@@ -3131,6 +3141,159 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
                   </option>
                 ))}
               </select>
+            </div>
+          </div>
+        );
+
+      case "isFilled":
+        // Get elements for the selected form group
+        const selectedFormGroupData = formGroups.find(
+          (g) => g.id === data.selectedFormGroup
+        );
+        const formGroupElementIds = selectedFormGroupData?.elementIds || [];
+        const formGroupElements = formElements.filter((el) =>
+          formGroupElementIds.includes(el.id)
+        );
+
+        return (
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Form Group:</label>
+              <select
+                value={data.selectedFormGroup || ""}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  // Clear selected elements when form group changes
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: {
+                              ...node.data,
+                              selectedFormGroup: value,
+                              selectedElementIds: [],
+                            },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">Select a form group...</option>
+                {formGroups.map((group) => (
+                  <option key={group.id} value={group.id}>
+                    {group.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {data.selectedFormGroup && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Form Elements:</label>
+                <div className="text-xs text-muted-foreground mb-2">
+                  Select which elements to check if filled
+                </div>
+                {formGroupElements.length === 0 ? (
+                  <div className="p-3 text-sm text-yellow-600 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md">
+                    ⚠️ No form elements found in this form group
+                  </div>
+                ) : (
+                  <div className="max-h-60 overflow-y-auto border rounded-md p-2 space-y-1">
+                    {formGroupElements.map((element) => (
+                      <label
+                        key={element.id}
+                        className="flex items-center gap-2 p-2 hover:bg-muted rounded cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={(data.selectedElementIds || []).includes(
+                            element.id
+                          )}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            const currentIds = data.selectedElementIds || [];
+                            const newIds = checked
+                              ? [...currentIds, element.id]
+                              : currentIds.filter((id) => id !== element.id);
+                            setNodes((nodes) =>
+                              nodes.map((node) =>
+                                node.id === id
+                                  ? {
+                                      ...node,
+                                      data: {
+                                        ...node.data,
+                                        selectedElementIds: newIds,
+                                      },
+                                    }
+                                  : node
+                              )
+                            );
+                          }}
+                          className="rounded"
+                        />
+                        <span className="text-sm">
+                          {element.name || element.id} ({element.type})
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Optional: Show toast configuration */}
+            <div className="space-y-2 pt-2 border-t">
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={data.showToastOnFail || false}
+                  onChange={(e) => {
+                    setNodes((nodes) =>
+                      nodes.map((node) =>
+                        node.id === id
+                          ? {
+                              ...node,
+                              data: {
+                                ...node.data,
+                                showToastOnFail: e.target.checked,
+                              },
+                            }
+                          : node
+                      )
+                    );
+                  }}
+                  className="w-4 h-4"
+                />
+                Show toast notification on validation failure
+              </label>
+              {data.showToastOnFail && (
+                <div className="space-y-2 ml-6">
+                  <input
+                    type="text"
+                    placeholder="Failure message (optional)"
+                    value={data.failureMessage || ""}
+                    onChange={(e) => {
+                      setNodes((nodes) =>
+                        nodes.map((node) =>
+                          node.id === id
+                            ? {
+                                ...node,
+                                data: {
+                                  ...node.data,
+                                  failureMessage: e.target.value,
+                                },
+                              }
+                            : node
+                        )
+                      );
+                    }}
+                    className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              )}
             </div>
           </div>
         );
