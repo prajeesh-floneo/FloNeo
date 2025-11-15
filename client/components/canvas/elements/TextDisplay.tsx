@@ -227,16 +227,61 @@ export const TextDisplay: React.FC<TextDisplayProps> = ({
   const displayValue = getValue();
   const formattedValue = formatValue(displayValue);
 
+  // Helper function to build box shadow
+  const buildBoxShadow = (): string | undefined => {
+    const shadow = element.properties?.boxShadow;
+    if (!shadow || shadow === "none") return undefined;
+    return shadow;
+  };
+
+  // Helper function to build text shadow
+  const buildTextShadow = (): string | undefined => {
+    const shadow = element.properties?.textShadow;
+    if (!shadow || shadow === "none") return undefined;
+    return shadow;
+  };
+
   // Merge element styles with provided style
   const mergedStyle: React.CSSProperties = {
+    // Typography (existing + new)
     fontSize: `${element.properties?.fontSize || 14}px`,
     fontWeight: element.properties?.fontWeight || "normal",
+    fontFamily:
+      element.properties?.fontFamily || "Poppins, system-ui, sans-serif",
+    fontStyle: element.properties?.fontStyle || "normal",
+    textDecoration: element.properties?.textDecoration || "none",
+    textTransform: (element.properties?.textTransform || "none") as any,
     color: element.properties?.color || "#000000",
     textAlign: (element.properties?.textAlign || "left") as any,
+    lineHeight: element.properties?.lineHeight || 1.5,
+    letterSpacing: `${element.properties?.letterSpacing || 0}px`,
+    wordSpacing: `${element.properties?.wordSpacing || 0}px`,
+
+    // Background & Border (new)
+    backgroundColor: element.properties?.backgroundColor || "transparent",
+    borderWidth: `${element.properties?.borderWidth || 0}px`,
+    borderColor: element.properties?.borderColor || "#d1d5db",
+    borderStyle: (element.properties?.borderStyle || "solid") as any,
+    borderRadius: `${element.properties?.borderRadius || 0}px`,
+
+    // Spacing (new)
+    paddingTop: `${element.properties?.paddingTop || 0}px`,
+    paddingRight: `${element.properties?.paddingRight || 0}px`,
+    paddingBottom: `${element.properties?.paddingBottom || 0}px`,
+    paddingLeft: `${element.properties?.paddingLeft || 0}px`,
+    marginTop: `${element.properties?.marginTop || 0}px`,
+    marginRight: `${element.properties?.marginRight || 0}px`,
+    marginBottom: `${element.properties?.marginBottom || 0}px`,
+    marginLeft: `${element.properties?.marginLeft || 0}px`,
+
+    // Effects (new)
+    boxShadow: buildBoxShadow(),
+    textShadow: buildTextShadow(),
+
+    // Existing properties
     opacity: (element.opacity || 100) / 100,
     whiteSpace: "pre-wrap",
     wordBreak: "break-word",
-    ...style,
   };
 
   return <div style={mergedStyle}>{formattedValue}</div>;

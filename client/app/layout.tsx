@@ -1,16 +1,13 @@
 import type React from "react";
 import type { Metadata } from "next";
-import { Poppins } from "next/font/google";
+// Avoid fetching Google Fonts at build time inside Docker by not using next/font/google
 import { Suspense } from "react";
 import { CanvasWorkflowProvider } from "../lib/canvas-workflow-context";
 import "./globals.css";
 import "../styles/design-system.css";
 
-const poppins = Poppins({
-  subsets: ["latin"],
-  weight: ["300", "400", "500", "600", "700", "800"],
-  variable: "--font-poppins",
-});
+// Use a CSS variable fallback for the font to prevent remote fetch during build
+// The actual Poppins font can be provided via local assets or the hosting environment if desired.
 
 export const metadata: Metadata = {
   title: "Floneo - Low-Code No-Code Platform",
@@ -44,7 +41,14 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className={`font-sans ${poppins.variable}`}>
+      <body
+        className={`font-sans`}
+        style={{
+          // Provide a CSS variable fallback so build does not need to fetch Google Fonts
+          ["--font-poppins" as any]:
+            'Poppins, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+        }}
+      >
         <CanvasWorkflowProvider>
           <Suspense fallback={<div>Loading...</div>}>{children}</Suspense>
         </CanvasWorkflowProvider>

@@ -71,6 +71,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
+import RenameModal from "@/components/rename-modal";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -100,6 +101,10 @@ export default function Dashboard() {
     y: number;
     app: any;
   }>({ show: false, x: 0, y: 0, app: null });
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [pendingAppId, setPendingAppId] = useState<string | null>(null);
+  const [pendingAppName, setPendingAppName] = useState<string>("");
+  const [renameShouldNavigate, setRenameShouldNavigate] = useState(false);
 
   // Authentication check and user loading
   useEffect(() => {
@@ -274,8 +279,11 @@ export default function Dashboard() {
         // Refresh apps list to show the new app
         fetchApps();
 
-        // Navigate to canvas with app ID
-        router.push(`/canvas?appId=${data.data.app.id}`);
+        // Open rename modal so user can change the name before entering canvas
+        setPendingAppId(data.data.app.id);
+        setPendingAppName(data.data.app.name || "Untitled App");
+        setRenameShouldNavigate(true);
+        setRenameOpen(true);
       } else {
         console.error("❌ Failed to create app:", data.message);
         alert("Failed to create new app. Please try again.");
@@ -425,6 +433,12 @@ export default function Dashboard() {
       handleDeleteApp(contextMenu.app);
     } else if (action === "archive") {
       handleArchiveApp(contextMenu.app);
+    } else if (action === "rename") {
+      // Open rename modal for the context menu app (do not navigate)
+      setPendingAppId(contextMenu.app.id);
+      setPendingAppName(contextMenu.app.name || "");
+      setRenameShouldNavigate(false);
+      setRenameOpen(true);
     }
 
     handleCloseContextMenu();
@@ -1171,6 +1185,19 @@ export default function Dashboard() {
                           <DropdownMenuItem
                             onClick={(e) => {
                               e.stopPropagation();
+                              setPendingAppId(app.id);
+                              setPendingAppName(app.name || "");
+                              setRenameShouldNavigate(false);
+                              setRenameOpen(true);
+                            }}
+                          >
+                            <Edit className="w-4 h-4 mr-2" />
+                            Rename
+                          </DropdownMenuItem>
+                          <hr />
+                          <DropdownMenuItem
+                            onClick={(e) => {
+                              e.stopPropagation();
                               handleArchiveApp(app);
                             }}
                           >
@@ -1764,6 +1791,13 @@ export default function Dashboard() {
             Archive
           </button>
           <button
+            className="w-full px-3 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
+            onClick={() => handleContextMenuAction("rename")}
+          >
+            <Edit className="w-4 h-4" />
+            Rename
+          </button>
+          <button
             className="w-full px-3 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 text-red-600 dark:text-red-400"
             onClick={() => handleContextMenuAction("delete")}
           >
@@ -1798,6 +1832,42 @@ export default function Dashboard() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Rename modal shown after creating a new app so the user can immediately change name */}
+      <RenameModal
+        isOpen={renameOpen}
+        onClose={() => {
+          setRenameOpen(false);
+          if (pendingAppId) {
+            const id = pendingAppId;
+            setPendingAppId(null);
+            setPendingAppName("");
+            if (renameShouldNavigate) {
+              setRenameShouldNavigate(false);
+              router.push(`/canvas?appId=${id}`);
+            } else {
+              // just refresh apps list
+              fetchApps();
+            }
+          }
+        }}
+        appId={pendingAppId}
+        currentName={pendingAppName}
+        onSaved={(newName) => {
+          // After saving, close modal. Navigate only if this rename was for a newly created app.
+          const id = pendingAppId;
+          setRenameOpen(false);
+          setPendingAppId(null);
+          setPendingAppName("");
+          if (!id) return;
+          if (renameShouldNavigate) {
+            setRenameShouldNavigate(false);
+            router.push(`/canvas?appId=${id}`);
+          } else {
+            fetchApps();
+          }
+        }}
+      />
     </div>
   );
 }

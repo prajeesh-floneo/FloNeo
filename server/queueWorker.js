@@ -35,4 +35,3 @@ queue.on('error', (err) => {
   console.error('[QUEUE-WORKER] Queue error:', err && err.message ? err.message : err);
 });
 
-console.log('[QUEUE-WORKER] Worker is listening for jobs...');

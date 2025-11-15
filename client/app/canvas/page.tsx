@@ -206,6 +206,18 @@ function CanvasPageContent() {
   });
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
+  // Per-element show-password state for password fields in the canvas
+  const [showPasswordMap, setShowPasswordMap] = useState<Record<string, boolean>>({});
+
+  const toggleShowPassword = (id: string) => {
+    setShowPasswordMap((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+  // Single dismissible prompt for user-facing messages. Use showPrompt(message) to display.
+  const [inlinePrompt, setInlinePrompt] = useState<string | null>(null);
+  const showPrompt = useCallback((message: string) => {
+    // Replace any existing prompt with the new one (ensures only one is visible)
+    setInlinePrompt(message);
+  }, []);
   const [showCanvasProperties, setShowCanvasProperties] = useState(false);
   const [canvasMode, setCanvasMode] = useState<"select" | "pan" | "text">(
     "select"
@@ -1062,14 +1074,14 @@ function CanvasPageContent() {
           case "down":
             return { ...el, y: el.y + distance };
           case "left":
-            return { ...el, x: el.x - distance };
+                return { ...el, x: el.x - distance };
           case "right":
             return { ...el, x: el.x + distance };
           default:
             return el;
         }
       });
-
+      
       setSelectedElements(updatedElements);
       if (selectedElement) {
         const updatedSelected = updatedElements.find(
@@ -3588,7 +3600,7 @@ function CanvasPageContent() {
               className="px-3 py-2 w-full h-full"
               placeholder={element.properties.placeholder}
               value={element.properties.value}
-              readOnly
+                  readOnly={!isPreviewMode}
             />
           );
         case "text":
@@ -3726,7 +3738,7 @@ function CanvasPageContent() {
               placeholder={element.properties.placeholder}
               value={element.properties.value}
               rows={element.properties.rows}
-              readOnly
+              readOnly={!isPreviewMode}
             />
           );
         case "button":
@@ -3856,6 +3868,8 @@ function CanvasPageContent() {
           return (
             <input
               type="tel"
+              inputMode="numeric"
+              pattern="[0-9]*"
               style={{
                 ...style,
                 fontFamily:
@@ -3875,9 +3889,140 @@ function CanvasPageContent() {
               }}
               className="w-full h-full"
               placeholder={element.properties.placeholder || "Phone number"}
-              value={element.properties.value}
-              readOnly
+              defaultValue={element.properties.value}
+              // Allow editing in both preview and run mode so runtime matches preview validation
+              readOnly={false}
+              onChange={(e) => {
+                const raw = e.target.value || "";
+                // Strip any non-digit characters
+                const digits = raw.replace(/\D+/g, "");
+
+                if (raw !== digits) {
+                  // Notify user about invalid characters using the inline prompt
+                  try {
+                    showPrompt("Not a valid phone number. Please enter digits only.");
+                  } catch (err) {
+                    console.warn("Prompt failed:", err);
+                  }
+                }
+
+                // Enforce max length of 10
+                let normalized = digits;
+                if (normalized.length > 10) {
+                  normalized = normalized.slice(0, 10);
+                  try {
+                    showPrompt("Phone number must be 10 digits. Extra digits were removed.");
+                  } catch (err) {
+                    console.warn("Prompt failed:", err);
+                  }
+                }
+
+                const updatedElement = {
+                  ...element,
+                  properties: { ...element.properties, value: normalized },
+                };
+                updatePageElements(currentPageId, (prev) =>
+                  prev.map((el) => (el.id === element.id ? updatedElement : el))
+                );
+
+                // If the input is uncontrolled in the DOM, also set the displayed value
+                // (helps when defaultValue was used).
+                try {
+                  const input = e.target as HTMLInputElement;
+                  if (input && input.value !== normalized) input.value = normalized;
+                } catch (err) {
+                  /* ignore DOM write errors */
+                }
+              }}
+              onBlur={(e) => {
+                const value = (e.target as HTMLInputElement).value || "";
+                if (value.length !== 10) {
+                  try {
+                    showPrompt("Not a valid phone number. Phone number must be exactly 10 digits.");
+                  } catch (err) {
+                    console.warn("Prompt failed:", err);
+                  }
+                }
+              }}
             />
+          );
+        case "password":
+        case "PASSWORD_FIELD":
+          return (
+            <div
+              style={{
+                ...style,
+                position: "relative",
+                // ensure the input has room for the toggle
+                paddingRight: `${(element.properties.padding || 8) + 28}px`,
+              }}
+            >
+              <input
+                type={showPasswordMap[element.id] ? "text" : "password"}
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  fontFamily:
+                    element.properties.fontFamily ||
+                    "Poppins, system-ui, sans-serif",
+                  fontSize: `${element.properties.fontSize || 14}px`,
+                  fontWeight: element.properties.fontWeight || "normal",
+                  color: element.properties.color || "#000000",
+                  backgroundColor:
+                    element.properties.backgroundColor || "#ffffff",
+                  borderColor: element.properties.borderColor || "#d1d5db",
+                  borderWidth: `${element.properties.borderWidth || 1}px`,
+                  borderStyle: "solid",
+                  borderRadius: `${element.properties.borderRadius || 6}px`,
+                  padding: `${element.properties.padding || 8}px`,
+                  outline: "none",
+                  boxSizing: "border-box",
+                }}
+                className="w-full h-full"
+                placeholder={element.properties.placeholder || "Enter password"}
+                defaultValue={element.properties.value}
+                readOnly={!isPreviewMode}
+                onChange={(e) => {
+                  if (!isPreviewMode) return;
+                  const updatedElement = {
+                    ...element,
+                    properties: { ...element.properties, value: e.target.value },
+                  };
+                  updatePageElements(currentPageId, (prev) =>
+                    prev.map((el) => (el.id === element.id ? updatedElement : el))
+                  );
+                }}
+              />
+
+              <button
+                type="button"
+                onClick={() => toggleShowPassword(element.id)}
+                aria-label={showPasswordMap[element.id] ? "Hide password" : "Show password"}
+                style={{
+                  position: "absolute",
+                  top: "50%",
+                  right: 8,
+                  transform: "translateY(-50%)",
+                  background: "rgba(255,255,255,0.6)",
+                  border: "none",
+                  padding: 4,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  borderRadius: "50%",
+                  // place toggle above input which may have high zIndex
+                  zIndex: (element.zIndex ?? 1) + 1200,
+                  pointerEvents: "auto",
+                  cursor: "pointer",
+                }}
+              >
+                {showPasswordMap[element.id] ? (
+                  <EyeOff size={16} color={element.properties.iconColor || "#6b7280"} />
+                ) : (
+                  <Eye size={16} color={element.properties.iconColor || "#6b7280"} />
+                )}
+              </button>
+            </div>
           );
         case "calendar":
           return (
@@ -4528,6 +4673,24 @@ function CanvasPageContent() {
             </div>
           );
 
+        case "TEXT_DISPLAY":
+        case "text_display":
+          // Render TEXT_DISPLAY using the TextDisplay component
+          // Import at top: import { TextDisplay } from "@/components/canvas/elements/TextDisplay";
+          const TextDisplayComponent =
+            require("@/components/canvas/elements/TextDisplay").TextDisplay;
+          return (
+            <div
+              style={{ width: "100%", height: "100%", position: "relative" }}
+            >
+              <TextDisplayComponent
+                element={element}
+                context={{}}
+                isPreviewMode={false}
+              />
+            </div>
+          );
+
         default:
           return (
             <div
@@ -4973,14 +5136,100 @@ function CanvasPageContent() {
           return (
             <input
               type="tel"
+              inputMode="numeric"
+              pattern="[0-9]*"
               style={{ ...style, border: "1px solid #d1d5db", outline: "none" }}
               className="px-3 py-2 w-full h-full"
               placeholder={element.properties.placeholder || "Phone number"}
               defaultValue={element.properties.value}
               onChange={(e) => {
-                updatePreviewElementProperty("value", e.target.value);
+                // Only allow digits in preview mode input
+                const raw = (e.target as HTMLInputElement).value || "";
+                const digits = raw.replace(/\D+/g, "");
+
+                if (raw !== digits) {
+                  try {
+                    showPrompt("Not a valid phone number. Please enter digits only.");
+                  } catch (err) {
+                    console.warn("Prompt failed:", err);
+                  }
+                }
+
+                let normalized = digits;
+                if (normalized.length > 10) {
+                  normalized = normalized.slice(0, 10);
+                  try {
+                    showPrompt("Phone number must be 10 digits. Extra digits were removed.");
+                  } catch (err) {
+                    console.warn("Prompt failed:", err);
+                  }
+                }
+
+                updatePreviewElementProperty("value", normalized);
+
+                // reflect normalized value in the input if necessary
+                try {
+                  const input = e.target as HTMLInputElement;
+                  if (input && input.value !== normalized) input.value = normalized;
+                } catch (err) {
+                  /* ignore DOM write errors */
+                }
+              }}
+              onBlur={(e) => {
+                const value = (e.target as HTMLInputElement).value || "";
+                if (value.length !== 10) {
+                  try {
+                    showPrompt("Not a valid phone number. Phone number must be exactly 10 digits.");
+                  } catch (err) {
+                    console.warn("Prompt failed:", err);
+                  }
+                }
               }}
             />
+          );
+        case "password":
+        case "PASSWORD_FIELD":
+          return (
+            <div style={{ ...style, position: "relative", paddingRight: 36 }}>
+              <input
+                type={showPasswordMap[element.id] ? "text" : "password"}
+                style={{ ...{ border: "1px solid #d1d5db", outline: "none" }, boxSizing: "border-box", width: "100%", height: "100%" }}
+                className="px-3 py-2 w-full h-full"
+                placeholder={element.properties.placeholder || "Enter password"}
+                defaultValue={element.properties.value}
+                onChange={(e) => {
+                  updatePreviewElementProperty("value", e.target.value);
+                }}
+              />
+
+              <button
+                type="button"
+                onClick={() => toggleShowPassword(element.id)}
+                aria-label={showPasswordMap[element.id] ? "Hide password" : "Show password"}
+                style={{
+                  position: "absolute",
+                  top: "50%",
+                  right: 8,
+                  transform: "translateY(-50%)",
+                  background: "rgba(255,255,255,0.6)",
+                  border: "none",
+                  padding: 4,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  borderRadius: "50%",
+                  zIndex: 999,
+                  pointerEvents: "auto",
+                  cursor: "pointer",
+                }}
+              >
+                {showPasswordMap[element.id] ? (
+                  <EyeOff size={16} color={element.properties.iconColor || "#6b7280"} />
+                ) : (
+                  <Eye size={16} color={element.properties.iconColor || "#6b7280"} />
+                )}
+              </button>
+            </div>
           );
         case "calendar":
           return (
@@ -5367,6 +5616,23 @@ function CanvasPageContent() {
         case "icon-forward":
           return renderIconElementClean(element, ArrowRight, style);
 
+        case "TEXT_DISPLAY":
+        case "text_display":
+          // Render TEXT_DISPLAY using the TextDisplay component in preview mode
+          const TextDisplayComponentPreview =
+            require("@/components/canvas/elements/TextDisplay").TextDisplay;
+          return (
+            <div
+              style={{ width: "100%", height: "100%", position: "relative" }}
+            >
+              <TextDisplayComponentPreview
+                element={element}
+                context={{}}
+                isPreviewMode={true}
+              />
+            </div>
+          );
+
         default:
           return (
             <div
@@ -5433,7 +5699,11 @@ function CanvasPageContent() {
       }
     } catch (error) {
       console.error("Error saving app:", error);
-      alert("Error saving app. Please try again.");
+      try {
+        showPrompt("Error saving app. Please try again.");
+      } catch (err) {
+        console.warn("Prompt failed:", err);
+      }
     }
   };
 
@@ -5678,8 +5948,52 @@ function CanvasPageContent() {
                 type="text"
                 value={appName}
                 onChange={(e) => setAppName(e.target.value)}
-                onBlur={() => setIsEditingName(false)}
-                onKeyDown={(e) => e.key === "Enter" && setIsEditingName(false)}
+                onBlur={async () => {
+                  setIsEditingName(false);
+                  // persist name
+                  if (currentAppId) {
+                    try {
+                      const resp = await authenticatedFetch(`/api/apps/${currentAppId}`, {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ name: appName.trim() }),
+                      });
+                      const result = await resp.json();
+                      if (result.success) {
+                        toast({ title: "App name saved", description: `Saved as \"${appName}\"` });
+                      } else {
+                        throw new Error(result.message || "Failed to save name");
+                      }
+                    } catch (err: any) {
+                      console.error("Error saving app name:", err);
+                      toast({ title: "Save failed", description: err?.message || "Failed to save app name", variant: "destructive" });
+                    }
+                  }
+                }}
+                onKeyDown={async (e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    setIsEditingName(false);
+                    if (currentAppId) {
+                      try {
+                        const resp = await authenticatedFetch(`/api/apps/${currentAppId}`, {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ name: appName.trim() }),
+                        });
+                        const result = await resp.json();
+                        if (result.success) {
+                          toast({ title: "App name saved", description: `Saved as \"${appName}\"` });
+                        } else {
+                          throw new Error(result.message || "Failed to save name");
+                        }
+                      } catch (err: any) {
+                        console.error("Error saving app name:", err);
+                        toast({ title: "Save failed", description: err?.message || "Failed to save app name", variant: "destructive" });
+                      }
+                    }
+                  }
+                }}
                 className="text-lg font-semibold bg-transparent border-none outline-none dark:text-gray-100"
                 autoFocus
               />
@@ -6754,6 +7068,30 @@ function CanvasPageContent() {
       )}
 
       {/* Publish Modal */}
+      {/* Inline dismissible prompt (shows only one at a time). Click to dismiss. */}
+      {inlinePrompt && (
+        <div
+          onClick={() => setInlinePrompt(null)}
+          role="alert"
+          aria-live="assertive"
+          style={{
+            position: "fixed",
+            bottom: 20,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "rgba(0,0,0,0.85)",
+            color: "#fff",
+            padding: "10px 14px",
+            borderRadius: 8,
+            zIndex: 99999,
+            cursor: "pointer",
+            boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+          }}
+        >
+          {inlinePrompt}
+        </div>
+      )}
+
       <PublishModal
         isOpen={isPublishModalOpen}
         onClose={() => setIsPublishModalOpen(false)}

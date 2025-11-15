@@ -53,6 +53,30 @@ export function toRuntimeStyle(
     boxSizing: "border-box",
   };
 
+  // TEXT_DISPLAY elements handle their own styling internally
+  // Only apply positioning and editor-specific styles to the wrapper
+  if (el.type === "TEXT_DISPLAY" || el.type === "text_display") {
+    let finalStyle: React.CSSProperties = {
+      ...baseStyle,
+      // Minimal wrapper styles - let TextDisplay component handle everything else
+      overflow: "visible",
+      outline: "none",
+    };
+
+    // Add editor-specific styles if requested
+    if (includeEditorStyles) {
+      if (isSelected) {
+        finalStyle.outline = "3px solid #3b82f6";
+        finalStyle.outlineOffset = "-3px";
+        finalStyle.boxShadow = "0 0 0 1px rgba(59, 130, 246, 0.3)";
+      }
+      finalStyle.cursor = "move";
+    }
+
+    return finalStyle;
+  }
+
+  // For all other element types, apply full styling
   // Background and border styles
   const visualStyle: React.CSSProperties = {
     background:

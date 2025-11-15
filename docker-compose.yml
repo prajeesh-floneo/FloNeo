@@ -6,7 +6,7 @@ services:
     environment:
       POSTGRES_USER: floneo
       POSTGRES_PASSWORD: floneo123
-      POSTGRES_DB: floneo_db
+      POSTGRES_DB: floneo
     ports:
       - "5432:5432"
     volumes:
@@ -27,7 +27,7 @@ services:
       dockerfile: Dockerfile
     container_name: floneo-backend
     environment:
-      DATABASE_URL: postgresql://floneo:floneo123@postgres:5432/floneo_db?schema=public
+      DATABASE_URL: postgresql://floneo:floneo123@postgres:5432/floneo?schema=public
       JWT_SECRET: floneo-docker-jwt-secret-key
       JWT_REFRESH_SECRET: floneo-docker-refresh-secret-key
       NODE_ENV: production

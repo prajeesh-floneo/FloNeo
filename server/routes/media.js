@@ -158,9 +158,12 @@ router.post(
         }
       }
 
+      // NOTE: historically some clients expect `files` while newer responses use `data`.
+      // Return both keys for backward compatibility.
       res.json({
         success: true,
         data: uploadedFiles,
+        files: uploadedFiles,
         message: `${uploadedFiles.length} files uploaded successfully`,
       });
     } catch (error) {

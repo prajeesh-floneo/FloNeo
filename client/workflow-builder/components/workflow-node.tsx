@@ -78,6 +78,30 @@ interface DbFindSimpleState {
   latestLimit?: number;
 }
 
+// ========== DB.UPDATE SIMPLE MODE TYPES ==========
+
+// Simple mode UI state interface for db.update
+interface DbUpdateSimpleState {
+  mode: "simple" | "advanced";
+  tableName: string;
+
+  // Fields to update
+  updateFields: Array<{
+    id: string;
+    field: string;
+    value: string;
+  }>;
+
+  // Where conditions
+  whereConditions: Array<{
+    id: string;
+    field: string;
+    operator: string;
+    value: string;
+    logic: "AND" | "OR";
+  }>;
+}
+
 // Operator mapping: Plain language → SQL
 const OPERATOR_MAP: Record<string, string> = {
   equals: "=",
@@ -275,6 +299,108 @@ function convertBackendToSimpleMode(data: any): DbFindSimpleState {
     case "all":
       // No additional config needed
       break;
+  }
+
+  return simple;
+}
+
+// ========== DB.UPDATE CONVERSION FUNCTIONS ==========
+
+// Convert simple mode state to backend format for db.update
+function convertDbUpdateSimpleToBackend(simple: DbUpdateSimpleState): any {
+  // Convert updateFields array to updateData object
+  const updateData: Record<string, string> = {};
+  simple.updateFields.forEach((field) => {
+    if (field.field && field.value !== undefined) {
+      updateData[field.field] = field.value;
+    }
+  });
+
+  // Convert whereConditions array to backend format
+  const whereConditions = simple.whereConditions.map((condition) => ({
+    field: condition.field,
+    operator: OPERATOR_MAP[condition.operator] || condition.operator,
+    value: condition.value,
+    logic: condition.logic || "AND",
+  }));
+
+  return {
+    tableName: simple.tableName,
+    updateData,
+    whereConditions,
+  };
+}
+
+// Convert backend format to simple mode state for db.update
+function convertDbUpdateBackendToSimple(data: any): DbUpdateSimpleState {
+  const simple: DbUpdateSimpleState = {
+    mode: "simple",
+    tableName: data.tableName || "",
+    updateFields: [],
+    whereConditions: [],
+  };
+
+  // Convert updateData object to updateFields array
+  if (data.updateData) {
+    let updateDataObj = data.updateData;
+
+    // Parse if it's a string
+    if (typeof updateDataObj === "string") {
+      try {
+        updateDataObj = JSON.parse(updateDataObj);
+      } catch {
+        // If parsing fails, switch to advanced mode
+        simple.mode = "advanced";
+        return simple;
+      }
+    }
+
+    // Convert object to array of fields
+    if (typeof updateDataObj === "object" && updateDataObj !== null) {
+      simple.updateFields = Object.entries(updateDataObj).map(
+        ([field, value], index) => ({
+          id: `field-${index}-${Date.now()}`,
+          field,
+          value: String(value),
+        })
+      );
+    }
+  }
+
+  // Convert whereConditions to array format
+  if (data.whereConditions) {
+    let conditionsArray = data.whereConditions;
+
+    // Parse if it's a string
+    if (typeof conditionsArray === "string") {
+      try {
+        const parsed = JSON.parse(conditionsArray);
+        conditionsArray = Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        // If parsing fails, switch to advanced mode
+        simple.mode = "advanced";
+        return simple;
+      }
+    }
+
+    // Ensure it's an array
+    if (!Array.isArray(conditionsArray)) {
+      conditionsArray = [conditionsArray];
+    }
+
+    // Convert to simple format
+    simple.whereConditions = conditionsArray.map(
+      (condition: any, index: number) => ({
+        id: `condition-${index}-${Date.now()}`,
+        field: condition.field || "",
+        operator:
+          OPERATOR_REVERSE_MAP[condition.operator] ||
+          condition.operator ||
+          "equals",
+        value: String(condition.value || ""),
+        logic: condition.logic || "AND",
+      })
+    );
   }
 
   return simple;
@@ -703,6 +829,25 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
       };
     }
   );
+
+  // State for db.update simple mode
+  const [dbUpdateSimpleState, setDbUpdateSimpleState] =
+    useState<DbUpdateSimpleState>(() => {
+      // Initialize from existing data if available
+      if (
+        data.label === "db.update" &&
+        (data.updateData || data.whereConditions)
+      ) {
+        return convertDbUpdateBackendToSimple(data);
+      }
+      // Default state for new db.update blocks
+      return {
+        mode: "simple",
+        tableName: "",
+        updateFields: [],
+        whereConditions: [],
+      };
+    });
 
   // Helper function to update node data
   const updateNodeData = (key: string, value: any) => {
@@ -2559,111 +2704,537 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
         );
 
       case "db.update":
+        // Helper function to update simple state and sync to backend
+        const updateDbUpdateSimpleState = (
+          updates: Partial<DbUpdateSimpleState>
+        ) => {
+          const newState = { ...dbUpdateSimpleState, ...updates };
+          setDbUpdateSimpleState(newState);
+
+          // Convert to backend format and update node data
+          const backendConfig = convertDbUpdateSimpleToBackend(newState);
+          setNodes((nodes) =>
+            nodes.map((node) =>
+              node.id === id
+                ? {
+                    ...node,
+                    data: { ...node.data, ...backendConfig },
+                  }
+                : node
+            )
+          );
+        };
+
         return (
           <div className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Table Name:</label>
-              {tableSuggestions.length > 0 ? (
-                <select
-                  value={data.tableName || ""}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    setNodes((nodes) =>
-                      nodes.map((node) =>
-                        node.id === id
-                          ? {
-                              ...node,
-                              data: { ...node.data, tableName: value },
-                            }
-                          : node
-                      )
-                    );
-                  }}
-                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+            {/* Mode Toggle */}
+            <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+              <div className="text-sm font-medium">Configuration Mode:</div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => updateDbUpdateSimpleState({ mode: "simple" })}
+                  className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                    dbUpdateSimpleState.mode === "simple"
+                      ? "bg-blue-500 text-white"
+                      : "bg-background border hover:bg-muted"
+                  }`}
                 >
-                  <option value="">Select table...</option>
-                  {tableSuggestions.map((table) => (
-                    <option key={table.value} value={table.value}>
-                      {table.label}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  type="text"
-                  placeholder="Enter table name..."
-                  value={data.tableName || ""}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    setNodes((nodes) =>
-                      nodes.map((node) =>
-                        node.id === id
-                          ? {
-                              ...node,
-                              data: { ...node.data, tableName: value },
+                  Simple
+                </button>
+                <button
+                  onClick={() =>
+                    updateDbUpdateSimpleState({ mode: "advanced" })
+                  }
+                  className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                    dbUpdateSimpleState.mode === "advanced"
+                      ? "bg-blue-500 text-white"
+                      : "bg-background border hover:bg-muted"
+                  }`}
+                >
+                  Advanced
+                </button>
+              </div>
+            </div>
+
+            {/* Simple Mode UI */}
+            {dbUpdateSimpleState.mode === "simple" && (
+              <div className="space-y-4">
+                {/* Quick Start Hint */}
+                {dbUpdateSimpleState.updateFields.length === 0 &&
+                  dbUpdateSimpleState.whereConditions.length === 0 && (
+                    <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                      <div className="flex items-start gap-2">
+                        <span className="text-blue-600 dark:text-blue-400 text-lg">
+                          💡
+                        </span>
+                        <div className="flex-1 text-xs text-blue-800 dark:text-blue-200">
+                          <p className="font-medium mb-1">Quick Start:</p>
+                          <ol className="list-decimal list-inside space-y-0.5 ml-1">
+                            <li>Select the table you want to update</li>
+                            <li>
+                              Add fields you want to change (e.g., status, name)
+                            </li>
+                            <li>
+                              Add conditions to target specific records (e.g.,
+                              id = 123)
+                            </li>
+                          </ol>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                {/* Table Selection */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">
+                    📊 Update table:
+                  </label>
+                  {tableSuggestions.length > 0 ? (
+                    <select
+                      value={dbUpdateSimpleState.tableName || ""}
+                      onChange={(e) =>
+                        updateDbUpdateSimpleState({ tableName: e.target.value })
+                      }
+                      className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">Select table...</option>
+                      {tableSuggestions.map((table) => (
+                        <option key={table.value} value={table.value}>
+                          {table.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      placeholder="Enter table name..."
+                      value={dbUpdateSimpleState.tableName || ""}
+                      onChange={(e) =>
+                        updateDbUpdateSimpleState({ tableName: e.target.value })
+                      }
+                      className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  )}
+                </div>
+
+                {/* Update Fields Section */}
+                <div className="space-y-3">
+                  <label className="text-sm font-medium">
+                    ✏️ Fields to update:
+                  </label>
+
+                  {dbUpdateSimpleState.updateFields.length === 0 && (
+                    <div className="p-4 border-2 border-dashed rounded-lg text-center text-muted-foreground">
+                      <p className="text-sm">No fields added yet</p>
+                      <p className="text-xs mt-1">
+                        Click "+ Add Field" below to start
+                      </p>
+                    </div>
+                  )}
+
+                  {dbUpdateSimpleState.updateFields.map((field, index) => (
+                    <div
+                      key={field.id}
+                      className="p-3 border rounded-lg bg-blue-50 dark:bg-blue-900/20 space-y-2"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-blue-900 dark:text-blue-100">
+                          Field {index + 1}
+                        </span>
+                        <button
+                          onClick={() => {
+                            const newFields =
+                              dbUpdateSimpleState.updateFields.filter(
+                                (f) => f.id !== field.id
+                              );
+                            updateDbUpdateSimpleState({
+                              updateFields: newFields,
+                            });
+                          }}
+                          className="text-red-500 hover:text-red-700 text-sm"
+                        >
+                          ×
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <label className="text-xs">Field name:</label>
+                          <input
+                            type="text"
+                            placeholder={
+                              index === 0 ? "e.g., status" : "e.g., updated_at"
                             }
-                          : node
-                      )
-                    );
-                  }}
-                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              )}
-            </div>
+                            value={field.field}
+                            onChange={(e) => {
+                              const newFields =
+                                dbUpdateSimpleState.updateFields.map((f) =>
+                                  f.id === field.id
+                                    ? { ...f, field: e.target.value }
+                                    : f
+                                );
+                              updateDbUpdateSimpleState({
+                                updateFields: newFields,
+                              });
+                            }}
+                            className="w-full px-2 py-1 text-sm border rounded-md bg-background"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs">New value:</label>
+                          <input
+                            type="text"
+                            placeholder={
+                              index === 0
+                                ? "active or {{formData.status}}"
+                                : "{{now}} or 2024-01-01"
+                            }
+                            value={field.value}
+                            onChange={(e) => {
+                              const newFields =
+                                dbUpdateSimpleState.updateFields.map((f) =>
+                                  f.id === field.id
+                                    ? { ...f, value: e.target.value }
+                                    : f
+                                );
+                              updateDbUpdateSimpleState({
+                                updateFields: newFields,
+                              });
+                            }}
+                            className="w-full px-2 py-1 text-sm border rounded-md bg-background font-mono"
+                          />
+                        </div>
+                      </div>
+                      <div className="text-xs text-blue-700 dark:text-blue-300">
+                        💡 Use {`{{variableName}}`} for dynamic values (e.g.,{" "}
+                        {`{{formData.userName}}`}, {`{{dbFindResult[0].id}}`})
+                      </div>
+                    </div>
+                  ))}
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Update Data:</label>
-              <textarea
-                placeholder='{"status": "inactive", "updated_at": "{{now}}"}'
-                value={
-                  typeof data.updateData === "string"
-                    ? data.updateData
-                    : JSON.stringify(data.updateData || {}, null, 2)
-                }
-                onChange={(e) => {
-                  const value = e.target.value;
-                  setNodes((nodes) =>
-                    nodes.map((node) =>
-                      node.id === id
-                        ? {
-                            ...node,
-                            data: { ...node.data, updateData: value },
-                          }
-                        : node
-                    )
-                  );
-                }}
-                rows={3}
-                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
-              />
-            </div>
+                  <button
+                    onClick={() => {
+                      const newField = {
+                        id: `field-${Date.now()}`,
+                        field: "",
+                        value: "",
+                      };
+                      updateDbUpdateSimpleState({
+                        updateFields: [
+                          ...dbUpdateSimpleState.updateFields,
+                          newField,
+                        ],
+                      });
+                    }}
+                    className="w-full px-3 py-2 text-sm border-2 border-dashed rounded-md hover:bg-muted transition-colors"
+                  >
+                    + Add Field
+                  </button>
+                </div>
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Where Conditions:</label>
-              <textarea
-                placeholder='{"id": "{{context.userId}}"}'
-                value={
-                  typeof data.whereConditions === "string"
-                    ? data.whereConditions
-                    : JSON.stringify(data.whereConditions || {}, null, 2)
-                }
-                onChange={(e) => {
-                  const value = e.target.value;
-                  setNodes((nodes) =>
-                    nodes.map((node) =>
-                      node.id === id
-                        ? {
-                            ...node,
-                            data: { ...node.data, whereConditions: value },
-                          }
-                        : node
+                {/* Where Conditions Section */}
+                <div className="space-y-3">
+                  <label className="text-sm font-medium">
+                    🎯 Update records where:
+                  </label>
+
+                  {dbUpdateSimpleState.whereConditions.length === 0 && (
+                    <div className="p-4 border-2 border-yellow-300 dark:border-yellow-700 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg">
+                      <div className="flex items-start gap-2">
+                        <span className="text-yellow-600 dark:text-yellow-400 text-lg">
+                          ⚠️
+                        </span>
+                        <div className="flex-1">
+                          <p className="text-sm font-medium text-yellow-800 dark:text-yellow-200">
+                            No conditions added
+                          </p>
+                          <p className="text-xs text-yellow-700 dark:text-yellow-300 mt-1">
+                            Without conditions, ALL records in the table will be
+                            updated! Add at least one condition to target
+                            specific records.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {dbUpdateSimpleState.whereConditions.map(
+                    (condition, index) => (
+                      <div
+                        key={condition.id}
+                        className="p-3 border rounded-lg bg-green-50 dark:bg-green-900/20 space-y-2"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-medium text-green-900 dark:text-green-100">
+                            Condition {index + 1}
+                          </span>
+                          <button
+                            onClick={() => {
+                              const newConditions =
+                                dbUpdateSimpleState.whereConditions.filter(
+                                  (c) => c.id !== condition.id
+                                );
+                              updateDbUpdateSimpleState({
+                                whereConditions: newConditions,
+                              });
+                            }}
+                            className="text-red-500 hover:text-red-700 text-sm"
+                          >
+                            ×
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2">
+                          <div className="space-y-1">
+                            <label className="text-xs">Field:</label>
+                            <input
+                              type="text"
+                              placeholder={
+                                index === 0 ? "e.g., id" : "e.g., status"
+                              }
+                              value={condition.field}
+                              onChange={(e) => {
+                                const newConditions =
+                                  dbUpdateSimpleState.whereConditions.map((c) =>
+                                    c.id === condition.id
+                                      ? { ...c, field: e.target.value }
+                                      : c
+                                  );
+                                updateDbUpdateSimpleState({
+                                  whereConditions: newConditions,
+                                });
+                              }}
+                              className="w-full px-2 py-1 text-sm border rounded-md bg-background"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs">Condition:</label>
+                            <select
+                              value={condition.operator}
+                              onChange={(e) => {
+                                const newConditions =
+                                  dbUpdateSimpleState.whereConditions.map((c) =>
+                                    c.id === condition.id
+                                      ? { ...c, operator: e.target.value }
+                                      : c
+                                  );
+                                updateDbUpdateSimpleState({
+                                  whereConditions: newConditions,
+                                });
+                              }}
+                              className="w-full px-2 py-1 text-sm border rounded-md bg-background"
+                            >
+                              <option value="equals">equals</option>
+                              <option value="not equals">not equals</option>
+                              <option value="greater than">greater than</option>
+                              <option value="less than">less than</option>
+                              <option value="greater than or equal to">
+                                ≥
+                              </option>
+                              <option value="less than or equal to">≤</option>
+                              <option value="contains">contains</option>
+                              <option value="does not contain">
+                                not contains
+                              </option>
+                            </select>
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs">Value:</label>
+                            <input
+                              type="text"
+                              placeholder={
+                                index === 0
+                                  ? "123 or {{dbFindResult[0].id}}"
+                                  : "active or {{formData.status}}"
+                              }
+                              value={condition.value}
+                              onChange={(e) => {
+                                const newConditions =
+                                  dbUpdateSimpleState.whereConditions.map((c) =>
+                                    c.id === condition.id
+                                      ? { ...c, value: e.target.value }
+                                      : c
+                                  );
+                                updateDbUpdateSimpleState({
+                                  whereConditions: newConditions,
+                                });
+                              }}
+                              className="w-full px-2 py-1 text-sm border rounded-md bg-background font-mono"
+                            />
+                          </div>
+                        </div>
+                        {index <
+                          dbUpdateSimpleState.whereConditions.length - 1 && (
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-muted-foreground">
+                              Then:
+                            </span>
+                            <select
+                              value={condition.logic}
+                              onChange={(e) => {
+                                const newConditions =
+                                  dbUpdateSimpleState.whereConditions.map((c) =>
+                                    c.id === condition.id
+                                      ? {
+                                          ...c,
+                                          logic: e.target.value as "AND" | "OR",
+                                        }
+                                      : c
+                                  );
+                                updateDbUpdateSimpleState({
+                                  whereConditions: newConditions,
+                                });
+                              }}
+                              className="px-2 py-1 text-xs border rounded-md bg-background"
+                            >
+                              <option value="AND">AND (all must match)</option>
+                              <option value="OR">OR (any can match)</option>
+                            </select>
+                          </div>
+                        )}
+                        <div className="text-xs text-green-700 dark:text-green-300">
+                          💡 Tip: Use {`{{variableName}}`} for dynamic values
+                        </div>
+                      </div>
                     )
-                  );
-                }}
-                rows={2}
-                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
-              />
-            </div>
+                  )}
+
+                  <button
+                    onClick={() => {
+                      const newCondition = {
+                        id: `condition-${Date.now()}`,
+                        field: "",
+                        operator: "equals",
+                        value: "",
+                        logic: "AND" as "AND" | "OR",
+                      };
+                      updateDbUpdateSimpleState({
+                        whereConditions: [
+                          ...dbUpdateSimpleState.whereConditions,
+                          newCondition,
+                        ],
+                      });
+                    }}
+                    className="w-full px-3 py-2 text-sm border-2 border-dashed rounded-md hover:bg-muted transition-colors"
+                  >
+                    + Add Condition
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Advanced Mode UI - Original JSON editor */}
+            {dbUpdateSimpleState.mode === "advanced" && (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Table Name:</label>
+                  {tableSuggestions.length > 0 ? (
+                    <select
+                      value={data.tableName || ""}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setNodes((nodes) =>
+                          nodes.map((node) =>
+                            node.id === id
+                              ? {
+                                  ...node,
+                                  data: { ...node.data, tableName: value },
+                                }
+                              : node
+                          )
+                        );
+                      }}
+                      className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">Select table...</option>
+                      {tableSuggestions.map((table) => (
+                        <option key={table.value} value={table.value}>
+                          {table.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      placeholder="Enter table name..."
+                      value={data.tableName || ""}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setNodes((nodes) =>
+                          nodes.map((node) =>
+                            node.id === id
+                              ? {
+                                  ...node,
+                                  data: { ...node.data, tableName: value },
+                                }
+                              : node
+                          )
+                        );
+                      }}
+                      className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Update Data:</label>
+                  <textarea
+                    placeholder='{"status": "inactive", "updated_at": "{{now}}"}'
+                    value={
+                      typeof data.updateData === "string"
+                        ? data.updateData
+                        : JSON.stringify(data.updateData || {}, null, 2)
+                    }
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setNodes((nodes) =>
+                        nodes.map((node) =>
+                          node.id === id
+                            ? {
+                                ...node,
+                                data: { ...node.data, updateData: value },
+                              }
+                            : node
+                        )
+                      );
+                    }}
+                    rows={3}
+                    className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">
+                    Where Conditions:
+                  </label>
+                  <textarea
+                    placeholder='[{"field": "id", "operator": "=", "value": "{{context.userId}}"}]'
+                    value={
+                      typeof data.whereConditions === "string"
+                        ? data.whereConditions
+                        : JSON.stringify(data.whereConditions || [], null, 2)
+                    }
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setNodes((nodes) =>
+                        nodes.map((node) =>
+                          node.id === id
+                            ? {
+                                ...node,
+                                data: { ...node.data, whereConditions: value },
+                              }
+                            : node
+                        )
+                      );
+                    }}
+                    rows={3}
+                    className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                  />
+                  <div className="text-xs text-muted-foreground">
+                    Array of condition objects with field, operator, value,
+                    logic
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         );
 
