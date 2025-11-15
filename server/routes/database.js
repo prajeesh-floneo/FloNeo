@@ -76,15 +76,31 @@ router.get("/:appId/tables", authenticateToken, async (req, res) => {
     }
 
     // Helper function to safely parse JSON columns
+    // Columns are stored as JSON stringified array: [{name: "col1", type: "TEXT"}, ...]
     const parseColumns = (columns) => {
       if (typeof columns === "string") {
         try {
-          return JSON.parse(columns);
+          const parsed = JSON.parse(columns);
+          // Ensure it's always an array
+          return Array.isArray(parsed) ? parsed : [];
         } catch (e) {
-          return {};
+          console.warn("⚠️ [DATABASE] Failed to parse columns JSON:", e.message);
+          return [];
         }
       }
-      return columns; // Already an object
+      // If already parsed, ensure it's an array
+      if (Array.isArray(columns)) {
+        return columns;
+      }
+      // If it's an object, try to convert to array
+      if (typeof columns === "object" && columns !== null) {
+        return Object.entries(columns).map(([name, def]) => ({
+          name,
+          type: def?.type || def || "TEXT",
+          required: def?.required || false,
+        }));
+      }
+      return [];
     };
 
     // Helper function to check if table exists
@@ -153,15 +169,31 @@ router.get("/:appId/tables", authenticateToken, async (req, res) => {
           );
         }
 
-        let safeColumns = [];
-        try {
-          safeColumns =
-            typeof table.columns === "string"
-              ? JSON.parse(table.columns)
-              : table.columns;
-        } catch {
-          safeColumns = [];
-        }
+        // Parse columns using the same helper function
+        const parseColumns = (columns) => {
+          if (typeof columns === "string") {
+            try {
+              const parsed = JSON.parse(columns);
+              return Array.isArray(parsed) ? parsed : [];
+            } catch (e) {
+              console.warn("⚠️ [DATABASE] Failed to parse columns JSON:", e.message);
+              return [];
+            }
+          }
+          if (Array.isArray(columns)) {
+            return columns;
+          }
+          if (typeof columns === "object" && columns !== null) {
+            return Object.entries(columns).map(([name, def]) => ({
+              name,
+              type: def?.type || def || "TEXT",
+              required: def?.required || false,
+            }));
+          }
+          return [];
+        };
+        
+        const safeColumns = parseColumns(table.columns);
 
         return {
           id: table.id,
@@ -250,7 +282,33 @@ router.post("/:appId/tables/create", authenticateToken, async (req, res) => {
     }
 
     // Map column types from UI to PostgreSQL types
+    // Handles both UI types (Text, Number, Boolean) and SQL types (TEXT, INTEGER, BOOLEAN)
     const mapColumnTypeToSQL = (type) => {
+      if (!type) return "TEXT";
+      
+      const upperType = type.toUpperCase();
+      
+      // If already a SQL type, return as-is (but normalize common variations)
+      if (upperType === "TEXT" || upperType === "VARCHAR" || upperType.startsWith("VARCHAR")) {
+        return upperType.startsWith("VARCHAR") ? type : "TEXT";
+      }
+      if (upperType === "INTEGER" || upperType === "INT" || upperType === "SERIAL") {
+        return "INTEGER";
+      }
+      if (upperType === "BOOLEAN" || upperType === "BOOL") {
+        return "BOOLEAN";
+      }
+      if (upperType === "DECIMAL" || upperType.startsWith("DECIMAL")) {
+        return upperType.startsWith("DECIMAL") ? type : "DECIMAL(10,2)";
+      }
+      if (upperType === "DATE") {
+        return "DATE";
+      }
+      if (upperType === "TIMESTAMP" || upperType === "DATETIME") {
+        return "TIMESTAMP";
+      }
+      
+      // Map UI types to SQL types
       const typeMap = {
         Text: "TEXT",
         Number: "DECIMAL(10,2)",
@@ -262,8 +320,11 @@ router.post("/:appId/tables/create", authenticateToken, async (req, res) => {
         Phone: "VARCHAR(20)",
         URL: "TEXT",
       };
-      return typeMap[type] || "TEXT";
+      
+      return typeMap[type] || typeMap[type.charAt(0).toUpperCase() + type.slice(1)] || "TEXT";
     };
+    
+    console.log("🔨 [CREATE TABLE] Received columns:", JSON.stringify(columns, null, 2));
 
     // Build column definitions for CREATE TABLE
     const sqlColumns = ["id SERIAL PRIMARY KEY"];
@@ -292,12 +353,14 @@ router.post("/:appId/tables/create", authenticateToken, async (req, res) => {
 
       columnDefinitions.push({
         name: columnName,
-        type: sqlType,
+        type: sqlType, // Store SQL type (TEXT, INTEGER, BOOLEAN, etc.)
         required: col.required || false,
         elementId:
           col.elementId || columnName.toLowerCase().replace(/\s+/g, "_"),
         originalName: col.originalName || columnName,
       });
+      
+      console.log(`🔨 [CREATE TABLE] Column "${columnName}": UI type="${col.type}" -> SQL type="${sqlType}"`);
     });
 
     // Add metadata columns
@@ -449,18 +512,40 @@ router.get(
       console.log("✅ [DATABASE] Table data retrieved successfully");
 
       // Helper function to safely parse JSON columns
+      // Columns are stored as JSON stringified array: [{name: "col1", type: "TEXT"}, ...]
       const parseColumns = (columns) => {
         if (typeof columns === "string") {
           try {
-            return JSON.parse(columns);
+            const parsed = JSON.parse(columns);
+            // Ensure it's always an array
+            return Array.isArray(parsed) ? parsed : [];
           } catch (e) {
-            return {};
+            console.warn("⚠️ [DATABASE] Failed to parse columns JSON:", e.message);
+            return [];
           }
         }
-        return columns; // Already an object
+        // If already parsed, ensure it's an array
+        if (Array.isArray(columns)) {
+          return columns;
+        }
+        // If it's an object, try to convert to array
+        if (typeof columns === "object" && columns !== null) {
+          return Object.entries(columns).map(([name, def]) => ({
+            name,
+            type: def?.type || def || "TEXT",
+            required: def?.required || false,
+          }));
+        }
+        return [];
       };
 
       const safeColumns = parseColumns(userTable.columns);
+      
+      // Debug log to verify columns structure
+      console.log(`📊 [DATABASE] Raw userTable.columns (type: ${typeof userTable.columns}):`, 
+        typeof userTable.columns === 'string' ? userTable.columns : JSON.stringify(userTable.columns));
+      console.log(`📊 [DATABASE] Parsed columns for ${tableName}:`, JSON.stringify(safeColumns, null, 2));
+      console.log(`📊 [DATABASE] First column type:`, safeColumns[0]?.type, `(typeof: ${typeof safeColumns[0]?.type})`);
 
       // Set cache headers to prevent caching
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
@@ -567,6 +652,25 @@ router.post(
       const insertParams = [];
       let paramIndex = 1;
 
+      // First, ensure all required columns are present (especially booleans that might be false)
+      // For boolean columns that are NOT NULL, if they're missing from recordData, default to false
+      for (const columnDef of tableColumns) {
+        if (
+          columnDef.name === "id" ||
+          columnDef.name === "created_at" ||
+          columnDef.name === "updated_at" ||
+          columnDef.name === "app_id"
+        ) {
+          continue;
+        }
+        
+        const colType = (columnDef.type || "").toUpperCase();
+        // If it's a boolean column and not in recordData, add it as false
+        if ((colType.includes("BOOLEAN") || colType.includes("BOOL")) && !(columnDef.name in recordData)) {
+          recordData[columnDef.name] = false;
+        }
+      }
+
       // Process each field in recordData
       for (const [key, value] of Object.entries(recordData)) {
         // Skip id, created_at, updated_at, app_id as they are auto-generated
@@ -591,20 +695,34 @@ router.post(
         insertColumns.push(`"${key}"`);
         insertValues.push(`$${paramIndex}`);
 
-        // Convert value based on column type
+        // Convert value based on column type (handle both SQL types and UI types)
         let processedValue = value;
-        if (columnDef.type === "Number" || columnDef.type === "Integer") {
+        const colType = (columnDef.type || "").toUpperCase();
+        
+        if (colType.includes("INTEGER") || colType.includes("INT") || colType.includes("DECIMAL") || colType.includes("NUMERIC") || colType.includes("NUMBER")) {
+          // Number types
           processedValue =
-            value === "" || value === null ? null : Number(value);
-        } else if (columnDef.type === "Boolean") {
-          processedValue = Boolean(value);
-        } else if (columnDef.type === "Date" || columnDef.type === "DateTime") {
-          processedValue = value ? new Date(value) : null;
+            value === "" || value === null || value === undefined ? null : Number(value);
+        } else if (colType.includes("BOOLEAN") || colType.includes("BOOL")) {
+          // Boolean types - ensure we convert to actual boolean
+          // Handle both boolean and string representations from frontend
+          if (value === true || value === "true" || value === 1 || value === "1") {
+            processedValue = true;
+          } else if (value === false || value === "false" || value === 0 || value === "0" || value === "" || value === null) {
+            processedValue = false;
+          } else {
+            // Fallback: convert truthy/falsy values
+            processedValue = Boolean(value);
+          }
+        } else if (colType.includes("DATE") || colType.includes("TIMESTAMP") || colType.includes("DATETIME")) {
+          // Date/Time types
+          processedValue = value && value !== "" ? new Date(value) : null;
         } else {
-          // Text, String, etc.
-          processedValue = value === null ? null : String(value);
+          // Text, String, VARCHAR, etc.
+          processedValue = value === null || value === undefined ? null : String(value);
         }
 
+        console.log(`🔍 [DATABASE] Column: ${key}, Type: ${colType}, Raw value: ${value} (${typeof value}), Processed: ${processedValue} (${typeof processedValue})`);
         insertParams.push(processedValue);
         paramIndex++;
       }
@@ -622,17 +740,36 @@ router.post(
         });
       }
 
+      // Build SQL with properly escaped values
+      const escapedValues = insertParams.map((param) => {
+        const value = param;
+        if (value === null || value === undefined) {
+          return 'NULL';
+        }
+        if (typeof value === 'boolean') {
+          // PostgreSQL boolean literals (no quotes)
+          return value ? 'TRUE' : 'FALSE';
+        }
+        if (value instanceof Date) {
+          // PostgreSQL timestamp format
+          return `'${value.toISOString()}'::timestamp`;
+        }
+        if (typeof value === 'number') {
+          return String(value);
+        }
+        // Escape single quotes for strings (PostgreSQL style)
+        return `'${String(value).replace(/'/g, "''")}'`;
+      });
+
       const insertSQL = `INSERT INTO "${tableName}" (${insertColumns.join(
         ", "
-      )}) VALUES (${insertValues.join(", ")}) RETURNING *`;
+      )}) VALUES (${escapedValues.join(", ")}) RETURNING *`;
 
-      console.log("💾 [DATABASE] Insert SQL:", insertSQL);
-      console.log("💾 [DATABASE] Insert params:", insertParams);
-
-      const insertResult = await prisma.$queryRawUnsafe(
-        insertSQL,
-        ...insertParams
-      );
+      console.log("💾 [DATABASE] Final SQL:", insertSQL);
+      console.log("💾 [DATABASE] Escaped values:", escapedValues);
+      console.log("💾 [DATABASE] Insert params (raw):", insertParams);
+      
+      const insertResult = await prisma.$queryRawUnsafe(insertSQL);
       const insertedRecord = insertResult[0];
 
       console.log(
@@ -1111,3 +1248,4 @@ router.post(
   }
 );
 module.exports = router;
+

@@ -220,25 +220,39 @@ export const initializeSocket = (): Socket => {
     console.error("❌ Socket.io connection error:", error);
   });
 
-  // 🔥 Real-time database events
-  socket.on("db_record_created", (payload) => {
-    console.log("🟢 [SOCKET] Record Created:", payload);
+  // 🔥 Real-time database events - Match backend event names
+  socket.on("database:data-updated", (payload) => {
+    console.log("🟢 [SOCKET] Database Data Updated:", payload);
+    const { action, tableName } = payload;
+    
+    // Map backend action to frontend event names
+    if (action === "create" || action === "insert") {
+      window.dispatchEvent(
+        new CustomEvent("db_record_created", { detail: { ...payload, tableName, action: "created" } })
+      );
+    } else if (action === "update") {
+      window.dispatchEvent(
+        new CustomEvent("db_record_updated", { detail: { ...payload, tableName, action: "updated" } })
+      );
+    } else if (action === "delete") {
+      window.dispatchEvent(
+        new CustomEvent("db_record_deleted", { detail: { ...payload, tableName, action: "deleted" } })
+      );
+    }
+  });
+
+  socket.on("database:table-created", (payload) => {
+    console.log("🟢 [SOCKET] Table Created:", payload);
     window.dispatchEvent(
-      new CustomEvent("db_record_created", { detail: payload })
+      new CustomEvent("db_table_created", { detail: payload })
     );
   });
 
-  socket.on("db_record_updated", (payload) => {
-    console.log("🟢 [SOCKET] Record Updated:", payload);
+  // Also listen to global record:updated event (for backward compatibility)
+  socket.on("record:updated", (payload) => {
+    console.log("🟢 [SOCKET] Record Updated (global):", payload);
     window.dispatchEvent(
-      new CustomEvent("db_record_updated", { detail: payload })
-    );
-  });
-
-  socket.on("db_record_deleted", (payload) => {
-    console.log("🟢 [SOCKET] Record Deleted:", payload);
-    window.dispatchEvent(
-      new CustomEvent("db_record_deleted", { detail: payload })
+      new CustomEvent("db_record_updated", { detail: { ...payload, action: "updated" } })
     );
   });
 
@@ -251,6 +265,26 @@ export const disconnectSocket = (): void => {
   if (socket) {
     socket.disconnect();
     socket = null;
+  }
+};
+
+// Join database room for real-time updates
+export const joinDatabaseRoom = (appId: number | string): void => {
+  const socket = getSocket();
+  if (socket && socket.connected) {
+    socket.emit("database:join-app", appId);
+    console.log("🔄 Joined database room for app:", appId);
+  } else {
+    console.warn("⚠️ Socket not connected, cannot join database room");
+  }
+};
+
+// Leave database room
+export const leaveDatabaseRoom = (appId: number | string): void => {
+  const socket = getSocket();
+  if (socket && socket.connected) {
+    socket.emit("database:leave-app", appId);
+    console.log("🔄 Left database room for app:", appId);
   }
 };
 

@@ -96,15 +96,38 @@ export function DatabaseScreen() {
   const appName = searchParams.get("appName") || "Unknown App";
   const { toast } = useToast();
 
-  // ✅ Initialize socket connection once
+  // ✅ Initialize socket connection and join app room
   useEffect(() => {
+    if (!appId) return;
+
     try {
       const socket = initializeSocket();
       console.log("✅ Socket initialized for database screen:", socket.id);
+      
+      // Join the app room for real-time database updates
+      socket.on("connect", () => {
+        socket.emit("database:join-app", appId);
+        console.log("🔄 Joined database room for app:", appId);
+      });
+
+      // If already connected, join immediately
+      if (socket.connected) {
+        socket.emit("database:join-app", appId);
+        console.log("🔄 Joined database room for app (already connected):", appId);
+      }
     } catch (err) {
       console.warn("⚠️ Socket initialization failed:", err);
     }
-  }, []);
+
+    // Cleanup: leave room on unmount
+    return () => {
+      const socket = getSocket();
+      if (socket && socket.connected) {
+        socket.emit("database:leave-app", appId);
+        console.log("🔄 Left database room for app:", appId);
+      }
+    };
+  }, [appId]);
 
   // ✅ Load tables for the current app with auto-refresh
   useEffect(() => {
@@ -123,7 +146,7 @@ export function DatabaseScreen() {
     return () => clearInterval(interval);
   }, [appId]);
 
-  // ✅ Real-time database updates
+  // ✅ Real-time database updates (debounced to prevent duplicate calls)
   useEffect(() => {
     const socket = getSocket();
     if (!socket) {
@@ -131,20 +154,55 @@ export function DatabaseScreen() {
       return;
     }
 
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const DEBOUNCE_DELAY = 500; // 500ms debounce
+
     const handleDBEvent = (event: CustomEvent) => {
-      const { tableName, action } = event.detail;
+      const { tableName, action, appId: eventAppId } = event.detail;
+      
+      // Only process events for the current app
+      if (eventAppId && eventAppId.toString() !== appId) {
+        return;
+      }
+
       console.log(`📡 Real-time DB event [${action}] for table:`, tableName);
 
-      if (selectedTable && selectedTable.name === tableName) {
-        loadTableData(selectedTable, currentPage);
-        toast({
-          title: "Database Updated",
-          description: `Table "${tableName}" has been ${action}.`,
-        });
+      // Clear existing debounce timer
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
       }
+
+      // Debounce the reload to prevent multiple rapid calls
+      debounceTimer = setTimeout(() => {
+        // Reload tables list if table was created
+        if (action === "created" && event.type === "db_table_created") {
+          loadTables();
+          toast({
+            title: "Table Created",
+            description: `Table "${tableName}" has been created.`,
+          });
+          return;
+        }
+
+        // Get current selectedTable from state (use functional update to avoid stale closure)
+        const currentSelectedTable = selectedTable;
+        
+        // Reload table data if current table was updated
+        if (currentSelectedTable && currentSelectedTable.name === tableName) {
+          // Use a fresh table object to avoid triggering useEffect loops
+          loadTableData({ ...currentSelectedTable }, currentPage);
+          toast({
+            title: "Database Updated",
+            description: `Table "${tableName}" has been ${action}.`,
+          });
+        } else if (tableName) {
+          // Table was updated but not currently selected, just reload tables list
+          loadTables();
+        }
+      }, DEBOUNCE_DELAY);
     };
 
-    // Attach listeners
+    // Attach listeners for database events
     window.addEventListener(
       "db_record_updated",
       handleDBEvent as EventListener
@@ -157,10 +215,19 @@ export function DatabaseScreen() {
       "db_record_deleted",
       handleDBEvent as EventListener
     );
+    window.addEventListener(
+      "db_table_created",
+      handleDBEvent as EventListener
+    );
 
     console.log("🧩 Real-time DB event listeners registered");
 
     return () => {
+      // Clear debounce timer on cleanup
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+      }
+      
       window.removeEventListener(
         "db_record_updated",
         handleDBEvent as EventListener
@@ -173,9 +240,13 @@ export function DatabaseScreen() {
         "db_record_deleted",
         handleDBEvent as EventListener
       );
+      window.removeEventListener(
+        "db_table_created",
+        handleDBEvent as EventListener
+      );
       console.log("🧹 Real-time DB event listeners removed");
     };
-  }, [selectedTable, currentPage]);
+  }, [appId]); // Removed selectedTable and currentPage from dependencies to prevent loops
 
   const loadTables = async () => {
     try {
@@ -255,9 +326,47 @@ export function DatabaseScreen() {
       setTableData(data.data || []);
       setCurrentPage(data.pagination.page);
       setTotalPages(data.pagination.totalPages);
-      setSelectedTable(table);
+      
+      // Update selectedTable with columns from API response
+      // Backend should always return columns as an array: [{name: "col1", type: "TEXT"}, ...]
+      let normalizedColumns = [];
+      
+      if (data.columns) {
+        if (Array.isArray(data.columns)) {
+          // Columns are already in array format - use directly
+          normalizedColumns = data.columns;
+        } else if (typeof data.columns === 'object' && data.columns !== null) {
+          // Convert object to array format (fallback for old data)
+          normalizedColumns = Object.entries(data.columns).map(([name, def]: [string, any]) => ({
+            name,
+            type: (def && typeof def === 'object' && def.type) ? def.type : (def || "TEXT"),
+            required: (def && typeof def === 'object') ? (def.required || false) : false,
+          }));
+        }
+      } else if (table.columns && Array.isArray(table.columns)) {
+        // Fallback to table.columns if API doesn't return columns
+        normalizedColumns = table.columns;
+      } else if (table.columns && typeof table.columns === 'object') {
+        // Fallback: convert object to array
+        normalizedColumns = Object.entries(table.columns).map(([name, def]: [string, any]) => ({
+          name,
+          type: (def && typeof def === 'object' && def.type) ? def.type : (def || "TEXT"),
+          required: (def && typeof def === 'object') ? (def.required || false) : false,
+        }));
+      }
+      
+      // Ensure all columns have a type
+      normalizedColumns = normalizedColumns.map((col: any) => ({
+        ...col,
+        type: col.type || "TEXT",
+      }));
+      
+      setSelectedTable({
+        ...table,
+        columns: normalizedColumns,
+      });
 
-      console.log("✅ [LOAD TABLE DATA] State updated successfully");
+      // Columns loaded and normalized successfully
     } catch (err) {
       console.error("❌ [DATABASE] Error loading table data:", err);
       toast({
@@ -307,21 +416,17 @@ export function DatabaseScreen() {
         throw new Error("Authentication token not found");
       }
 
-      // Map column types to database types
-      const columnTypeMap: Record<string, string> = {
-        Text: "TEXT",
-        Number: "INTEGER",
-        Boolean: "BOOLEAN",
-        Date: "TIMESTAMP",
-      };
-
+      // Send UI types to backend - backend will map them to SQL types
+      // DO NOT convert to SQL types here - let backend handle it
       const columns = newTableColumns.map((col) => ({
         name: col.name.toLowerCase().replace(/\s+/g, "_"),
-        type: columnTypeMap[col.type] || "TEXT",
+        type: col.type, // Send UI type (Text, Number, Boolean, Date, etc.)
         required: col.required,
         elementId: col.name.toLowerCase().replace(/\s+/g, "_"),
         originalName: col.name,
       }));
+      
+      console.log("🔨 [CREATE TABLE] Sending columns to backend:", JSON.stringify(columns, null, 2));
 
       const response = await fetch(`/api/database/${appId}/tables/create`, {
         method: "POST",
@@ -379,10 +484,6 @@ export function DatabaseScreen() {
       return;
     }
 
-    console.log("🔵 [ADD RECORD] Starting record creation...");
-    console.log("🔵 [ADD RECORD] Selected table:", selectedTable);
-    console.log("🔵 [ADD RECORD] Record data:", newRecordData);
-
     setAddingRecord(true);
 
     try {
@@ -391,7 +492,36 @@ export function DatabaseScreen() {
         throw new Error("Authentication token not found");
       }
 
-      console.log("🔵 [ADD RECORD] Sending POST request...");
+      // Ensure all columns are included in the record data
+      // This is especially important for boolean columns that might be false
+      const completeRecordData: Record<string, any> = { ...newRecordData };
+      
+      if (selectedTable.columns) {
+        selectedTable.columns.forEach((column) => {
+          // Skip system columns
+          if (
+            column.name === "id" ||
+            column.name === "created_at" ||
+            column.name === "updated_at" ||
+            column.name === "app_id"
+          ) {
+            return;
+          }
+          
+          // If column is not in recordData, set default value based on type
+          if (!(column.name in completeRecordData)) {
+            const columnType = (column.type || "").toUpperCase();
+            if (columnType.includes("BOOLEAN") || columnType.includes("BOOL")) {
+              completeRecordData[column.name] = false;
+            } else if (columnType.includes("NUMBER") || columnType.includes("INTEGER")) {
+              completeRecordData[column.name] = null;
+            } else {
+              completeRecordData[column.name] = "";
+            }
+          }
+        });
+      }
+
       const response = await fetch(
         `/api/database/${appId}/tables/${selectedTable.name}/records`,
         {
@@ -400,18 +530,15 @@ export function DatabaseScreen() {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify(newRecordData),
+          body: JSON.stringify(completeRecordData),
         }
       );
 
       const data = await response.json();
-      console.log("🔵 [ADD RECORD] Response:", data);
 
       if (!response.ok) {
         throw new Error(data.message || "Failed to add record");
       }
-
-      console.log("✅ [ADD RECORD] Record created successfully:", data.record);
 
       toast({
         title: "Success",
@@ -422,21 +549,12 @@ export function DatabaseScreen() {
       setShowAddRecordModal(false);
       setNewRecordData({});
 
-      // Force reload table data with fresh fetch
-      console.log("🔵 [ADD RECORD] Reloading table data...");
-      console.log(
-        "🔵 [ADD RECORD] Current tableData length:",
-        tableData.length
-      );
-      
       // Force refresh by calling loadTableData with a fresh timestamp
       // Reset to page 1 to see the newly inserted record (newest first)
       await loadTableData(selectedTable, 1);
       
       // Also reload tables list to update row counts
       await loadTables();
-      
-      console.log("✅ [ADD RECORD] Table data and tables list reloaded");
     } catch (err) {
       console.error("❌ [DATABASE] Error adding record:", err);
       toast({
@@ -535,6 +653,28 @@ export function DatabaseScreen() {
     const updated = [...newTableColumns];
     updated[index] = { ...updated[index], [field]: value };
     setNewTableColumns(updated);
+  };
+
+  // Helper function to normalize SQL types to UI types for comparison
+  const normalizeColumnType = (type: string): string => {
+    if (!type) return "Text";
+    const upperType = type.toUpperCase();
+    
+    // Map SQL types to UI types
+    if (upperType.includes("BOOLEAN")) return "Boolean";
+    if (upperType.includes("INTEGER") || upperType.includes("INT") || upperType.includes("SERIAL")) return "Number";
+    if (upperType.includes("DECIMAL") || upperType.includes("NUMERIC") || upperType.includes("FLOAT") || upperType.includes("DOUBLE") || upperType.includes("REAL")) return "Number";
+    if (upperType.includes("DATE") && !upperType.includes("TIME")) return "Date";
+    if (upperType.includes("TIMESTAMP") || upperType.includes("DATETIME")) return "DateTime";
+    if (upperType.includes("TEXT") || upperType.includes("VARCHAR") || upperType.includes("CHAR")) return "Text";
+    
+    // If it's already in UI format, return as is
+    if (type === "Boolean" || type === "Number" || type === "Text" || type === "Date" || type === "DateTime") {
+      return type;
+    }
+    
+    // Default to Text
+    return "Text";
   };
 
   // Helper function to format cell values based on type
@@ -1579,78 +1719,95 @@ export function DatabaseScreen() {
 
           <div className="space-y-4 py-4">
             {selectedTable?.columns
-              .filter(
+              ?.filter(
                 (col) =>
                   col.name !== "id" &&
                   col.name !== "created_at" &&
                   col.name !== "updated_at" &&
                   col.name !== "app_id"
               )
-              .map((column) => (
-                <div key={column.name} className="space-y-2">
-                  <Label htmlFor={column.name}>
-                    {column.name}
-                    <span className="text-xs text-muted-foreground ml-2">
-                      ({column.type})
-                    </span>
-                  </Label>
-                  {column.type === "Boolean" ? (
-                    <div className="flex items-center gap-2">
-                      <Checkbox
-                        id={column.name}
-                        checked={newRecordData[column.name] || false}
-                        onCheckedChange={(checked) =>
-                          setNewRecordData({
-                            ...newRecordData,
-                            [column.name]: checked,
-                          })
-                        }
-                      />
-                      <Label htmlFor={column.name} className="text-sm">
-                        {newRecordData[column.name] ? "True" : "False"}
-                      </Label>
-                    </div>
-                  ) : column.type === "Date" || column.type === "DateTime" ? (
-                    <Input
-                      id={column.name}
-                      type="datetime-local"
-                      value={newRecordData[column.name] || ""}
-                      onChange={(e) =>
-                        setNewRecordData({
-                          ...newRecordData,
-                          [column.name]: e.target.value,
-                        })
+              .map((column) => {
+                // Normalize the column type to handle both SQL types and UI types
+                const columnType = column.type || "TEXT";
+                const normalizedType = normalizeColumnType(columnType);
+                
+                return (
+                  <div key={column.name} className="space-y-2">
+                    <Label htmlFor={column.name}>
+                      {column.name}
+                      <span className="text-xs text-muted-foreground ml-2">
+                        ({column.type || "TEXT"})
+                      </span>
+                    </Label>
+                    {(() => {
+                      if (normalizedType === "Boolean") {
+                        return (
+                          <div className="flex items-center gap-2">
+                            <Checkbox
+                              id={column.name}
+                              checked={newRecordData[column.name] || false}
+                              onCheckedChange={(checked) =>
+                                setNewRecordData({
+                                  ...newRecordData,
+                                  [column.name]: checked,
+                                })
+                              }
+                            />
+                            <Label htmlFor={column.name} className="text-sm">
+                              {newRecordData[column.name] ? "True" : "False"}
+                            </Label>
+                          </div>
+                        );
+                      } else if (normalizedType === "Date" || normalizedType === "DateTime") {
+                        return (
+                          <Input
+                            id={column.name}
+                            type="datetime-local"
+                            value={newRecordData[column.name] || ""}
+                            onChange={(e) =>
+                              setNewRecordData({
+                                ...newRecordData,
+                                [column.name]: e.target.value,
+                              })
+                            }
+                          />
+                        );
+                      } else if (normalizedType === "Number") {
+                        return (
+                          <Input
+                            id={column.name}
+                            type="number"
+                            placeholder={`Enter ${column.name}`}
+                            value={newRecordData[column.name] || ""}
+                            onChange={(e) =>
+                              setNewRecordData({
+                                ...newRecordData,
+                                [column.name]: e.target.value,
+                              })
+                            }
+                          />
+                        );
+                      } else {
+                        // Default to text input
+                        return (
+                          <Input
+                            id={column.name}
+                            type="text"
+                            placeholder={`Enter ${column.name}`}
+                            value={newRecordData[column.name] || ""}
+                            onChange={(e) =>
+                              setNewRecordData({
+                                ...newRecordData,
+                                [column.name]: e.target.value,
+                              })
+                            }
+                          />
+                        );
                       }
-                    />
-                  ) : column.type === "Number" || column.type === "Integer" ? (
-                    <Input
-                      id={column.name}
-                      type="number"
-                      placeholder={`Enter ${column.name}`}
-                      value={newRecordData[column.name] || ""}
-                      onChange={(e) =>
-                        setNewRecordData({
-                          ...newRecordData,
-                          [column.name]: e.target.value,
-                        })
-                      }
-                    />
-                  ) : (
-                    <Input
-                      id={column.name}
-                      type="text"
-                      placeholder={`Enter ${column.name}`}
-                      value={newRecordData[column.name] || ""}
-                      onChange={(e) =>
-                        setNewRecordData({
-                          ...newRecordData,
-                          [column.name]: e.target.value,
-                        })
-                      }
-                    />
-                  )}
-                </div>
-              ))}
+                    })()}
+                  </div>
+                );
+              })}
           </div>
 
           <DialogFooter>
