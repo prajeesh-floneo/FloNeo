@@ -3789,50 +3789,215 @@ const verifyHmacSignature = (payload, providedSignature, secret) => {
   }
 };
 
-// Role checking block handler
-const executeRoleIs = async (node, context, appId, userId) => {
+// // Role checking block handler
+// const executeRoleIs = async (node, context, appId, userId) => {
+//   try {
+//     console.log("👤 [ROLE-IS] Processing role check for app:", appId);
+
+//     // Validate app access
+//     const hasAccess = await securityValidator.validateAppAccess(
+//       appId,
+//       userId,
+//       prisma
+//     );
+//     if (!hasAccess) {
+//       throw new Error("Access denied to this app");
+//     }
+
+//     // Extract configuration
+//     const { requiredRole, checkMultiple = false, roles = [] } = node.data || {};
+
+//     // Get user from context or database
+//     let userRole = null;
+//     let userRoles = [];
+
+//     // First, check if user role is in context (from onLogin or auth.verify)
+//     if (context.user?.role) {
+//       userRole = context.user.role;
+//       console.log(`👤 [ROLE-IS] User role from context: ${userRole}`);
+//     }
+
+//     if (Array.isArray(context.user?.roles) && context.user.roles.length > 0) {
+//       userRoles = context.user.roles;
+//       if (!userRole) {
+//         userRole = context.user.roles[0];
+//       }
+//       console.log(`👤 [ROLE-IS] User roles from context: ${userRoles.join(", ")}`);
+//     }
+
+//     if (!userRole && Array.isArray(context.session?.roles)) {
+//       userRoles = context.session.roles;
+//       userRole = context.session.roles[0];
+//       console.log(`👤 [ROLE-IS] User roles from session: ${userRoles.join(", ")}`);
+//     }
+
+//     if (!userRole && userId) {
+//       // Fetch user from database
+//       const user = await prisma.user.findUnique({
+//         where: { id: userId },
+//         select: { role: true },
+//       });
+
+//       if (user) {
+//         userRole = user.role;
+//         userRoles = [user.role];
+//         console.log(`👤 [ROLE-IS] User role from database: ${userRole}`);
+//       }
+//     }
+
+//     if (!userRole) {
+//       console.log("👤 [ROLE-IS] No user role found");
+//       return {
+//         success: true,
+//         isValid: false,
+//         message: "User role not found",
+//         context: context,
+//       };
+//     }
+
+//     const effectiveUserRoles = userRoles.length > 0 ? userRoles : [userRole];
+
+//     // Check role based on configuration
+//     let isValid = false;
+
+//     if (checkMultiple && roles && roles.length > 0) {
+//       // Check if user has any of the specified roles
+//       isValid = roles.some((role) => effectiveUserRoles.includes(role));
+//       console.log(
+//         `👤 [ROLE-IS] Checking if user role "${userRole}" is in [${roles.join(
+//           ", "
+//         )}]: ${isValid}`
+//       );
+//     } else if (requiredRole) {
+//       // Check if user has the required role
+//       isValid = effectiveUserRoles.includes(requiredRole);
+//       console.log(
+//         `👤 [ROLE-IS] Checking if user role "${userRole}" equals "${requiredRole}": ${isValid}`
+//       );
+//     } else {
+//       throw new Error("No role configuration provided");
+//     }
+
+//     return {
+//       success: true,
+//       isValid: isValid,
+//       message: isValid
+//         ? `User has required role: ${userRole}`
+//         : `User role "${userRole}" does not match required role(s)`,
+//       userRole: userRole,
+//       context: {
+//         ...context,
+//         roleCheckResult: {
+//           userRole: userRole,
+//           userRoles: effectiveUserRoles,
+//           isValid: isValid,
+//           requiredRole: requiredRole,
+//           roles: roles,
+//         },
+//       },
+//     };
+//   } catch (error) {
+//     console.error("❌ [ROLE-IS] Error:", error.message);
+//     return {
+//       success: false,
+//       isValid: false,
+//       error: error.message,
+//       context: context,
+//     };
+//   }
+// };
+
+// =====================================================
+// 🔐 FINAL — RoleIs Condition (Correct + Fully Working)
+// =====================================================
+// async function executeRoleIs(node, context, appId, userId) {
+//   try {
+//     console.log("🔐 [ROLE-IS] Checking role...");
+
+//     const { requiredRole, roles = [], checkMultiple = false } = node.data;
+
+//     if (!requiredRole && roles.length === 0)
+//       throw new Error("Role configuration missing");
+
+//     // 1️⃣ Determine user role
+//     let userRole = context?.user?.role;
+//     let userRoles = context?.user?.roles || [];
+
+//     if (!userRole && context?.session?.roles) {
+//       userRoles = context.session.roles;
+//       userRole = userRoles[0];
+//     }
+
+//     if (!userRole) {
+//       const user = await prisma.user.findUnique({
+//         where: { id: userId },
+//         select: { role: true },
+//       });
+
+//       if (user) {
+//         userRole = user.role;
+//         userRoles = [user.role];
+//       }
+//     }
+
+//     if (!userRole) {
+//       console.log("⚠ No user role found");
+//       return {
+//         success: true,
+//         isValid: false,
+//         message: "User role missing",
+//         context,
+//       };
+//     }
+
+//     console.log("👤 User role:", userRole);
+
+//     // 2️⃣ Apply logic
+//     let isValid = false;
+
+//     if (checkMultiple && roles.length > 0) {
+//       isValid = roles.includes(userRole);
+//       console.log("🧪 Multi-role check:", roles, ":", isValid);
+//     } else {
+//       isValid = userRole === requiredRole;
+//       console.log("🧪 Single-role check:", requiredRole, ":", isValid);
+//     }
+
+//     // 3️⃣ Pass result forward
+//     return {
+//       success: true,
+//       isValid,
+//       userRole,
+//       context: {
+//         ...context,
+//         roleCheck: {
+//           isValid,
+//           userRole,
+//           requiredRole,
+//           roles,
+//         },
+//       },
+//     };
+//   } catch (error) {
+//     console.error("❌ ROLE-IS Error:", error.message);
+//     return { success: false, isValid: false, error: error.message, context };
+//   }
+// }
+
+// =====================================================
+// 🔐 FINAL — RoleIs Condition (Correct for FloNeo Engine)
+// =====================================================
+async function executeRoleIs(node, context, appId, userId) {
   try {
-    console.log("👤 [ROLE-IS] Processing role check for app:", appId);
+    console.log("🔐 [ROLE-IS] Checking role...");
 
-    // Validate app access
-    const hasAccess = await securityValidator.validateAppAccess(
-      appId,
-      userId,
-      prisma
-    );
-    if (!hasAccess) {
-      throw new Error("Access denied to this app");
-    }
+    const { requiredRole, roles = [], requiredPages = [], checkMultiple = false } = node.data;
 
-    // Extract configuration
-    const { requiredRole, checkMultiple = false, roles = [] } = node.data || {};
+    // ============ 1️⃣ Load user from context or DB =============
+    let userRole = context?.user?.role || null;
+    let userRoles = context?.user?.roles || [];
 
-    // Get user from context or database
-    let userRole = null;
-    let userRoles = [];
-
-    // First, check if user role is in context (from onLogin or auth.verify)
-    if (context.user?.role) {
-      userRole = context.user.role;
-      console.log(`👤 [ROLE-IS] User role from context: ${userRole}`);
-    }
-
-    if (Array.isArray(context.user?.roles) && context.user.roles.length > 0) {
-      userRoles = context.user.roles;
-      if (!userRole) {
-        userRole = context.user.roles[0];
-      }
-      console.log(`👤 [ROLE-IS] User roles from context: ${userRoles.join(", ")}`);
-    }
-
-    if (!userRole && Array.isArray(context.session?.roles)) {
-      userRoles = context.session.roles;
-      userRole = context.session.roles[0];
-      console.log(`👤 [ROLE-IS] User roles from session: ${userRoles.join(", ")}`);
-    }
-
-    if (!userRole && userId) {
-      // Fetch user from database
+    if (!userRole) {
       const user = await prisma.user.findUnique({
         where: { id: userId },
         select: { role: true },
@@ -3841,71 +4006,77 @@ const executeRoleIs = async (node, context, appId, userId) => {
       if (user) {
         userRole = user.role;
         userRoles = [user.role];
-        console.log(`👤 [ROLE-IS] User role from database: ${userRole}`);
       }
     }
 
     if (!userRole) {
-      console.log("👤 [ROLE-IS] No user role found");
+      console.log("⚠ No user role found. Marking invalid.");
       return {
         success: true,
-        isValid: false,
-        message: "User role not found",
-        context: context,
+        isFilled: false,   // IMPORTANT for connector routing
+        context,
+        message: "User role missing",
       };
     }
 
-    const effectiveUserRoles = userRoles.length > 0 ? userRoles : [userRole];
+    console.log("👤 User roles:", userRoles);
 
-    // Check role based on configuration
-    let isValid = false;
+    // ============ 2️⃣ ROLE CHECK =============
+    let roleValid = false;
 
-    if (checkMultiple && roles && roles.length > 0) {
-      // Check if user has any of the specified roles
-      isValid = roles.some((role) => effectiveUserRoles.includes(role));
-      console.log(
-        `👤 [ROLE-IS] Checking if user role "${userRole}" is in [${roles.join(
-          ", "
-        )}]: ${isValid}`
-      );
+    if (checkMultiple && roles.length > 0) {
+      roleValid = roles.includes(userRole);
     } else if (requiredRole) {
-      // Check if user has the required role
-      isValid = effectiveUserRoles.includes(requiredRole);
-      console.log(
-        `👤 [ROLE-IS] Checking if user role "${userRole}" equals "${requiredRole}": ${isValid}`
-      );
+      roleValid = userRole === requiredRole;
     } else {
-      throw new Error("No role configuration provided");
+      roleValid = true; // if no role required → allowed
     }
+
+    // ============ 3️⃣ PAGE ACCESS CHECK =============
+    let pageValid = true;
+
+    if (requiredPages && requiredPages.length > 0) {
+      const userPageAccess = await prisma.pageAccess.findMany({
+        where: { userId },
+        select: { pageSlug: true },
+      });
+
+      const userPages = userPageAccess.map((p) => p.pageSlug);
+
+      pageValid = requiredPages.every((p) => userPages.includes(p));
+      console.log("📄 Page Check:", { requiredPages, userPages, pageValid });
+    }
+
+    // final result
+    const isValid = roleValid && pageValid;
 
     return {
       success: true,
-      isValid: isValid,
-      message: isValid
-        ? `User has required role: ${userRole}`
-        : `User role "${userRole}" does not match required role(s)`,
-      userRole: userRole,
+      isFilled: isValid, // IMPORTANT: workflow engine uses isFilled!
       context: {
         ...context,
-        roleCheckResult: {
-          userRole: userRole,
-          userRoles: effectiveUserRoles,
-          isValid: isValid,
-          requiredRole: requiredRole,
-          roles: roles,
+        roleCheck: {
+          roleValid,
+          pageValid,
+          isValid,
+          userRoles,
+          requiredRole,
+          requiredPages,
         },
       },
     };
-  } catch (error) {
-    console.error("❌ [ROLE-IS] Error:", error.message);
+  } catch (err) {
+    console.error("❌ ROLE-IS ERROR:", err);
     return {
       success: false,
-      isValid: false,
-      error: error.message,
-      context: context,
+      isFilled: false,
+      context,
+      message: err.message,
     };
   }
-};
+}
+
+
 
 // Date utility functions
 const parseDate = (dateValue, format) => {

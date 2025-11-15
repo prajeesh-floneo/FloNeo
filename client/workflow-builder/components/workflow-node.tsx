@@ -1456,9 +1456,10 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
       case "onWebhook":
         // Get appId from component state (set from URL params)
         const webhookAppId = appId || "1";
-        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://backend:5000";
+        const backendUrl =
+          process.env.NEXT_PUBLIC_BACKEND_URL || "http://backend:5000";
         const webhookUrl = `${backendUrl}/api/workflow/webhook/${webhookAppId}`;
-        
+
         return (
           <div className="space-y-4">
             <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
@@ -1486,12 +1487,17 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
                     </button>
                   </div>
                 </div>
-                
+
                 <div className="text-xs text-blue-600 dark:text-blue-400 space-y-1">
                   <p className="font-medium">How to use:</p>
                   <ul className="list-disc list-inside space-y-1 ml-2">
                     <li>Send a POST request to this URL</li>
-                    <li>Include header: <code className="bg-blue-100 dark:bg-blue-900 px-1 rounded">x-algo-secret: YOUR_SECRET</code></li>
+                    <li>
+                      Include header:{" "}
+                      <code className="bg-blue-100 dark:bg-blue-900 px-1 rounded">
+                        x-algo-secret: YOUR_SECRET
+                      </code>
+                    </li>
                     <li>Send JSON payload in request body</li>
                     <li>Payload will be available in workflow context</li>
                   </ul>
@@ -1499,7 +1505,14 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
 
                 <div className="p-2 bg-yellow-50 dark:bg-yellow-900/20 rounded text-xs text-yellow-700 dark:text-yellow-300 border border-yellow-200 dark:border-yellow-800">
                   <p className="font-medium mb-1">⚠️ Security Note:</p>
-                  <p>Set <code className="bg-yellow-100 dark:bg-yellow-900 px-1 rounded">ALGORITHM_WEBHOOK_SECRET</code> in your backend environment variables to enable secret validation.</p>
+                  <p>
+                    Set{" "}
+                    <code className="bg-yellow-100 dark:bg-yellow-900 px-1 rounded">
+                      ALGORITHM_WEBHOOK_SECRET
+                    </code>{" "}
+                    in your backend environment variables to enable secret
+                    validation.
+                  </p>
                 </div>
               </div>
             </div>
@@ -3252,7 +3265,8 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
             <div className="space-y-2">
               <label className="text-sm font-medium">Unique Fields:</label>
               <div className="text-xs text-muted-foreground mb-2">
-                Comma-separated list of fields to use for matching records (e.g., "email,username")
+                Comma-separated list of fields to use for matching records
+                (e.g., "email,username")
               </div>
               <input
                 type="text"
@@ -3285,7 +3299,7 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
                   if (!value) {
                     return;
                   }
-                  
+
                   let parsedValue;
                   try {
                     // Try to parse as JSON array
@@ -3300,7 +3314,7 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
                       .map((f) => f.trim())
                       .filter((f) => f.length > 0);
                   }
-                  
+
                   // Update with parsed value
                   setNodes((nodes) =>
                     nodes.map((node) =>
@@ -3353,7 +3367,8 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
             <div className="space-y-2">
               <label className="text-sm font-medium">Update Data:</label>
               <div className="text-xs text-muted-foreground mb-2">
-                Data to update when record exists (optional - will use insertData if not provided)
+                Data to update when record exists (optional - will use
+                insertData if not provided)
               </div>
               <textarea
                 placeholder='{"status": "active", "updated_at": "{{now}}"}'
@@ -3489,30 +3504,105 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
       case "roleIs":
         return (
           <div className="space-y-4">
+            {/* ---- Enter Role Name Manually ---- */}
             <div className="space-y-2">
               <label className="text-sm font-medium">Required Role:</label>
               <input
                 type="text"
-                placeholder="admin"
+                placeholder="admin / manager / custom-role"
                 value={data.requiredRole || ""}
                 onChange={(e) => {
-                  const value = e.target.value;
+                  const value = e.target.value.trim().toLowerCase();
+
                   setNodes((nodes) =>
                     nodes.map((node) =>
                       node.id === id
                         ? {
                             ...node,
-                            data: { ...node.data, requiredRole: value },
+                            data: {
+                              ...node.data,
+                              requiredRole: value || "user", // default
+                            },
                           }
                         : node
                     )
                   );
                 }}
-                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background"
               />
-              <div className="text-xs text-muted-foreground">
-                User must have this role to proceed
+
+              <p className="text-xs text-muted-foreground">
+                If empty → default role = user. Admin role is predefined.
+              </p>
+            </div>
+
+            {/* ---- Page Access Checkboxes ---- */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Allowed Pages:</label>
+
+              <div className="border rounded-md px-3 py-2 space-y-1 max-h-48 overflow-y-auto">
+                {appPages?.map((page) => (
+                  <div key={page.id} className="flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      checked={data.requiredPages?.includes(page.slug) || false}
+                      onChange={(e) => {
+                        const isChecked = e.target.checked;
+
+                        let updated = data.requiredPages || [];
+
+                        if (isChecked) {
+                          updated.push(page.slug);
+                        } else {
+                          updated = updated.filter((x) => x !== page.slug);
+                        }
+
+                        setNodes((nodes) =>
+                          nodes.map((node) =>
+                            node.id === id
+                              ? {
+                                  ...node,
+                                  data: {
+                                    ...node.data,
+                                    requiredPages: updated,
+                                  },
+                                }
+                              : node
+                          )
+                        );
+                      }}
+                    />
+                    <label className="text-sm">{page.title}</label>
+                  </div>
+                ))}
               </div>
+
+              <p className="text-xs text-muted-foreground">
+                Select all pages this role can access.
+              </p>
+            </div>
+
+            {/* ---- Multi Role Mode ---- */}
+            <div className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                checked={data.checkMultiple || false}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: { ...node.data, checkMultiple: checked },
+                          }
+                        : node
+                    )
+                  );
+                }}
+              />
+              <label className="text-sm">Allow multiple roles</label>
             </div>
           </div>
         );
