@@ -21,7 +21,6 @@ model User {
   mediaFiles    MediaFile[]
   notifications Notification[]
 }
-
 model App {
   id               Int                @id @default(autoincrement())
   name             String
@@ -49,11 +48,18 @@ model App {
   userTables       UserTable[]
   workflows        Workflow[]
 
+  // App-level relations added below
+  appRoles         AppRole[]
+  appUsers         AppUser[]
+  appPages         AppPage[]
+  pageAccess       PageAccess[]
+
   @@index([ownerId])
   @@index([status])
   @@index([templateId])
   @@index([isPublished])
 }
+
 
 model Template {
   id            Int      @id @default(autoincrement())
@@ -145,6 +151,157 @@ model AppData {
 
   @@index([schemaId])
 }
+
+/* ---------- NEW APP-LEVEL MODELS (for App Role System) ---------- */
+
+/*
+  AppUser:
+    - Represents an end-user for a specific App (distinct from platform User)
+    - Used for app-level login, role assignment, page access
+*/
+model AppUser {
+  id         Int        @id @default(autoincrement())
+  appId      Int
+  email      String
+  password   String?
+  name       String?
+  isActive   Boolean    @default(true)
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @default(now()) @updatedAt
+
+  app        App        @relation(fields: [appId], references: [id], onDelete: Cascade)
+  roles      AppUserRole[]
+  pageAccess PageAccess[]
+  logs       RoleLog[]
+
+  @@unique([appId, email])
+  @@index([appId])
+}
+
+/*
+  AppRole:
+    - Roles defined by the app owner (e.g., admin, staff, user, manager)
+    - isPredefined indicates built-ins like 'admin' created automatically when app is created
+*/
+model AppRole {
+  id           Int           @id @default(autoincrement())
+  appId        Int
+  name         String
+  slug         String
+  description  String?
+  isPredefined Boolean       @default(false)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @default(now()) @updatedAt
+
+  app          App           @relation(fields: [appId], references: [id], onDelete: Cascade)
+  roleUsers    AppUserRole[]
+  rolePages    RolePage[]
+
+  @@unique([appId, slug])
+  @@index([appId])
+}
+
+/*
+  AppUserRole:
+    - Mapping between AppUser and AppRole (many-to-many)
+*/
+model AppUserRole {
+  id        Int      @id @default(autoincrement())
+  appUser   AppUser  @relation(fields: [appUserId], references: [id], onDelete: Cascade)
+  appUserId Int
+  appRole   AppRole  @relation(fields: [appRoleId], references: [id], onDelete: Cascade)
+  appRoleId Int
+  grantedBy Int?     // reference to platform User.id or AppUser.id who granted
+  grantedAt DateTime @default(now())
+
+  @@unique([appUserId, appRoleId])
+  @@index([appUserId])
+  @@index([appRoleId])
+}
+
+/*
+  AppPage:
+    - Pages that belong to an App (used by UI when owner selects pages for role/page access)
+*/
+model AppPage {
+  id        Int        @id @default(autoincrement())
+  appId     Int
+  title     String
+  slug      String
+  path      String?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @default(now()) @updatedAt
+
+  app       App        @relation(fields: [appId], references: [id], onDelete: Cascade)
+  rolePages RolePage[]
+  pageAccess PageAccess[]
+
+  @@unique([appId, slug])
+  @@index([appId])
+}
+
+/*
+  RolePage:
+    - Mapping of which pages a role has access to
+*/
+model RolePage {
+  id       Int     @id @default(autoincrement())
+  roleId   Int
+  pageId   Int
+  appRole  AppRole @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  appPage  AppPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, pageId])
+  @@index([roleId])
+  @@index([pageId])
+}
+
+/*
+  PageAccess:
+    - Explicit page access assigned to an AppUser (optional; you can use role-based access primarily)
+    - pageSlug stored for fast checks in workflows
+*/
+model PageAccess {
+  id        Int      @id @default(autoincrement())
+  appId     Int
+  appUserId Int
+  pageId    Int
+  pageSlug  String
+  createdAt DateTime @default(now())
+
+  app       App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  user      AppUser  @relation(fields: [appUserId], references: [id], onDelete: Cascade)
+  page      AppPage  @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@unique([appUserId, pageId])
+  @@index([appId])
+  @@index([appUserId])
+  @@index([pageId])
+}
+
+/*
+  RoleLog:
+    - Logs role checks/assignments (persisted to DB per your requirement)
+*/
+model RoleLog {
+  id         Int      @id @default(autoincrement())
+  appId      Int?
+  appUserId  Int?
+  actorId    Int?     // who performed action (platform user or app user)
+  roleSlug   String
+  action     String   // CHECK | ASSIGN | DENY | GRANT
+  details    String?
+  workflowId Int?
+  nodeId     String?
+  createdAt  DateTime @default(now())
+  appUser AppUser? @relation(fields: [appUserId], references: [id])
+
+
+  @@index([appId])
+  @@index([appUserId])
+  @@index([createdAt])
+}
+
 
 model Video {
   id        Int      @id @default(autoincrement())
@@ -354,6 +511,8 @@ model UserTable {
   @@index([appId])
   @@index([tableName])
 }
+
+
 
 model QueryPerformance {
   id              Int      @id @default(autoincrement())

@@ -180,6 +180,11 @@ router.get("/:appId/tables", authenticateToken, async (req, res) => {
       `[DATABASE] Tables data prepared for appId=${appIdInt}, returning ${filteredTables.length} tables`
     );
 
+    // Set cache headers to prevent caching
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+
     res.json({
       success: true,
       tables: filteredTables,
@@ -457,6 +462,11 @@ router.get(
 
       const safeColumns = parseColumns(userTable.columns);
 
+      // Set cache headers to prevent caching
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+
       res.json({
         success: true,
         data,
@@ -637,6 +647,83 @@ router.post(
         rowsAffected: 1,
         preview: [insertedRecord],
       });
+
+      // Trigger workflows with onRecordCreate triggers (async, don't block response)
+      try {
+        const workflows = await prisma.workflow.findMany({
+          where: { appId: appIdInt },
+        });
+
+        for (const wf of workflows) {
+          let nodes = wf.nodes;
+          let edges = wf.edges;
+          
+          // Parse JSON if stored as string
+          if (typeof nodes === "string") {
+            try {
+              nodes = JSON.parse(nodes);
+            } catch (e) {
+              console.warn(`⚠️ [DATABASE] Failed to parse workflow nodes for workflow ${wf.id}:`, e.message);
+              nodes = [];
+            }
+          }
+          if (typeof edges === "string") {
+            try {
+              edges = JSON.parse(edges);
+            } catch (e) {
+              console.warn(`⚠️ [DATABASE] Failed to parse workflow edges for workflow ${wf.id}:`, e.message);
+              edges = [];
+            }
+          }
+
+          // Find onRecordCreate trigger nodes for this table
+          const recordCreateTriggers = (nodes || []).filter(
+            (node) =>
+              node.data?.category === "Triggers" &&
+              node.data?.label === "onRecordCreate" &&
+              node.data?.tableName === tableName &&
+              node.data?.enabled !== false
+          );
+
+          if (recordCreateTriggers.length > 0) {
+            console.log(
+              `📝 [DATABASE] Found ${recordCreateTriggers.length} onRecordCreate trigger(s) for table ${tableName}`
+            );
+
+            // Create context with the inserted record
+            const initialContext = {
+              createdRecord: insertedRecord,
+              record: insertedRecord,
+              recordData: insertedRecord,
+              triggerTableName: tableName,
+              tableName: tableName,
+              workflowId: wf.id,
+              // Also spread record fields directly into context
+              ...insertedRecord,
+            };
+
+            // Enqueue workflow for processing
+            const { enqueueWorkflow } = require("../utils/workflow-queue");
+            await enqueueWorkflow(
+              nodes || [],
+              edges || [],
+              initialContext,
+              appIdInt,
+              userId
+            );
+
+            console.log(
+              `✅ [DATABASE] Enqueued workflow ${wf.id} for onRecordCreate trigger`
+            );
+          }
+        }
+      } catch (workflowError) {
+        // Don't fail the insert if workflow triggering fails
+        console.error(
+          "⚠️ [DATABASE] Failed to trigger workflows after insert:",
+          workflowError.message || workflowError
+        );
+      }
 
       res.json({
         success: true,

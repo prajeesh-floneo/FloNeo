@@ -38,6 +38,7 @@ setupSocket(io);
 // Import routes
 const authRoutes = require("./routes/auth");
 const appRoutes = require("./routes/apps");
+const appRoles =  require("./routes/appRoles");
 const templateRoutes = require("./routes/templates");
 const aiRoutes = require("./routes/ai");
 // Admin user routes removed - developer-only platform
@@ -58,6 +59,7 @@ const mediaRoutes = require("./routes/media");
 const workflowRoutes = require("./routes/workflow");
 const workflowExecutionRoutes = require("./routes/workflow-execution");
 const databaseRoutes = require("./routes/database");
+const pagesRoutes = require("./routes/pages");
 const publishRoutes = require("./routes/publish");
 const proxyRoutes = require("./routes/proxy");
 
@@ -105,6 +107,7 @@ app.get("/health", (_req, res) => {
  ✅ API routes
 -----------------------------------------------------------------*/
 app.use("/auth", authRoutes);
+app.use("/api/app-roles", appRoles);
 app.use("/api/apps", appRoutes);
 app.use("/api/templates", templateRoutes);
 app.use("/api/floneo-ai", aiRoutes);
@@ -124,6 +127,7 @@ app.use("/api/media", mediaRoutes);
 app.use("/api/workflow", workflowRoutes);
 app.use("/api/workflow", workflowExecutionRoutes);
 app.use("/api/database", databaseRoutes);
+app.use("/api/pages", pagesRoutes);
 app.use("/api", publishRoutes);
 app.use("/api/proxy", proxyRoutes);
 

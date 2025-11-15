@@ -26,12 +26,278 @@ import { useEffect } from "react";
 import { toast } from "@/components/ui/use-toast";
 import { ThemeToggle } from "@/components/theme-toggle";
 
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+
+
 // Dynamically import Canvas component to avoid circular dependencies
 const CanvasPage = dynamic(() => import("../../app/canvas/page"), {
   ssr: false,
 });
 
 function WorkflowBuilderContent() {
+  // ============================================================
+  //  ManageRolesModal – For Workflow Builder Internal Testing
+  // ============================================================
+
+  function ManageRolesModal({ open, onClose, appId, refreshRoles, appPages }) {
+    const [roles, setRoles] = useState<string[]>([]);
+    const [newRole, setNewRole] = useState("");
+
+    const [users, setUsers] = useState<any[]>([]);
+    const [selectedUserId, setSelectedUserId] = useState("");
+
+    const [selectedRole, setSelectedRole] = useState("");
+    const [selectedPages, setSelectedPages] = useState<string[]>([]);
+
+    const [loading, setLoading] = useState(false);
+
+    // Fetch roles
+    const loadRoles = async () => {
+      try {
+        const token = localStorage.getItem("authToken");
+        const res = await fetch(`/api/apps/${appId}/roles`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json();
+        if (data.success) setRoles(data.roles || []);
+      } catch (err) {
+        console.error(err);
+      }
+    };
+
+    // Fetch app users (owner + invited future)
+    const loadUsers = async () => {
+      try {
+        const token = localStorage.getItem("authToken");
+        const res = await fetch(`/api/apps/${appId}/users`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json();
+        if (data.success) setUsers(data.users || []);
+      } catch (err) {
+        console.error(err);
+      }
+    };
+
+    // Fetch user's assignments when user selected
+    const loadUserAssignments = async (uid) => {
+      if (!uid) return;
+      try {
+        const token = localStorage.getItem("authToken");
+        const res = await fetch(`/api/apps/${appId}/user/${uid}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json();
+        if (data.success) {
+          setSelectedRole(data.userRole || "");
+          setSelectedPages(data.pageSlugs || []);
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    };
+
+    useEffect(() => {
+      if (open) {
+        loadRoles();
+        loadUsers();
+      }
+    }, [open]);
+
+    useEffect(() => {
+      if (selectedUserId) {
+        loadUserAssignments(selectedUserId);
+      }
+    }, [selectedUserId]);
+
+    // ----------------------------
+    // CREATE ROLE
+    // ----------------------------
+    const createRole = async () => {
+      if (!newRole.trim()) return;
+      setLoading(true);
+      try {
+        const token = localStorage.getItem("authToken");
+        const res = await fetch(`/api/apps/${appId}/roles/create`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ name: newRole.trim().toLowerCase() }),
+        });
+
+        const d = await res.json();
+        if (d.success) {
+          setRoles((r) => [...r, d.role.name]);
+          setNewRole("");
+          refreshRoles && refreshRoles();
+        } else {
+          alert(d.message);
+        }
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    // ----------------------------
+    // ASSIGN ROLE + PAGE ACCESS
+    // ----------------------------
+    const saveAssignments = async () => {
+      if (!selectedUserId || !selectedRole) {
+        alert("Select user & role");
+        return;
+      }
+      setLoading(true);
+
+      try {
+        const token = localStorage.getItem("authToken");
+        const res = await fetch(`/api/apps/${appId}/assign/${selectedUserId}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            roleName: selectedRole,
+            pageSlugs: selectedPages,
+          }),
+        });
+
+        const d = await res.json();
+        if (d.success) {
+          alert("User assigned successfully!");
+        } else {
+          alert(d.message);
+        }
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    // Toggle page selection
+    const togglePage = (slug) => {
+      let updated = [...selectedPages];
+      if (updated.includes(slug)) {
+        updated = updated.filter((x) => x !== slug);
+      } else {
+        updated.push(slug);
+      }
+      setSelectedPages(updated);
+    };
+
+    return (
+      <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+        <DialogContent className="w-[520px]">
+          <DialogHeader>
+            <DialogTitle>
+              Manage Roles & User Access (Workflow Test Panel)
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            {/* CREATE ROLE */}
+            <div className="border p-3 rounded-md">
+              <div className="text-sm font-medium mb-2">Create Role</div>
+              <div className="flex gap-2">
+                <input
+                  className="border px-2 py-1 rounded w-full"
+                  placeholder="manager / accountant"
+                  value={newRole}
+                  onChange={(e) => setNewRole(e.target.value)}
+                />
+                <button
+                  onClick={createRole}
+                  className="px-3 py-1 bg-blue-600 text-white rounded"
+                >
+                  Add
+                </button>
+              </div>
+            </div>
+
+            {/* ASSIGN ROLE + PAGES */}
+            <div className="border p-3 rounded-md space-y-3">
+              <div className="text-sm font-medium">Assign Role to User</div>
+
+              {/* User Dropdown */}
+              <select
+                className="w-full border px-2 py-1 rounded"
+                value={selectedUserId}
+                onChange={(e) => setSelectedUserId(e.target.value)}
+              >
+                <option value="">Select user</option>
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.email}
+                  </option>
+                ))}
+              </select>
+
+              {/* Role Dropdown */}
+              <select
+                className="w-full border px-2 py-1 rounded"
+                value={selectedRole}
+                onChange={(e) => setSelectedRole(e.target.value)}
+              >
+                <option value="">Select role</option>
+                {roles.map((r) => (
+                  <option value={r} key={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
+
+              {/* Page Access */}
+              <div>
+                <div className="text-sm font-medium mb-1">Page Access</div>
+                <div className="max-h-40 overflow-y-auto space-y-1 border rounded p-2">
+                  {appPages.length === 0 ? (
+                    <div className="text-xs text-muted-foreground">
+                      No pages found
+                    </div>
+                  ) : (
+                    appPages.map((p) => (
+                      <div key={p.slug} className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={selectedPages.includes(p.slug)}
+                          onChange={() => togglePage(p.slug)}
+                        />
+                        <span className="text-sm">{p.title}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <button
+                onClick={saveAssignments}
+                className="px-3 py-1 bg-green-600 text-white rounded w-full mt-2"
+                disabled={loading}
+              >
+                Save Assignments
+              </button>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <button onClick={onClose} className="px-3 py-1 border rounded">
+              Close
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  const [openRolesModal, setOpenRolesModal] = useState(false);
+
   const router = useRouter();
   const searchParams = useSearchParams();
   const { selectedElementId, setPages, pages, setCurrentAppId } =
@@ -425,6 +691,15 @@ function WorkflowBuilderContent() {
               <Settings className="w-4 h-4 mr-2" />
               Settings
             </Button>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setOpenRolesModal(true)}
+            >
+              Manage Roles
+            </Button>
+
             <Button
               size="sm"
               onClick={() => {
@@ -440,6 +715,13 @@ function WorkflowBuilderContent() {
 
         <div className="flex-1 overflow-hidden">{renderMainContent()}</div>
       </div>
+      <ManageRolesModal
+        open={openRolesModal}
+        onClose={() => setOpenRolesModal(false)}
+        appId={appId}
+        appPages={pages}
+        refreshRoles={() => {}}
+      />
     </div>
   );
 }

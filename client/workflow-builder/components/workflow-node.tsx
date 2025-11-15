@@ -462,6 +462,7 @@ const isBlockConfigured = (data: WorkflowNodeData): boolean => {
       return true; // Always configured - webhook URL is auto-generated
 
     case "onRecordCreate":
+      return !!(data.tableName && data.enabled !== false);
     case "onRecordUpdate":
       return !!data.tableName;
 
@@ -750,7 +751,7 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
   selected,
 }) => {
   const { setNodes } = useReactFlow();
-  const { formGroups: formGroupsFromContext } = useCanvasWorkflow();
+  const { formGroups: formGroupsFromContext, pages: canvasPages } = useCanvasWorkflow();
   const [formGroups, setFormGroups] = useState<
     Array<{ id: string; name: string; elementIds: string[] }>
   >([]);
@@ -759,6 +760,8 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
   >([]);
   const [appId, setAppId] = useState<string | null>(null);
   const [pages, setPages] = useState<Array<{ id: string; name: string }>>([]);
+  const [appRoles, setAppRoles] = useState<string[]>([]);
+
   const [isConfigOpen, setIsConfigOpen] = useState(false);
 
   // State for all canvas elements (for onDrop and dateValid dropdowns)
@@ -889,6 +892,32 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
         if (!currentAppId) return;
 
         setAppId(currentAppId);
+
+        // Fetch App Roles
+        try {
+          const token = localStorage.getItem("authToken");
+
+          const roleRes = await fetch(`/api/apps/${currentAppId}/roles`, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+          });
+
+          const roleData = await roleRes.json();
+
+          if (roleData.success && roleData.roles) {
+            setAppRoles(roleData.roles);
+            console.log("🎭 [WF-NODE] App Roles Loaded:", roleData.roles);
+          } else {
+            console.warn("⚠️ No roles found for app");
+          }
+        } catch (err) {
+          console.error("❌ Failed to fetch roles:", err);
+        }
+
+        // Pages are now loaded from canvas context (useCanvasWorkflow().pages)
+        // No need to fetch separately - they sync automatically from Canvas
 
         // Fetch canvas data to get form groups and elements
         const token = localStorage.getItem("authToken");
@@ -1223,6 +1252,7 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
   // Get suggestions hooks
   const { pages: pageSuggestions } = usePageSuggestions();
   const { tables: tableSuggestions } = useTableSuggestions();
+  const { columns: columnSuggestions } = useColumnSuggestions(data.tableName);
 
   // Helper function to render block-specific configuration
   const renderBlockConfiguration = () => {
@@ -1624,6 +1654,103 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
         );
 
       case "onRecordCreate":
+        return (
+          <div className="space-y-4">
+            {/* Enable/Disable Toggle */}
+            <div className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                checked={data.enabled !== false}
+                onChange={(e) => {
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: { ...node.data, enabled: e.target.checked },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-4 h-4"
+              />
+              <label className="text-sm font-medium">
+                Enable trigger
+              </label>
+            </div>
+
+            {/* Table Selection */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Select Table:</label>
+              <select
+                value={data.tableName || ""}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: { ...node.data, tableName: value },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">
+                  {tableSuggestions.length === 0
+                    ? "Loading tables..."
+                    : "Select table..."}
+                </option>
+                {tableSuggestions.map((table) => (
+                  <option key={table.value} value={table.value}>
+                    {table.label} {table.description ? `(${table.description})` : ""}
+                  </option>
+                ))}
+              </select>
+              {tableSuggestions.length === 0 && (
+                <div className="text-xs text-muted-foreground">
+                  No tables found. Create tables in the Database section first.
+                </div>
+              )}
+              <div className="text-xs text-muted-foreground">
+                Automatically runs when a new row is inserted into this table
+              </div>
+            </div>
+
+            {/* Field Preview */}
+            {data.tableName && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Table Fields Preview:</label>
+                {columnSuggestions.length > 0 ? (
+                  <>
+                    <div className="border rounded-md px-3 py-2 max-h-48 overflow-y-auto space-y-1 bg-muted/30">
+                      {columnSuggestions.map((col) => (
+                        <div key={col.value} className="flex items-center justify-between text-sm py-1">
+                          <span className="font-mono text-xs font-medium">{col.value}</span>
+                          <span className="text-xs text-muted-foreground ml-2">
+                            {col.description || col.metadata?.type || "field"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      The created record data will be available in the next workflow block as <code className="bg-muted px-1 rounded">{"{{record}}"}</code> or individual fields like <code className="bg-muted px-1 rounded">{"{{fieldName}}"}</code>
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-xs text-muted-foreground p-2 bg-muted/30 rounded border">
+                    {data.tableName ? "Loading fields..." : "Select a table to preview fields"}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+
       case "onRecordUpdate":
         return (
           <div className="space-y-4">
@@ -1676,44 +1803,41 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
                 />
               )}
               <div className="text-xs text-muted-foreground">
-                Table to monitor for{" "}
-                {data.label === "onRecordCreate" ? "new" : "updated"} records
+                Table to monitor for updated records
               </div>
             </div>
 
-            {data.label === "onRecordUpdate" && (
-              <div className="space-y-2">
-                <label className="text-sm font-medium">
-                  Watch Columns (Optional):
-                </label>
-                <input
-                  type="text"
-                  placeholder="column1, column2, column3"
-                  value={(data.watchColumns || []).join(", ")}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    const columns = value
-                      .split(",")
-                      .map((c) => c.trim())
-                      .filter(Boolean);
-                    setNodes((nodes) =>
-                      nodes.map((node) =>
-                        node.id === id
-                          ? {
-                              ...node,
-                              data: { ...node.data, watchColumns: columns },
-                            }
-                          : node
-                      )
-                    );
-                  }}
-                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <div className="text-xs text-muted-foreground">
-                  Comma-separated list of columns to watch for changes
-                </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">
+                Watch Columns (Optional):
+              </label>
+              <input
+                type="text"
+                placeholder="column1, column2, column3"
+                value={(data.watchColumns || []).join(", ")}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  const columns = value
+                    .split(",")
+                    .map((c) => c.trim())
+                    .filter(Boolean);
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: { ...node.data, watchColumns: columns },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <div className="text-xs text-muted-foreground">
+                Comma-separated list of columns to watch for changes
               </div>
-            )}
+            </div>
           </div>
         );
 
@@ -3501,88 +3625,116 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
           </div>
         );
 
+      // case "roleIs":
+      //   return (
+      //     <div className="space-y-4">
+      //       {/* ---- Enter Role Name Manually ---- */}
+      //       <div className="space-y-2">
+      //         <label className="text-sm font-medium">Required Role:</label>
+      //         <input
+      //           type="text"
+      //           placeholder="admin / manager / custom-role"
+      //           value={data.requiredRole || ""}
+      //           onChange={(e) => {
+      //             const value = e.target.value.trim().toLowerCase();
+
+      //             setNodes((nodes) =>
+      //               nodes.map((node) =>
+      //                 node.id === id
+      //                   ? {
+      //                       ...node,
+      //                       data: {
+      //                         ...node.data,
+      //                         requiredRole: value || "user", // default
+      //                       },
+      //                     }
+      //                   : node
+      //               )
+      //             );
+      //           }}
+      //           className="w-full px-3 py-2 text-sm border rounded-md bg-background"
+      //         />
+
+      //         <p className="text-xs text-muted-foreground">
+      //           If empty → default role = user. Admin role is predefined.
+      //         </p>
+      //       </div>
+
+      //       {/* ---- Page Access Checkboxes ---- */}
+      //       <div className="space-y-2">
+      //         <label className="text-sm font-medium">Allowed Pages:</label>
+
+      //         <div className="border rounded-md px-3 py-2 space-y-1 max-h-48 overflow-y-auto">
+      //           {appPages?.map((page) => (
+      //             <div key={page.id} className="flex items-center space-x-2">
+      //               <input
+      //                 type="checkbox"
+      //                 checked={data.requiredPages?.includes(page.slug) || false}
+      //                 onChange={(e) => {
+      //                   const isChecked = e.target.checked;
+
+      //                   let updated = data.requiredPages || [];
+
+      //                   if (isChecked) {
+      //                     updated.push(page.slug);
+      //                   } else {
+      //                     updated = updated.filter((x) => x !== page.slug);
+      //                   }
+
+      //                   setNodes((nodes) =>
+      //                     nodes.map((node) =>
+      //                       node.id === id
+      //                         ? {
+      //                             ...node,
+      //                             data: {
+      //                               ...node.data,
+      //                               requiredPages: updated,
+      //                             },
+      //                           }
+      //                         : node
+      //                     )
+      //                   );
+      //                 }}
+      //               />
+      //               <label className="text-sm">{page.title}</label>
+      //             </div>
+      //           ))}
+      //         </div>
+
+      //         <p className="text-xs text-muted-foreground">
+      //           Select all pages this role can access.
+      //         </p>
+      //       </div>
+
+      //       {/* ---- Multi Role Mode ---- */}
+      //       <div className="flex items-center space-x-2">
+      //         <input
+      //           type="checkbox"
+      //           checked={data.checkMultiple || false}
+      //           onChange={(e) => {
+      //             const checked = e.target.checked;
+
+      //             setNodes((nodes) =>
+      //               nodes.map((node) =>
+      //                 node.id === id
+      //                   ? {
+      //                       ...node,
+      //                       data: { ...node.data, checkMultiple: checked },
+      //                     }
+      //                   : node
+      //               )
+      //             );
+      //           }}
+      //         />
+      //         <label className="text-sm">Allow multiple roles</label>
+      //       </div>
+      //     </div>
+      //   );
+
       case "roleIs":
         return (
           <div className="space-y-4">
-            {/* ---- Enter Role Name Manually ---- */}
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Required Role:</label>
-              <input
-                type="text"
-                placeholder="admin / manager / custom-role"
-                value={data.requiredRole || ""}
-                onChange={(e) => {
-                  const value = e.target.value.trim().toLowerCase();
-
-                  setNodes((nodes) =>
-                    nodes.map((node) =>
-                      node.id === id
-                        ? {
-                            ...node,
-                            data: {
-                              ...node.data,
-                              requiredRole: value || "user", // default
-                            },
-                          }
-                        : node
-                    )
-                  );
-                }}
-                className="w-full px-3 py-2 text-sm border rounded-md bg-background"
-              />
-
-              <p className="text-xs text-muted-foreground">
-                If empty → default role = user. Admin role is predefined.
-              </p>
-            </div>
-
-            {/* ---- Page Access Checkboxes ---- */}
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Allowed Pages:</label>
-
-              <div className="border rounded-md px-3 py-2 space-y-1 max-h-48 overflow-y-auto">
-                {appPages?.map((page) => (
-                  <div key={page.id} className="flex items-center space-x-2">
-                    <input
-                      type="checkbox"
-                      checked={data.requiredPages?.includes(page.slug) || false}
-                      onChange={(e) => {
-                        const isChecked = e.target.checked;
-
-                        let updated = data.requiredPages || [];
-
-                        if (isChecked) {
-                          updated.push(page.slug);
-                        } else {
-                          updated = updated.filter((x) => x !== page.slug);
-                        }
-
-                        setNodes((nodes) =>
-                          nodes.map((node) =>
-                            node.id === id
-                              ? {
-                                  ...node,
-                                  data: {
-                                    ...node.data,
-                                    requiredPages: updated,
-                                  },
-                                }
-                              : node
-                          )
-                        );
-                      }}
-                    />
-                    <label className="text-sm">{page.title}</label>
-                  </div>
-                ))}
-              </div>
-
-              <p className="text-xs text-muted-foreground">
-                Select all pages this role can access.
-              </p>
-            </div>
-
-            {/* ---- Multi Role Mode ---- */}
+            {/* ---- Multi Role Toggle ---- */}
             <div className="flex items-center space-x-2">
               <input
                 type="checkbox"
@@ -3595,7 +3747,15 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
                       node.id === id
                         ? {
                             ...node,
-                            data: { ...node.data, checkMultiple: checked },
+                            data: {
+                              ...node.data,
+                              checkMultiple: checked,
+                              // Reset fields automatically
+                              requiredRole: checked
+                                ? ""
+                                : data.requiredRole || "user",
+                              roles: checked ? [] : undefined,
+                            },
                           }
                         : node
                     )
@@ -3603,6 +3763,146 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
                 }}
               />
               <label className="text-sm">Allow multiple roles</label>
+            </div>
+
+            {/* ================== SINGLE ROLE MODE ================== */}
+            {!data.checkMultiple && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Required Role:</label>
+                <input
+                  type="text"
+                  placeholder="admin / manager / custom-role"
+                  value={data.requiredRole || ""}
+                  onChange={(e) => {
+                    const value = e.target.value.trim().toLowerCase();
+
+                    setNodes((nodes) =>
+                      nodes.map((node) =>
+                        node.id === id
+                          ? {
+                              ...node,
+                              data: {
+                                ...node.data,
+                                requiredRole: value || "user",
+                              },
+                            }
+                          : node
+                      )
+                    );
+                  }}
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background"
+                />
+
+                <p className="text-xs text-muted-foreground">
+                  Only continue if user has selected role.
+                </p>
+              </div>
+            )}
+
+            {/* ================== MULTIPLE ROLES MODE ================== */}
+            {data.checkMultiple && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Allowed Roles:</label>
+
+                <div className="border rounded-md px-3 py-2 space-y-1 max-h-48 overflow-y-auto">
+                  {appRoles?.length > 0 ? (
+                    appRoles.map((role) => (
+                      <div key={role} className="flex items-center space-x-2">
+                        <input
+                          type="checkbox"
+                          checked={data.roles?.includes(role) || false}
+                          onChange={(e) => {
+                            const isChecked = e.target.checked;
+
+                            let updated = data.roles || [];
+
+                            if (isChecked) {
+                              updated.push(role);
+                            } else {
+                              updated = updated.filter((x) => x !== role);
+                            }
+
+                            setNodes((nodes) =>
+                              nodes.map((node) =>
+                                node.id === id
+                                  ? {
+                                      ...node,
+                                      data: { ...node.data, roles: updated },
+                                    }
+                                  : node
+                              )
+                            );
+                          }}
+                        />
+                        <label className="text-sm">{role}</label>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      No roles found…
+                    </p>
+                  )}
+                </div>
+
+                <p className="text-xs text-muted-foreground">
+                  Select all roles that are allowed to pass this condition.
+                </p>
+              </div>
+            )}
+
+            {/* ================== PAGE ACCESS CHECKBOXES ================== */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Allowed Pages:</label>
+
+              <div className="border rounded-md px-3 py-2 space-y-1 max-h-48 overflow-y-auto">
+                {canvasPages && canvasPages.length > 0 ? (
+                  canvasPages.map((page) => {
+                    // Use page name as slug if slug doesn't exist
+                    const pageSlug = (page as any).slug || page.name.toLowerCase().replace(/\s+/g, "-");
+                    return (
+                      <div key={page.id} className="flex items-center space-x-2">
+                        <input
+                          type="checkbox"
+                          checked={data.requiredPages?.includes(pageSlug) || false}
+                          onChange={(e) => {
+                            const isChecked = e.target.checked;
+                            let updated = data.requiredPages || [];
+
+                            if (isChecked) {
+                              updated.push(pageSlug);
+                            } else {
+                              updated = updated.filter((x) => x !== pageSlug);
+                            }
+
+                            setNodes((nodes) =>
+                              nodes.map((node) =>
+                                node.id === id
+                                  ? {
+                                      ...node,
+                                      data: {
+                                        ...node.data,
+                                        requiredPages: updated,
+                                      },
+                                    }
+                                  : node
+                              )
+                            );
+                          }}
+                        />
+                        <label className="text-sm">{page.name}</label>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    No pages found. Create pages in the Canvas first.
+                  </p>
+                )}
+              </div>
+
+              <p className="text-xs text-muted-foreground">
+                Select pages this role or user must have access to.
+              </p>
             </div>
           </div>
         );

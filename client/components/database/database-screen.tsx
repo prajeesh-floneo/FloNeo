@@ -184,11 +184,15 @@ export function DatabaseScreen() {
         throw new Error("Authentication token not found");
       }
 
-      const response = await fetch(`/api/database/${appId}/tables`, {
+      // Add timestamp to prevent caching
+      const timestamp = Date.now();
+      const response = await fetch(`/api/database/${appId}?_t=${timestamp}`, {
+        method: "GET",
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
+        cache: "no-store", // Prevent browser caching
       });
 
       const data = await response.json();
@@ -418,17 +422,21 @@ export function DatabaseScreen() {
       setShowAddRecordModal(false);
       setNewRecordData({});
 
-      // Reload table data
+      // Force reload table data with fresh fetch
       console.log("🔵 [ADD RECORD] Reloading table data...");
       console.log(
         "🔵 [ADD RECORD] Current tableData length:",
         tableData.length
       );
-      await loadTableData(selectedTable, currentPage);
-      console.log(
-        "🔵 [ADD RECORD] Table data reloaded. New length:",
-        tableData.length
-      );
+      
+      // Force refresh by calling loadTableData with a fresh timestamp
+      // Reset to page 1 to see the newly inserted record (newest first)
+      await loadTableData(selectedTable, 1);
+      
+      // Also reload tables list to update row counts
+      await loadTables();
+      
+      console.log("✅ [ADD RECORD] Table data and tables list reloaded");
     } catch (err) {
       console.error("❌ [DATABASE] Error adding record:", err);
       toast({

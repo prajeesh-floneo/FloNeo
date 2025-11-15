@@ -926,6 +926,55 @@ router.patch("/:appId/state", authenticateToken, async (req, res) => {
       throw updateError;
     }
 
+    // Sync Canvas pages to AppPage table
+    if (canvasState.pages && Array.isArray(canvasState.pages)) {
+      try {
+        console.log("📄 Syncing canvas pages to AppPage table:", canvasState.pages.length);
+        
+        for (const page of canvasState.pages) {
+          if (!page.id || !page.name) continue;
+          
+          // Generate slug from page name
+          const slug = page.name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+          
+          // Check if AppPage already exists
+          const existingPage = await prisma.appPage.findFirst({
+            where: {
+              appId: parseInt(appId),
+              slug: slug,
+            },
+          });
+          
+          if (!existingPage) {
+            // Create new AppPage
+            await prisma.appPage.create({
+              data: {
+                appId: parseInt(appId),
+                title: page.name,
+                slug: slug,
+                path: `/${slug}`,
+              },
+            });
+            console.log(`✅ Created AppPage: ${page.name} (${slug})`);
+          } else {
+            // Update existing AppPage title if name changed
+            if (existingPage.title !== page.name) {
+              await prisma.appPage.update({
+                where: { id: existingPage.id },
+                data: { title: page.name },
+              });
+              console.log(`🔄 Updated AppPage: ${page.name}`);
+            }
+          }
+        }
+        
+        console.log("✅ Canvas pages synced to AppPage table");
+      } catch (syncError) {
+        console.error("⚠️ Error syncing pages to AppPage table:", syncError);
+        // Don't fail the entire save if page sync fails
+      }
+    }
+
     // Record history
     await prisma.canvasHistory.create({
       data: {

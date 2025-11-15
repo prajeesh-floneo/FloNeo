@@ -3987,83 +3987,173 @@ const verifyHmacSignature = (payload, providedSignature, secret) => {
 // =====================================================
 // 🔐 FINAL — RoleIs Condition (Correct for FloNeo Engine)
 // =====================================================
+// async function executeRoleIs(node, context, appId, userId) {
+//   try {
+//     console.log("🔐 [ROLE-IS] Checking role...");
+
+//     const { requiredRole, roles = [], requiredPages = [], checkMultiple = false } = node.data;
+
+//     // ============ 1️⃣ Load user from context or DB =============
+//     let userRole = context?.user?.role || null;
+//     let userRoles = context?.user?.roles || [];
+
+//     if (!userRole) {
+//       const user = await prisma.user.findUnique({
+//         where: { id: userId },
+//         select: { role: true },
+//       });
+
+//       if (user) {
+//         userRole = user.role;
+//         userRoles = [user.role];
+//       }
+//     }
+
+//     if (!userRole) {
+//       console.log("⚠ No user role found. Marking invalid.");
+//       return {
+//         success: true,
+//         isFilled: false,   // IMPORTANT for connector routing
+//         context,
+//         message: "User role missing",
+//       };
+//     }
+
+//     console.log("👤 User roles:", userRoles);
+
+//     // ============ 2️⃣ ROLE CHECK =============
+//     let roleValid = false;
+
+//     if (checkMultiple && roles.length > 0) {
+//       roleValid = roles.includes(userRole);
+//     } else if (requiredRole) {
+//       roleValid = userRole === requiredRole;
+//     } else {
+//       roleValid = true; // if no role required → allowed
+//     }
+
+//     // ============ 3️⃣ PAGE ACCESS CHECK =============
+//     let pageValid = true;
+
+//     if (requiredPages && requiredPages.length > 0) {
+//       const userPageAccess = await prisma.pageAccess.findMany({
+//         where: { userId },
+//         select: { pageSlug: true },
+//       });
+
+//       const userPages = userPageAccess.map((p) => p.pageSlug);
+
+//       pageValid = requiredPages.every((p) => userPages.includes(p));
+//       console.log("📄 Page Check:", { requiredPages, userPages, pageValid });
+//     }
+
+//     // final result
+//     const isValid = roleValid && pageValid;
+
+//     return {
+//       success: true,
+//       isFilled: isValid, // IMPORTANT: workflow engine uses isFilled!
+//       context: {
+//         ...context,
+//         roleCheck: {
+//           roleValid,
+//           pageValid,
+//           isValid,
+//           userRoles,
+//           requiredRole,
+//           requiredPages,
+//         },
+//       },
+//     };
+//   } catch (err) {
+//     console.error("❌ ROLE-IS ERROR:", err);
+//     return {
+//       success: false,
+//       isFilled: false,
+//       context,
+//       message: err.message,
+//     };
+//   }
+// }
+
+
 async function executeRoleIs(node, context, appId, userId) {
   try {
-    console.log("🔐 [ROLE-IS] Checking role...");
+    console.log("🔐 [ROLE-IS] Executing role check...");
 
-    const { requiredRole, roles = [], requiredPages = [], checkMultiple = false } = node.data;
+    const {
+      requiredRole = "",
+      roles = [],
+      requiredPages = [],
+      checkMultiple = false
+    } = node.data || {};
 
-    // ============ 1️⃣ Load user from context or DB =============
+    // 1️⃣ FETCH USER ROLE (context → DB)
     let userRole = context?.user?.role || null;
-    let userRoles = context?.user?.roles || [];
 
     if (!userRole) {
       const user = await prisma.user.findUnique({
         where: { id: userId },
-        select: { role: true },
+        select: { role: true }
       });
-
-      if (user) {
-        userRole = user.role;
-        userRoles = [user.role];
-      }
+      if (user) userRole = user.role;
     }
 
     if (!userRole) {
-      console.log("⚠ No user role found. Marking invalid.");
+      console.log("⚠️ User role missing → fail");
       return {
         success: true,
-        isFilled: false,   // IMPORTANT for connector routing
+        isFilled: false,
         context,
-        message: "User role missing",
+        message: "User role missing"
       };
     }
 
-    console.log("👤 User roles:", userRoles);
+    userRole = userRole.trim().toLowerCase(); // normalize
 
-    // ============ 2️⃣ ROLE CHECK =============
+    // 2️⃣ ROLE CHECK
     let roleValid = false;
 
-    if (checkMultiple && roles.length > 0) {
-      roleValid = roles.includes(userRole);
-    } else if (requiredRole) {
-      roleValid = userRole === requiredRole;
+    if (checkMultiple) {
+      // MULTI ROLE MODE
+      const normalizedRoles = roles.map((r) => r.trim().toLowerCase());
+      roleValid = normalizedRoles.includes(userRole);
     } else {
-      roleValid = true; // if no role required → allowed
+      // SINGLE ROLE MODE
+      const finalRequired = requiredRole.trim().toLowerCase() || "user";
+      roleValid = userRole === finalRequired;
     }
 
-    // ============ 3️⃣ PAGE ACCESS CHECK =============
+    // 3️⃣ PAGE ACCESS CHECK
     let pageValid = true;
 
-    if (requiredPages && requiredPages.length > 0) {
-      const userPageAccess = await prisma.pageAccess.findMany({
+    if (requiredPages.length > 0) {
+      const access = await prisma.pageAccess.findMany({
         where: { userId },
-        select: { pageSlug: true },
+        select: { pageSlug: true }
       });
 
-      const userPages = userPageAccess.map((p) => p.pageSlug);
-
-      pageValid = requiredPages.every((p) => userPages.includes(p));
-      console.log("📄 Page Check:", { requiredPages, userPages, pageValid });
+      const userPages = access.map((p) => p.pageSlug);
+      pageValid = requiredPages.every((slug) => userPages.includes(slug));
     }
 
-    // final result
     const isValid = roleValid && pageValid;
 
     return {
       success: true,
-      isFilled: isValid, // IMPORTANT: workflow engine uses isFilled!
+      isFilled: isValid,
       context: {
         ...context,
         roleCheck: {
+          isValid,
           roleValid,
           pageValid,
-          isValid,
-          userRoles,
+          userRole,
           requiredRole,
-          requiredPages,
-        },
-      },
+          roles,
+          requiredPages
+        }
+      }
     };
   } catch (err) {
     console.error("❌ ROLE-IS ERROR:", err);
@@ -4071,7 +4161,7 @@ async function executeRoleIs(node, context, appId, userId) {
       success: false,
       isFilled: false,
       context,
-      message: err.message,
+      message: err.message
     };
   }
 }
@@ -4818,21 +4908,49 @@ const executeOnRecordCreate = async (node, context, appId, userId) => {
     }
 
     // Extract configuration
-    const { tableName, filterConditions = [] } = node.data || {};
-    console.log("🔁 [ON-RECORD-UPDATE] Triggered for:", tableName);
+    const { tableName, enabled = true } = node.data || {};
+    
+    // Check if trigger is enabled
+    if (enabled === false) {
+      console.log("📝 [ON-RECORD-CREATE] Trigger is disabled, skipping");
+      return {
+        success: false,
+        triggered: false,
+        message: "Trigger is disabled",
+        context: context,
+      };
+    }
 
     // Validate required fields
     if (!tableName) {
       throw new Error("Table name is required for onRecordCreate trigger");
     }
 
+    // Get the created record from context (passed from database insert endpoint)
+    const createdRecord = context.createdRecord || context.record || {};
+    const triggerTableName = context.triggerTableName || context.tableName;
+
+    // Check if this trigger is for the correct table
+    if (triggerTableName && triggerTableName !== tableName) {
+      console.log(
+        `📝 [ON-RECORD-CREATE] Record created in different table (${triggerTableName} vs ${tableName}), skipping`
+      );
+      return {
+        success: false,
+        triggered: false,
+        message: `Record created in different table: ${triggerTableName}`,
+        context: context,
+      };
+    }
+
     console.log("📝 [ON-RECORD-CREATE] Trigger configuration:", {
       tableName,
-      filterConditions,
+      enabled,
+      recordId: createdRecord.id,
+      recordKeys: Object.keys(createdRecord),
     });
 
-    // The actual trigger logic would be implemented in the database
-    // For now, we return a trigger registration response
+    // Return success with record data in context for next workflow blocks
     return {
       success: true,
       triggered: true,
@@ -4840,9 +4958,16 @@ const executeOnRecordCreate = async (node, context, appId, userId) => {
       tableName: tableName,
       context: {
         ...context,
+        // Add record data to context for easy access in next blocks
+        record: createdRecord,
+        createdRecord: createdRecord,
+        recordData: createdRecord,
+        // Also spread record fields directly into context for easy access
+        ...createdRecord,
         recordCreateResult: {
           triggered: true,
           tableName: tableName,
+          recordId: createdRecord.id,
           timestamp: new Date().toISOString(),
         },
       },
