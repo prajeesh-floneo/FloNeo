@@ -10,6 +10,7 @@ import {
   UserPlus,
   LogIn,
   Upload,
+  Download,
   Calendar,
   Send,
   CheckCircle,
@@ -440,6 +441,8 @@ const getBlockIcon = (label: string) => {
     "ui.openModal": ExternalLink,
     "notify.toast": Bell,
     "http.request": Globe,
+    "file.upload": Upload,
+    "file.download": Download,
     "page.redirect": ArrowRight,
     "ai.summarize": Sparkles,
   };
@@ -515,6 +518,17 @@ const isBlockConfigured = (data: WorkflowNodeData): boolean => {
 
     case "http.request":
       return !!(data.url && data.method);
+
+    case "file.upload":
+      return !!data.fileUploadElementId;
+
+    case "file.download": {
+      const source = data.downloadSourceType || "url";
+      if (source === "url") return !!data.downloadUrl;
+      if (source === "context") return !!data.downloadContextKey;
+      if (source === "path") return !!data.downloadPath;
+      return false;
+    }
 
     case "match":
       return !!(data.leftValue && data.rightValue);
@@ -605,6 +619,10 @@ export interface WorkflowNodeData {
   acceptedTypes?: string[];
   maxFileSize?: number;
   allowMultiple?: boolean;
+  allowedFileTypes?: string[];
+  fileUploadElementId?: string;
+  fileUploadOutputVariable?: string;
+  fileUploadMaxSizeMB?: number;
   dateFormat?: string;
   validationRules?: {
     required?: boolean;
@@ -733,6 +751,17 @@ export interface WorkflowNodeData {
   validateSSL?: boolean;
   responseType?: string;
   saveResponseTo?: string;
+
+  // file.upload configuration properties
+  fileUploadSource?: "form" | "context";
+
+  // file.download configuration properties
+  downloadSourceType?: "url" | "context" | "path";
+  downloadUrl?: string;
+  downloadContextKey?: string;
+  downloadPath?: string;
+  downloadFileName?: string;
+  downloadMimeType?: string;
 
   // ai.summarize configuration properties
   fileVariable?: string;
@@ -1973,6 +2002,313 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
             </div>
           </div>
         );
+
+      case "file.upload": {
+        const fileElements = getFileUploadElements();
+        return (
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Input Source:</label>
+              <select
+                value={data.fileUploadElementId || ""}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: {
+                              ...node.data,
+                              fileUploadElementId: value || undefined,
+                            },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">
+                  {fileElements.length === 0
+                    ? "No file inputs found..."
+                    : "Select file input element..."}
+                </option>
+                {fileElements.map((element) => (
+                  <option key={element.id} value={element.id}>
+                    {element.name || element.id} — {element.type}
+                  </option>
+                ))}
+              </select>
+              <div className="text-xs text-muted-foreground">
+                Files from this element will be uploaded when the workflow runs.
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">
+                Allowed File Types (comma separated):
+              </label>
+              <input
+                type="text"
+                placeholder="image/*, .pdf, application/pdf"
+                value={(data.allowedFileTypes || []).join(", ")}
+                onChange={(e) => {
+                  const types = e.target.value
+                    .split(",")
+                    .map((item) => item.trim())
+                    .filter(Boolean);
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: {
+                              ...node.data,
+                              allowedFileTypes: types.length ? types : undefined,
+                            },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <div className="text-xs text-muted-foreground">
+                Supports MIME types (image/png) or extensions (.png).
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Max File Size (MB):</label>
+              <input
+                type="number"
+                min={1}
+                placeholder="10"
+                value={data.fileUploadMaxSizeMB ?? ""}
+                onChange={(e) => {
+                  const value = parseInt(e.target.value, 10);
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: {
+                              ...node.data,
+                              fileUploadMaxSizeMB: Number.isNaN(value)
+                                ? undefined
+                                : value,
+                            },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">
+                Save Result To Variable:
+              </label>
+              <input
+                type="text"
+                placeholder="uploadedFile"
+                value={data.fileUploadOutputVariable || "uploadedFile"}
+                onChange={(e) => {
+                  const value = e.target.value.trim();
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: {
+                              ...node.data,
+                              fileUploadOutputVariable: value || undefined,
+                            },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <div className="text-xs text-muted-foreground">
+                Result (URL, type, size) will be in context using this variable name.
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      case "file.download": {
+        const sourceType = data.downloadSourceType || "url";
+        return (
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Source Type:</label>
+              <select
+                value={sourceType}
+                onChange={(e) => {
+                  const value = e.target.value as "url" | "context" | "path";
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: { ...node.data, downloadSourceType: value },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="url">Direct URL</option>
+                <option value="context">Context Variable</option>
+                <option value="path">Server Path</option>
+              </select>
+            </div>
+
+            {sourceType === "url" && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">File URL:</label>
+                <input
+                  type="text"
+                  placeholder="https://example.com/file.pdf"
+                  value={data.downloadUrl || ""}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setNodes((nodes) =>
+                      nodes.map((node) =>
+                        node.id === id
+                          ? {
+                              ...node,
+                              data: { ...node.data, downloadUrl: value || undefined },
+                            }
+                          : node
+                      )
+                    );
+                  }}
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            )}
+
+            {sourceType === "context" && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Context Key:</label>
+                <input
+                  type="text"
+                  placeholder="uploadedFile"
+                  value={data.downloadContextKey || ""}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setNodes((nodes) =>
+                      nodes.map((node) =>
+                        node.id === id
+                          ? {
+                              ...node,
+                              data: {
+                                ...node.data,
+                                downloadContextKey: value || undefined,
+                              },
+                            }
+                          : node
+                      )
+                    );
+                  }}
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <div className="text-xs text-muted-foreground">
+                  Supports nested keys like files.latest.url
+                </div>
+              </div>
+            )}
+
+            {sourceType === "path" && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Server Path:</label>
+                <input
+                  type="text"
+                  placeholder="../uploads/file.pdf"
+                  value={data.downloadPath || ""}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setNodes((nodes) =>
+                      nodes.map((node) =>
+                        node.id === id
+                          ? {
+                              ...node,
+                              data: { ...node.data, downloadPath: value || undefined },
+                            }
+                          : node
+                      )
+                    );
+                  }}
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Download File Name:</label>
+              <input
+                type="text"
+                placeholder="invoice.pdf"
+                value={data.downloadFileName || ""}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: {
+                              ...node.data,
+                              downloadFileName: value || undefined,
+                            },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <div className="text-xs text-muted-foreground">
+                Optional. Leave blank to use source file name.
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">MIME Type (Optional):</label>
+              <input
+                type="text"
+                placeholder="application/pdf"
+                value={data.downloadMimeType || ""}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: {
+                              ...node.data,
+                              downloadMimeType: value || undefined,
+                            },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          </div>
+        );
+      }
 
       case "http.request":
         return (

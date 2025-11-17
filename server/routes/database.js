@@ -4,6 +4,11 @@ const { PrismaClient } = require("@prisma/client");
 const { authenticateToken } = require("../middleware/auth");
 const { exportTableData } = require("../utils/exporters");
 const { emitTableCreated, emitDataUpdated } = require("../utils/dbEvents");
+const {
+  assertAppAccess,
+  isValidTableName,
+  parseAppId,
+} = require("../utils/databaseHelpers");
 
 const prisma = new PrismaClient();
 
@@ -56,7 +61,7 @@ router.get("/:appId/tables", authenticateToken, async (req, res) => {
     console.log(`[DATABASE] Fetching tables for appId=${appIdInt}`);
 
     // strict app access (404 vs 403)
-    await assertAppAccess(appIdInt, userId); // ⬅️ NEW
+    await assertAppAccess(prisma, appIdInt, userId);     // ⬅️ UPDATED
 
     // Get table metadata only for this app
     const userTables = await prisma.userTable.findMany({
@@ -229,8 +234,10 @@ router.post("/:appId/tables/create", authenticateToken, async (req, res) => {
       });
     }
 
-    // Verify app access
-    await assertAppAccess(appIdInt, userId);
+    console.log(`[DATABASE] Fetching data for appId=${appIdInt} table=${tableName} page=${page} limit=${limit}`);
+
+    // strict app access
+    await assertAppAccess(prisma, appIdInt, userId);     // ⬅️ UPDATED
 
     // Check if table already exists in metadata
     const existingTable = await prisma.userTable.findFirst({
@@ -869,8 +876,8 @@ router.post(
         columns = [],
       } = req.body;
 
-      // ensure access before emitting
-      await assertAppAccess(appIdInt, req.user.id); // ⬅️ NEW
+    // ensure access before emitting
+    await assertAppAccess(prisma, appIdInt, req.user.id); // ⬅️ UPDATED
 
       let payload;
       if (type === "created") {
