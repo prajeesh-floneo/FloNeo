@@ -4673,6 +4673,24 @@ function CanvasPageContent() {
             </div>
           );
 
+        case "TEXT_DISPLAY":
+        case "text_display":
+          // Render TEXT_DISPLAY using the TextDisplay component
+          // Import at top: import { TextDisplay } from "@/components/canvas/elements/TextDisplay";
+          const TextDisplayComponent =
+            require("@/components/canvas/elements/TextDisplay").TextDisplay;
+          return (
+            <div
+              style={{ width: "100%", height: "100%", position: "relative" }}
+            >
+              <TextDisplayComponent
+                element={element}
+                context={{}}
+                isPreviewMode={false}
+              />
+            </div>
+          );
+
         default:
           return (
             <div
@@ -5597,6 +5615,23 @@ function CanvasPageContent() {
           return renderIconElementClean(element, ArrowLeft, style);
         case "icon-forward":
           return renderIconElementClean(element, ArrowRight, style);
+
+        case "TEXT_DISPLAY":
+        case "text_display":
+          // Render TEXT_DISPLAY using the TextDisplay component in preview mode
+          const TextDisplayComponentPreview =
+            require("@/components/canvas/elements/TextDisplay").TextDisplay;
+          return (
+            <div
+              style={{ width: "100%", height: "100%", position: "relative" }}
+            >
+              <TextDisplayComponentPreview
+                element={element}
+                context={{}}
+                isPreviewMode={true}
+              />
+            </div>
+          );
 
         default:
           return (

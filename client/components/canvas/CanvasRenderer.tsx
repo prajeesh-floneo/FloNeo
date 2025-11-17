@@ -29,6 +29,8 @@ import { useCanvasWorkflow } from "@/lib/canvas-workflow-context";
 import { toRuntimeStyle, logElementRender } from "@/runtime/styleMap";
 import { normalizeMediaUrl, detectMediaKind } from "@/lib/utils";
 import { TextDisplay } from "./elements/TextDisplay";
+import { getSocket } from "@/lib/socket";
+
 
 export interface CanvasRendererProps {
   elements: CanvasElement[];
@@ -164,6 +166,16 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
       (window as any).__canvasFormValues = values;
     }
   }, [values, mode]);
+
+  // Debug: Log workflow context changes
+  React.useEffect(() => {
+    if (mode === "preview") {
+      console.log("🔄 [CANVAS-RENDERER] Workflow context updated:", {
+        contextKeys: Object.keys(workflowContext),
+        fullContext: workflowContext,
+      });
+    }
+  }, [workflowContext, mode]);
 
   // Phase 7: Logging for parity verification
   React.useEffect(() => {
@@ -1633,6 +1645,30 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
 
       case "SHAPE":
       default:
+        // Check if this SHAPE has a bindingPath (making it a TEXT_DISPLAY)
+        const hasBindingPath = element.properties?.bindingPath;
+
+        if (hasBindingPath) {
+          // Render as TEXT_DISPLAY
+          const textDisplayShapeProps = elementHasClickWorkflow
+            ? { ...clickableProps, style }
+            : {
+                style,
+                onClick: isInPreviewMode ? undefined : handleClick,
+                onDoubleClick: isInPreviewMode ? undefined : handleDoubleClick,
+                onMouseDown: isInPreviewMode ? undefined : handleMouseDown,
+              };
+          return (
+            <div key={element.id} {...textDisplayShapeProps}>
+              <TextDisplay
+                element={element}
+                context={workflowContext}
+                isPreviewMode={isInPreviewMode}
+              />
+            </div>
+          );
+        }
+
         // Use clickableProps for non-interactive elements with workflows
         const shapeProps = elementHasClickWorkflow
           ? clickableProps

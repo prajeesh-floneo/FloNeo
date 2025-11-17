@@ -33,7 +33,9 @@ import {
   Settings as SettingsIcon,
   HelpCircle,
   Info,
+  Wand2,
 } from "lucide-react";
+import { DataBindingBuilder } from "@/components/data-binding-builder";
 
 interface CanvasElement {
   id: string;
@@ -106,11 +108,31 @@ interface PropertiesPanelProps {
 const isValidBindingPath = (path: string): boolean => {
   if (!path || path.trim() === "") return true; // Empty is valid
 
-  // Basic validation: check for common patterns
-  // Valid examples: dbFindResult[0].name, formData.email, urlParams.id
-  const validPattern =
-    /^[a-zA-Z_$][a-zA-Z0-9_$]*(\[[0-9]+\]|\.[a-zA-Z_$][a-zA-Z0-9_$]*)*$/;
-  return validPattern.test(path);
+  // Check if it's a template string with {{...}}
+  const templateRegex = /\{\{([^}]+)\}\}/g;
+  const hasTemplate = templateRegex.test(path);
+
+  if (hasTemplate) {
+    // Template mode - validate each {{path}} segment
+    templateRegex.lastIndex = 0; // Reset regex
+    const matches = [...path.matchAll(templateRegex)];
+
+    for (const match of matches) {
+      const innerPath = match[1].trim();
+      const validPattern =
+        /^[a-zA-Z_$][a-zA-Z0-9_$]*(\[[0-9]+\]|\.[a-zA-Z_$][a-zA-Z0-9_$]*)*$/;
+      if (!validPattern.test(innerPath)) {
+        return false;
+      }
+    }
+    return true;
+  } else {
+    // Simple binding mode - validate single path
+    // Valid examples: dbFindResult[0].name, formData.email, urlParams.id
+    const validPattern =
+      /^[a-zA-Z_$][a-zA-Z0-9_$]*(\[[0-9]+\]|\.[a-zA-Z_$][a-zA-Z0-9_$]*)*$/;
+    return validPattern.test(path);
+  }
 };
 
 export function PropertiesPanel({
@@ -127,6 +149,20 @@ export function PropertiesPanel({
   onMoveElementLayer,
 }: PropertiesPanelProps) {
   const [showExamplesModal, setShowExamplesModal] = React.useState(false);
+  const [showBindingBuilder, setShowBindingBuilder] = React.useState(false);
+
+  // Get appId from URL query parameters
+  const [appId, setAppId] = React.useState<string>("");
+
+  React.useEffect(() => {
+    if (typeof window !== "undefined") {
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlAppId = urlParams.get("appId");
+      if (urlAppId) {
+        setAppId(urlAppId);
+      }
+    }
+  }, []);
 
   const renderGeneralProperties = () => {
     const isDisabled = !selectedElement;
@@ -1028,7 +1064,9 @@ export function PropertiesPanel({
                   selectedElement.type === "textarea" ||
                   selectedElement.type === "button" ||
                   selectedElement.type === "rectangle" ||
-                  selectedElement.type === "circle") && (
+                  selectedElement.type === "circle" ||
+                  selectedElement.type === "TEXT_DISPLAY" ||
+                  selectedElement.type === "text_display") && (
                   <div>
                     <Label>Background Color</Label>
                     <div className="flex gap-2">
@@ -1060,7 +1098,9 @@ export function PropertiesPanel({
 
                 {(selectedElement.type === "textfield" ||
                   selectedElement.type === "textarea" ||
-                  selectedElement.type === "button") && (
+                  selectedElement.type === "button" ||
+                  selectedElement.type === "TEXT_DISPLAY" ||
+                  selectedElement.type === "text_display") && (
                   <div>
                     <Label>Text Color</Label>
                     <div className="flex gap-2">
@@ -1089,6 +1129,8 @@ export function PropertiesPanel({
                   selectedElement.type === "button" ||
                   selectedElement.type === "TEXT_FIELD" ||
                   selectedElement.type === "text" ||
+                  selectedElement.type === "TEXT_DISPLAY" ||
+                  selectedElement.type === "text_display" ||
                   (selectedElement.type === "SHAPE" &&
                     selectedElement.properties.text !== undefined)) && (
                   <>
@@ -1336,6 +1378,256 @@ export function PropertiesPanel({
                         >
                           <AlignRight className="w-3 h-3" />
                         </Button>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {/* TEXT_DISPLAY Additional Style Properties */}
+                {(selectedElement.type === "TEXT_DISPLAY" ||
+                  selectedElement.type === "text_display") && (
+                  <>
+                    {/* Text Transform */}
+                    <div>
+                      <Label>Text Transform</Label>
+                      <Select
+                        value={
+                          selectedElement.properties.textTransform || "none"
+                        }
+                        onValueChange={(value) =>
+                          onUpdateElement("textTransform", value)
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">None</SelectItem>
+                          <SelectItem value="uppercase">UPPERCASE</SelectItem>
+                          <SelectItem value="lowercase">lowercase</SelectItem>
+                          <SelectItem value="capitalize">Capitalize</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Word Spacing */}
+                    <div>
+                      <Label>Word Spacing (px)</Label>
+                      <Input
+                        type="number"
+                        value={selectedElement.properties.wordSpacing || 0}
+                        onChange={(e) =>
+                          onUpdateElement(
+                            "wordSpacing",
+                            Number.parseFloat(e.target.value) || 0
+                          )
+                        }
+                        min={-5}
+                        max={10}
+                        step={0.1}
+                      />
+                    </div>
+
+                    {/* Border Width */}
+                    <div>
+                      <Label>Border Width (px)</Label>
+                      <Input
+                        type="number"
+                        value={selectedElement.properties.borderWidth || 0}
+                        onChange={(e) =>
+                          onUpdateElement(
+                            "borderWidth",
+                            Number.parseInt(e.target.value) || 0
+                          )
+                        }
+                        min={0}
+                        max={20}
+                      />
+                    </div>
+
+                    {/* Border Color */}
+                    <div>
+                      <Label>Border Color</Label>
+                      <div className="flex gap-2">
+                        <Input
+                          type="color"
+                          value={
+                            selectedElement.properties.borderColor || "#d1d5db"
+                          }
+                          onChange={(e) =>
+                            onUpdateElement("borderColor", e.target.value)
+                          }
+                          className="w-16 h-10 p-1 border rounded"
+                        />
+                        <Input
+                          type="text"
+                          value={
+                            selectedElement.properties.borderColor || "#d1d5db"
+                          }
+                          onChange={(e) =>
+                            onUpdateElement("borderColor", e.target.value)
+                          }
+                          className="flex-1"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Border Style */}
+                    <div>
+                      <Label>Border Style</Label>
+                      <Select
+                        value={
+                          selectedElement.properties.borderStyle || "solid"
+                        }
+                        onValueChange={(value) =>
+                          onUpdateElement("borderStyle", value)
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="solid">Solid</SelectItem>
+                          <SelectItem value="dashed">Dashed</SelectItem>
+                          <SelectItem value="dotted">Dotted</SelectItem>
+                          <SelectItem value="double">Double</SelectItem>
+                          <SelectItem value="none">None</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Border Radius */}
+                    <div>
+                      <Label>Border Radius (px)</Label>
+                      <Input
+                        type="number"
+                        value={selectedElement.properties.borderRadius || 0}
+                        onChange={(e) =>
+                          onUpdateElement(
+                            "borderRadius",
+                            Number.parseInt(e.target.value) || 0
+                          )
+                        }
+                        min={0}
+                        max={50}
+                      />
+                    </div>
+
+                    {/* Padding */}
+                    <div>
+                      <Label>Padding (px)</Label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input
+                          type="number"
+                          placeholder="Top"
+                          value={selectedElement.properties.paddingTop || 0}
+                          onChange={(e) =>
+                            onUpdateElement(
+                              "paddingTop",
+                              Number.parseInt(e.target.value) || 0
+                            )
+                          }
+                          min={0}
+                          max={100}
+                        />
+                        <Input
+                          type="number"
+                          placeholder="Right"
+                          value={selectedElement.properties.paddingRight || 0}
+                          onChange={(e) =>
+                            onUpdateElement(
+                              "paddingRight",
+                              Number.parseInt(e.target.value) || 0
+                            )
+                          }
+                          min={0}
+                          max={100}
+                        />
+                        <Input
+                          type="number"
+                          placeholder="Bottom"
+                          value={selectedElement.properties.paddingBottom || 0}
+                          onChange={(e) =>
+                            onUpdateElement(
+                              "paddingBottom",
+                              Number.parseInt(e.target.value) || 0
+                            )
+                          }
+                          min={0}
+                          max={100}
+                        />
+                        <Input
+                          type="number"
+                          placeholder="Left"
+                          value={selectedElement.properties.paddingLeft || 0}
+                          onChange={(e) =>
+                            onUpdateElement(
+                              "paddingLeft",
+                              Number.parseInt(e.target.value) || 0
+                            )
+                          }
+                          min={0}
+                          max={100}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Margin */}
+                    <div>
+                      <Label>Margin (px)</Label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input
+                          type="number"
+                          placeholder="Top"
+                          value={selectedElement.properties.marginTop || 0}
+                          onChange={(e) =>
+                            onUpdateElement(
+                              "marginTop",
+                              Number.parseInt(e.target.value) || 0
+                            )
+                          }
+                          min={0}
+                          max={100}
+                        />
+                        <Input
+                          type="number"
+                          placeholder="Right"
+                          value={selectedElement.properties.marginRight || 0}
+                          onChange={(e) =>
+                            onUpdateElement(
+                              "marginRight",
+                              Number.parseInt(e.target.value) || 0
+                            )
+                          }
+                          min={0}
+                          max={100}
+                        />
+                        <Input
+                          type="number"
+                          placeholder="Bottom"
+                          value={selectedElement.properties.marginBottom || 0}
+                          onChange={(e) =>
+                            onUpdateElement(
+                              "marginBottom",
+                              Number.parseInt(e.target.value) || 0
+                            )
+                          }
+                          min={0}
+                          max={100}
+                        />
+                        <Input
+                          type="number"
+                          placeholder="Left"
+                          value={selectedElement.properties.marginLeft || 0}
+                          onChange={(e) =>
+                            onUpdateElement(
+                              "marginLeft",
+                              Number.parseInt(e.target.value) || 0
+                            )
+                          }
+                          min={0}
+                          max={100}
+                        />
                       </div>
                     </div>
                   </>
@@ -3029,13 +3321,25 @@ export function PropertiesPanel({
                           </div>
                         </div>
                       </div>
+
+                      {/* Visual Builder Button */}
+                      <Button
+                        onClick={() => setShowBindingBuilder(true)}
+                        variant="outline"
+                        className="w-full mb-2"
+                        type="button"
+                      >
+                        <Wand2 className="w-4 h-4 mr-2" />
+                        Open Visual Binding Builder
+                      </Button>
+
                       <Input
                         type="text"
                         value={selectedElement.properties.bindingPath || ""}
                         onChange={(e) =>
                           onUpdateElement("bindingPath", e.target.value)
                         }
-                        placeholder="Example: dbFindResult[0].name"
+                        placeholder="Example: dbFindResult[0].name or {{dbFindResult[0].name}}"
                         className={
                           selectedElement.properties.bindingPath &&
                           !isValidBindingPath(
@@ -3046,7 +3350,7 @@ export function PropertiesPanel({
                         }
                       />
                       <p className="text-xs text-gray-500 dark:text-gray-400">
-                        Enter the path to your data.{" "}
+                        Use the visual builder above or enter the path manually.{" "}
                         <button
                           type="button"
                           onClick={() => setShowExamplesModal(true)}
@@ -3264,6 +3568,20 @@ export function PropertiesPanel({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Data Binding Builder Modal */}
+      {showBindingBuilder && selectedElement && appId && (
+        <DataBindingBuilder
+          appId={appId}
+          elementId={selectedElement.id}
+          currentBindingPath={selectedElement.properties?.bindingPath || ""}
+          onSave={(bindingPath) => {
+            onUpdateElement("bindingPath", bindingPath);
+            setShowBindingBuilder(false);
+          }}
+          onCancel={() => setShowBindingBuilder(false)}
+        />
       )}
     </>
   );
