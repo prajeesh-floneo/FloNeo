@@ -5,6 +5,16 @@ import { CanvasElement } from "./ElementManager";
 import { useCanvasWorkflow } from "@/lib/canvas-workflow-context";
 import { toRuntimeStyle, logElementRender } from "@/runtime/styleMap";
 import { ChartElement } from "./ChartElement";
+import {
+  Minimize,
+  Maximize,
+  X,
+  Settings,
+  RefreshCw,
+  Info,
+  HelpCircle,
+  Search,
+} from "lucide-react";
 
 export interface CanvasRendererProps {
   elements: CanvasElement[];
@@ -28,6 +38,19 @@ export interface CanvasRendererProps {
   // Callback to get current form values
   onGetFormValues?: (callback: (values: Record<string, any>) => void) => void;
 }
+
+// Icon mapping
+const iconMap: Record<string, React.ComponentType<any>> = {
+  minimize: Minimize,
+  maximize: Maximize,
+  close: X,
+  settings: Settings,
+  refresh: RefreshCw,
+  info: Info,
+  help: HelpCircle,
+  search: Search,
+};
+
 export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
   elements,
   selectedElement = null,
@@ -65,6 +88,43 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
       (window as any).__canvasFormValues = values;
     }
   }, [values, mode]);
+
+  // Helper function to render icons
+  function renderIcon(
+    iconType: string,
+    size: number = 24,
+    color: string = "#000000",
+    strokeWidth: number = 2
+  ) {
+    // Extract the icon name from types like "icon-close", "ICON_CLOSE", etc.
+    const iconName = iconType
+      .toLowerCase()
+      .replace("icon-", "")
+      .replace("icon_", "");
+
+    const IconComponent = iconMap[iconName];
+
+    if (!IconComponent) {
+      // Fallback for unknown icons
+      return (
+        <div
+          style={{
+            fontSize: size * 0.7,
+            color,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          ?
+        </div>
+      );
+    }
+
+    return (
+      <IconComponent size={size} color={color} strokeWidth={strokeWidth} />
+    );
+  }
 
   // Phase 7: Logging for parity verification
   React.useEffect(() => {
@@ -602,6 +662,12 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
       case "CHART_LINE":
       case "CHART_PIE":
       case "CHART_DONUT":
+      case "KPI_CARD":
+      case "kpi-card":
+      case "TABLE":
+      case "table":
+      case "MATRIX_CHART":
+      case "matrix-chart":
         return (
           <div
             key={element.id}
@@ -618,6 +684,218 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             />
           </div>
         );
+      case "triangle":
+      case "TRIANGLE": {
+        const triangleStrokeColor =
+          element.properties?.borderColor || "transparent";
+        const triangleStrokeWidth = element.properties?.borderWidth || 0;
+        return (
+          <svg
+            key={element.id}
+            width="100%"
+            height="100%"
+            viewBox={`0 0 ${element.width} ${element.height}`}
+            style={{
+              ...interactiveStyle,
+              background: "transparent", // Critical: no background on SVG
+              border: "none", // Critical: no border on SVG
+            }}
+            {...dropProps}
+            onClick={mode === "preview" ? undefined : handleClick}
+            onDoubleClick={isInPreviewMode ? undefined : handleDoubleClick}
+            onMouseDown={isInPreviewMode ? undefined : handleMouseDown}
+          >
+            <polygon
+              points={`${element.width / 2},0 0,${element.height} ${
+                element.width
+              },${element.height}`}
+              fill={element.properties?.backgroundColor || "#ffffff"}
+              stroke={triangleStrokeWidth > 0 ? triangleStrokeColor : "none"}
+              strokeWidth={triangleStrokeWidth}
+              strokeLinejoin="round"
+            />
+          </svg>
+        );
+      }
+
+      case "star":
+      case "STAR": {
+        const starStrokeColor =
+          element.properties?.borderColor || "transparent";
+        const starStrokeWidth = element.properties?.borderWidth || 0;
+        return (
+          <svg
+            key={element.id}
+            width="100%"
+            height="100%"
+            viewBox="0 0 24 24"
+            style={{
+              ...interactiveStyle,
+              background: "transparent",
+              border: "none",
+            }}
+            {...dropProps}
+            onClick={mode === "preview" ? undefined : handleClick}
+            onDoubleClick={isInPreviewMode ? undefined : handleDoubleClick}
+            onMouseDown={isInPreviewMode ? undefined : handleMouseDown}
+          >
+            <path
+              d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"
+              fill={element.properties?.backgroundColor || "#fbbf24"}
+              stroke={starStrokeWidth > 0 ? starStrokeColor : "none"}
+              strokeWidth={starStrokeWidth}
+              strokeLinejoin="round"
+            />
+          </svg>
+        );
+      }
+
+      case "heart":
+      case "HEART": {
+        const heartStrokeColor =
+          element.properties?.borderColor || "transparent";
+        const heartStrokeWidth = element.properties?.borderWidth || 0;
+        return (
+          <svg
+            key={element.id}
+            width="100%"
+            height="100%"
+            viewBox="0 0 24 24"
+            style={{
+              ...interactiveStyle,
+              background: "transparent",
+              border: "none",
+            }}
+            {...dropProps}
+            onClick={mode === "preview" ? undefined : handleClick}
+            onDoubleClick={isInPreviewMode ? undefined : handleDoubleClick}
+            onMouseDown={isInPreviewMode ? undefined : handleMouseDown}
+          >
+            <path
+              d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
+              fill={element.properties?.backgroundColor || "#ef4444"}
+              stroke={heartStrokeWidth > 0 ? heartStrokeColor : "none"}
+              strokeWidth={heartStrokeWidth}
+              strokeLinejoin="round"
+            />
+          </svg>
+        );
+      }
+      case "circle":
+      case "CIRCLE":
+        return (
+          <div
+            key={element.id}
+            style={{
+              ...interactiveStyle,
+              borderRadius: "50%",
+              backgroundColor: element.properties?.backgroundColor || "#ffffff",
+              border: element.properties?.borderWidth
+                ? `${element.properties.borderWidth}px solid ${
+                    element.properties.borderColor || "#d1d5db"
+                  }`
+                : "none",
+            }}
+            className="w-full h-full"
+            {...dropProps}
+            onClick={mode === "preview" ? undefined : handleClick}
+            onDoubleClick={isInPreviewMode ? undefined : handleDoubleClick}
+            onMouseDown={isInPreviewMode ? undefined : handleMouseDown}
+          />
+        );
+      case "arrow":
+      case "ARROW": {
+        const arrowStrokeWidth = element.properties?.strokeWidth || 2;
+        const arrowStrokeColor = element.properties?.strokeColor || "#1f2937";
+        const arrowStrokeStyle = element.properties?.strokeStyle || "solid";
+        const arrowOpacity = element.properties?.strokeOpacity || 1;
+        const arrowHeadSize = element.properties?.arrowHeadSize || 8;
+
+        return (
+          <div
+            key={element.id}
+            className="flex items-center w-full h-full"
+            style={{
+              ...interactiveStyle,
+              opacity: arrowOpacity,
+            }}
+            {...dropProps}
+            onClick={mode === "preview" ? undefined : handleClick}
+            onDoubleClick={isInPreviewMode ? undefined : handleDoubleClick}
+            onMouseDown={isInPreviewMode ? undefined : handleMouseDown}
+          >
+            <div
+              style={{
+                flex: 1,
+                height: `${arrowStrokeWidth}px`,
+                backgroundColor:
+                  arrowStrokeStyle === "solid"
+                    ? arrowStrokeColor
+                    : "transparent",
+                borderStyle:
+                  arrowStrokeStyle === "dashed"
+                    ? "dashed"
+                    : arrowStrokeStyle === "dotted"
+                    ? "dotted"
+                    : "solid",
+                borderWidth:
+                  arrowStrokeStyle !== "solid"
+                    ? `${arrowStrokeWidth}px 0 0 0`
+                    : "0",
+                borderColor:
+                  arrowStrokeStyle !== "solid"
+                    ? arrowStrokeColor
+                    : "transparent",
+              }}
+            />
+            <div
+              style={{
+                width: 0,
+                height: 0,
+                borderLeft: `${arrowHeadSize}px solid ${arrowStrokeColor}`,
+                borderTop: `${arrowHeadSize / 2}px solid transparent`,
+                borderBottom: `${arrowHeadSize / 2}px solid transparent`,
+              }}
+            />
+          </div>
+        );
+      }
+      case "line":
+      case "LINE": {
+        const lineStrokeColor =
+          element.properties?.borderColor ||
+          element.properties?.backgroundColor ||
+          "#000000";
+        const lineStrokeWidth = element.properties?.borderWidth || 2;
+        return (
+          <svg
+            key={element.id}
+            width="100%"
+            height="100%"
+            viewBox={`0 0 ${element.width} ${element.height}`}
+            style={{
+              ...interactiveStyle,
+              background: "transparent",
+              border: "none",
+            }}
+            {...dropProps}
+            onClick={mode === "preview" ? undefined : handleClick}
+            onDoubleClick={isInPreviewMode ? undefined : handleDoubleClick}
+            onMouseDown={isInPreviewMode ? undefined : handleMouseDown}
+          >
+            <line
+              x1="0"
+              y1={element.height / 2}
+              x2={element.width}
+              y2={element.height / 2}
+              stroke={lineStrokeColor}
+              strokeWidth={lineStrokeWidth}
+              strokeLinecap="round"
+            />
+          </svg>
+        );
+      }
+
       case "RADIO_BUTTON":
         return (
           <label
@@ -1106,6 +1384,47 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             }}
           />
         );
+
+      // Add these cases in your switch statement
+      case "icon-minimize":
+      case "icon-maximize":
+      case "icon-close":
+      case "icon-settings":
+      case "icon-refresh":
+      case "icon-info":
+      case "icon-help":
+      case "icon-search":
+      case "ICON_MINIMIZE":
+      case "ICON_MAXIMIZE":
+      case "ICON_CLOSE":
+      case "ICON_SETTINGS":
+      case "ICON_REFRESH":
+      case "ICON_INFO":
+      case "ICON_HELP":
+      case "ICON_SEARCH": {
+        const iconSize = Math.min(element.width, element.height) * 0.6;
+        const iconColor = element.properties?.color || "#000000";
+        const strokeWidth = element.properties?.strokeWidth || 2;
+
+        return (
+          <div
+            key={element.id}
+            style={{
+              ...interactiveStyle,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: mode === "preview" ? "pointer" : "default",
+            }}
+            {...dropProps}
+            onClick={mode === "preview" ? undefined : handleClick}
+            onDoubleClick={isInPreviewMode ? undefined : handleDoubleClick}
+            onMouseDown={isInPreviewMode ? undefined : handleMouseDown}
+          >
+            {renderIcon(element.type, iconSize, iconColor, strokeWidth)}
+          </div>
+        );
+      }
     }
   };
 

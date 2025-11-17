@@ -60,7 +60,7 @@ import {
 import { ThemeToggle } from "@/components/theme-toggle";
 import { PublishModal } from "@/components/publish-modal";
 import DatabaseTab from "@/components/canvas/database-tab";
-import  ChartElement  from "@/components/canvas/ChartElement";
+import ChartElement from "@/components/canvas/ChartElement";
 
 interface CanvasElement {
   id: string;
@@ -127,7 +127,7 @@ function CanvasPageContent() {
   const router = useRouter();
   const nextRouter = useNextRouter();
   const searchParams = useSearchParams();
-  const pathname = usePathname(); 
+  const pathname = usePathname();
   const { toast } = useToast();
   const {
     selectedElementId,
@@ -353,6 +353,9 @@ function CanvasPageContent() {
       CHART_LINE: "chart-line",
       CHART_PIE: "chart-pie",
       CHART_DONUT: "chart-donut",
+      CHART_KPI_CARD: "kpi-card",
+      TABLE: "table",
+      MATRIX_CHART: "matrix-chart",
     };
     return typeMap[backendType] || "rectangle";
   };
@@ -3355,6 +3358,9 @@ function CanvasPageContent() {
       "chart-line": { width: 360, height: 240 },
       "chart-pie": { width: 320, height: 240 },
       "chart-donut": { width: 320, height: 240 },
+      "kpi-card": { width: 280, height: 160 },
+      "table": { width: 400, height: 300 },
+      "matrix-chart": { width: 400, height: 300 },
     };
     return sizes[elementType] || { width: 100, height: 100 };
   };
@@ -3559,6 +3565,61 @@ function CanvasPageContent() {
           { plan: "Pro", value: 22 },
           { plan: "Enterprise", value: 13 },
         ],
+      },
+      "kpi-card": {
+        title: "Revenue",
+        description: "Monthly performance",
+        kpiData: {
+          label: "Total Revenue",
+          value: "$45,231",
+          unit: "",
+          trend: 12.5,
+          target: 50000,
+          description: "vs last month",
+        },
+      },
+      "table": {
+        title: "Sales Report",
+        description: "Recent transactions",
+        columns: [
+          { key: "id", label: "ID", align: "left" },
+          { key: "product", label: "Product", align: "left" },
+          { key: "quantity", label: "Qty", align: "center" },
+          { key: "amount", label: "Amount", align: "right" },
+        ],
+        data: [
+          { id: "001", product: "Laptop", quantity: 2, amount: "$2,400" },
+          { id: "002", product: "Mouse", quantity: 5, amount: "$125" },
+          { id: "003", product: "Keyboard", quantity: 3, amount: "$210" },
+          { id: "004", product: "Monitor", quantity: 1, amount: "$450" },
+        ],
+        showHeader: true,
+        striped: true,
+      },
+      "matrix-chart": {
+        title: "Performance Matrix",
+        description: "Cross-category analysis",
+        matrixRows: ["Q1", "Q2", "Q3", "Q4"],
+        matrixCols: ["Sales", "Marketing", "Support", "Dev"],
+        data: [
+          { row: "Q1", col: "Sales", value: 85 },
+          { row: "Q1", col: "Marketing", value: 72 },
+          { row: "Q1", col: "Support", value: 68 },
+          { row: "Q1", col: "Dev", value: 90 },
+          { row: "Q2", col: "Sales", value: 78 },
+          { row: "Q2", col: "Marketing", value: 88 },
+          { row: "Q2", col: "Support", value: 75 },
+          { row: "Q2", col: "Dev", value: 82 },
+          { row: "Q3", col: "Sales", value: 92 },
+          { row: "Q3", col: "Marketing", value: 80 },
+          { row: "Q3", col: "Support", value: 85 },
+          { row: "Q3", col: "Dev", value: 88 },
+          { row: "Q4", col: "Sales", value: 88 },
+          { row: "Q4", col: "Marketing", value: 95 },
+          { row: "Q4", col: "Support", value: 90 },
+          { row: "Q4", col: "Dev", value: 93 },
+        ],
+        cellColors: ["#fee2e2", "#fef3c7", "#dcfce7", "#d1fae5", "#86efac"],
       },
     };
     return defaults[elementType] || {};
@@ -4600,6 +4661,9 @@ function CanvasPageContent() {
         case "chart-line":
         case "chart-pie":
         case "chart-donut":
+        case "kpi-card":
+        case "table":
+        case "matrix-chart":
           return (
             <ChartElement
               type={element.type}
@@ -5392,6 +5456,22 @@ function CanvasPageContent() {
             </div>
           );
         }
+
+        case "chart-bar":
+        case "chart-line":
+        case "chart-pie":
+        case "chart-donut":
+        case "kpi-card":
+        case "table":
+        case "matrix-chart":
+          return (
+            <ChartElement
+              type={element.type}
+              properties={element.properties}
+              showHeader={element.properties?.showHeader ?? true}
+            />
+          );
+
         case "frame":
           return (
             <div
@@ -5735,7 +5815,6 @@ function CanvasPageContent() {
   return (
     <div className="h-full w-full flex flex-col bg-gray-50 dark:bg-gray-900">
       {/* Header */}
-      
 
       <div className="absolute bottom-4 left-4 z-10 bg-black bg-opacity-90 text-white text-xs p-4 rounded-lg opacity-0 hover:opacity-100 transition-opacity pointer-events-none max-w-md">
         <div className="grid grid-cols-2 gap-2 text-xs">
@@ -5973,8 +6052,10 @@ function CanvasPageContent() {
                   {/* View Options */}
                   <div className="flex items-center space-x-1">
                     <Button
-                      disabled={isSplitScreenMode} 
-                      className={isSplitScreenMode?"cursor-not-allowed opacity-50":""}
+                      disabled={isSplitScreenMode}
+                      className={
+                        isSplitScreenMode ? "cursor-not-allowed opacity-50" : ""
+                      }
                       size="sm"
                       variant={isLeftPanelHidden ? "default" : "outline"}
                       title="Hide Elements Panel"
@@ -5992,8 +6073,10 @@ function CanvasPageContent() {
                       />
                     </Button>
                     <Button
-                      disabled={isSplitScreenMode} 
-                      className={isSplitScreenMode?"cursor-not-allowed opacity-50":""}
+                      disabled={isSplitScreenMode}
+                      className={
+                        isSplitScreenMode ? "cursor-not-allowed opacity-50" : ""
+                      }
                       size="sm"
                       variant={isRightPanelHidden ? "default" : "outline"}
                       title="Hide Properties Panel"
