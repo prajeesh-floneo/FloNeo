@@ -30,6 +30,7 @@ import {
   Check,
   Sparkles,
   CheckSquare,
+  FileCheck,
 } from "lucide-react";
 import {
   Dialog,
@@ -444,6 +445,7 @@ const getBlockIcon = (label: string) => {
     "http.request": Globe,
     "page.redirect": ArrowRight,
     "ai.summarize": Sparkles,
+    "audit.log": FileCheck,
   };
 
   return iconMap[label] || Settings;
@@ -550,6 +552,9 @@ const isBlockConfigured = (data: WorkflowNodeData): boolean => {
 
     case "ai.summarize":
       return !!(data.fileVariable && data.apiKey);
+
+    case "audit.log":
+      return true; // Always configured - optional filters
 
     default:
       return false;
@@ -772,6 +777,15 @@ export interface WorkflowNodeData {
   fileVariable?: string;
   apiKey?: string;
   outputVariable?: string;
+
+  // audit.log configuration properties
+  logLimit?: number;
+  logFilter?: "all" | "app" | "user" | "action";
+  logAction?: string;
+  logUserId?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  outputFormat?: "formatted" | "raw" | "json";
 
   // roleIs configuration properties
   checkMultiple?: boolean;
@@ -4569,6 +4583,238 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
                   <li>• Returns concise summary in output variable</li>
                   <li>• Supports files up to 50MB</li>
                 </ul>
+              </div>
+            </div>
+          </div>
+        );
+
+      case "audit.log":
+        return (
+          <div className="space-y-4">
+            {/* Info Box */}
+            <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+              <div className="text-sm text-blue-900 dark:text-blue-100">
+                <div className="font-medium mb-2">📋 Audit Log Block</div>
+                <div className="text-xs text-blue-700 dark:text-blue-300">
+                  Retrieves audit logs from the system. Use a Text Display
+                  element with binding path{" "}
+                  <code className="bg-blue-100 dark:bg-blue-800 px-1 rounded">
+                    {`{{context.auditLogsFormatted}}`}
+                  </code>{" "}
+                  to display the logs.
+                </div>
+              </div>
+            </div>
+
+            {/* Log Limit */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Max Logs to Retrieve:</label>
+              <input
+                type="number"
+                min="1"
+                max="1000"
+                placeholder="100"
+                value={data.logLimit || 100}
+                onChange={(e) => {
+                  const value = parseInt(e.target.value) || 100;
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: { ...node.data, logLimit: value },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <div className="text-xs text-muted-foreground">
+                Maximum number of log entries to retrieve (1-1000)
+              </div>
+            </div>
+
+            {/* Filter Type */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Filter Type:</label>
+              <select
+                value={data.logFilter || "all"}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: { ...node.data, logFilter: value },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="all">All logs</option>
+                <option value="app">This app only</option>
+                <option value="user">Specific user</option>
+                <option value="action">Specific action</option>
+              </select>
+            </div>
+
+            {/* Action Filter (if filter type is "action") */}
+            {data.logFilter === "action" && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Action Name:</label>
+                <input
+                  type="text"
+                  placeholder="e.g., FETCH_QUOTE, UPDATE_STATUS"
+                  value={data.logAction || ""}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setNodes((nodes) =>
+                      nodes.map((node) =>
+                        node.id === id
+                          ? {
+                              ...node,
+                              data: { ...node.data, logAction: value },
+                            }
+                          : node
+                      )
+                    );
+                  }}
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            )}
+
+            {/* User Filter (if filter type is "user") */}
+            {data.logFilter === "user" && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">User ID:</label>
+                <input
+                  type="text"
+                  placeholder="e.g., 123 or {{context.userId}}"
+                  value={data.logUserId || ""}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setNodes((nodes) =>
+                      nodes.map((node) =>
+                        node.id === id
+                          ? {
+                              ...node,
+                              data: { ...node.data, logUserId: value },
+                            }
+                          : node
+                      )
+                    );
+                  }}
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                />
+                <div className="text-xs text-muted-foreground">
+                  Use {`{{context.userId}}`} for dynamic user ID
+                </div>
+              </div>
+            )}
+
+            {/* Date Range Filters */}
+            <div className="space-y-3">
+              <label className="text-sm font-medium">Date Range (Optional):</label>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">From:</label>
+                  <input
+                    type="date"
+                    value={data.dateFrom || ""}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setNodes((nodes) =>
+                        nodes.map((node) =>
+                          node.id === id
+                            ? {
+                                ...node,
+                                data: { ...node.data, dateFrom: value },
+                              }
+                            : node
+                        )
+                      );
+                    }}
+                    className="w-full px-2 py-1 text-sm border rounded-md bg-background"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">To:</label>
+                  <input
+                    type="date"
+                    value={data.dateTo || ""}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setNodes((nodes) =>
+                        nodes.map((node) =>
+                          node.id === id
+                            ? {
+                                ...node,
+                                data: { ...node.data, dateTo: value },
+                              }
+                            : node
+                        )
+                      );
+                    }}
+                    className="w-full px-2 py-1 text-sm border rounded-md bg-background"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Output Format */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Output Format:</label>
+              <select
+                value={data.outputFormat || "formatted"}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: { ...node.data, outputFormat: value },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="formatted">Formatted (human-readable)</option>
+                <option value="raw">Raw (original log lines)</option>
+                <option value="json">JSON (structured data)</option>
+              </select>
+              <div className="text-xs text-muted-foreground">
+                Choose how logs are formatted in the output
+              </div>
+            </div>
+
+            {/* Usage Instructions */}
+            <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
+              <div className="text-sm text-green-900 dark:text-green-100">
+                <div className="font-medium mb-2">💡 How to Display Logs:</div>
+                <ol className="list-decimal list-inside space-y-1 text-xs text-green-700 dark:text-green-300">
+                  <li>Add a Text Display element to your canvas</li>
+                  <li>
+                    Set the binding path to{" "}
+                    <code className="bg-green-100 dark:bg-green-800 px-1 rounded">
+                      {`{{context.auditLogsFormatted}}`}
+                    </code>
+                  </li>
+                  <li>
+                    Connect this audit.log block before the page with the Text
+                    Display
+                  </li>
+                  <li>
+                    Logs will be available in context after this block executes
+                  </li>
+                </ol>
               </div>
             </div>
           </div>

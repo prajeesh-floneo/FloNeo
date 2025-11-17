@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo, Suspense } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { CanvasRenderer } from "@/components/canvas/CanvasRenderer";
 import { CanvasElement } from "@/components/canvas/ElementManager";
@@ -197,6 +197,9 @@ function RunAppContent() {
 
   const appId = searchParams.get("appId") || "1";
   const pageId = searchParams.get("pageId") || "page-1";
+
+  // Track which pages have already triggered onPageLoad to prevent infinite loops
+  const pageLoadExecutedRef = useRef<Set<string>>(new Set());
 
   // Enhanced authentication check
   useEffect(() => {
@@ -1229,6 +1232,8 @@ function RunAppContent() {
           success: result.success,
           hasResults: !!result.results,
           isArray: Array.isArray(result.results),
+          hasContext: !!result.context,
+          contextKeys: result.context ? Object.keys(result.context) : [],
         });
 
         // Update workflow context with results
@@ -1237,11 +1242,23 @@ function RunAppContent() {
           result.results
         );
 
+        // Start with top-level context from backend (this includes auditLogsFormatted, etc.)
+        const newContext: Record<string, any> = {
+          ...workflowContext,
+          ...(result.context || {}),
+        };
+
+        if (result.context) {
+          console.log(
+            "[WF-RUN] Merged top-level context:",
+            Object.keys(result.context)
+          );
+        }
+
         if (result.results && Array.isArray(result.results)) {
           console.log(
             "[WF-RUN] INSIDE context update block - processing results"
           );
-          const newContext: Record<string, any> = { ...workflowContext };
 
           for (const resultItem of result.results) {
             console.log("[WF-RUN] Processing resultItem:", resultItem);
@@ -1258,6 +1275,15 @@ function RunAppContent() {
               success: blockResult.success,
               type: blockResult.type,
             });
+
+            // Merge context from block result (this includes auditLogsFormatted, etc.)
+            if (blockResult.context && typeof blockResult.context === "object") {
+              Object.assign(newContext, blockResult.context);
+              console.log(
+                `[WF-RUN] Merged context from ${nodeLabel}:`,
+                Object.keys(blockResult.context)
+              );
+            }
 
             // Store db.find results in context
             if (blockResult.type === "dbFind" && blockResult.success) {
@@ -1835,7 +1861,7 @@ function RunAppContent() {
     }
   };
 
-  // Trigger onPageLoad workflows when page loads
+  // Trigger onPageLoad workflows when page loads (only once per page)
   useEffect(() => {
     if (!currentPageId || !currentPage || loading) {
       console.log("[PAGE-LOAD] Skipping - page not ready", {
@@ -1844,6 +1870,22 @@ function RunAppContent() {
         loading,
       });
       return;
+    }
+
+    // Check if onPageLoad has already been executed for this page
+    const pageKey = `${currentPageId}-${currentPage.name}`;
+    if (pageLoadExecutedRef.current.has(pageKey)) {
+      console.log(
+        `[PAGE-LOAD] ⏭️ Skipping - onPageLoad already executed for page ${currentPageId}`
+      );
+      return;
+    }
+
+    // Clean up old page keys (keep only last 10 pages to prevent memory leaks)
+    if (pageLoadExecutedRef.current.size > 10) {
+      const keysArray = Array.from(pageLoadExecutedRef.current);
+      const keysToRemove = keysArray.slice(0, keysArray.length - 10);
+      keysToRemove.forEach((key) => pageLoadExecutedRef.current.delete(key));
     }
 
     console.log(
@@ -1865,8 +1907,11 @@ function RunAppContent() {
         `[PAGE-LOAD] ✅ Found ${pageLoadWorkflows.length} onPageLoad workflow(s) for page ${currentPageId}`
       );
 
+      // Mark this page as executed BEFORE running workflows to prevent re-triggering
+      pageLoadExecutedRef.current.add(pageKey);
+
       // Execute each onPageLoad workflow with page context
-  pageLoadWorkflows.forEach((wf: Workflow, index: number) => {
+      pageLoadWorkflows.forEach((wf: Workflow, index: number) => {
         console.log(
           `[PAGE-LOAD] Executing workflow ${index + 1}/${
             pageLoadWorkflows.length
@@ -1885,8 +1930,10 @@ function RunAppContent() {
       console.log(
         `[PAGE-LOAD] ℹ️ No onPageLoad workflows found for page ${currentPageId}`
       );
+      // Mark as executed even if no workflows found to prevent re-checking
+      pageLoadExecutedRef.current.add(pageKey);
     }
-  }, [currentPageId, currentPage, loading, workflowIndex, runWorkflow]);
+  }, [currentPageId, currentPage?.name, loading]); // Removed workflowIndex and runWorkflow from dependencies
 
   // Debug current state
   console.log("🔍 RUN: Render state:", {

@@ -1753,9 +1753,9 @@ const executeDbUpsert = async (node, context, appId, userId) => {
     let existingRecords;
     try {
       existingRecords = await prisma.$queryRawUnsafe(
-        selectQuery,
-        ...selectParams
-      );
+      selectQuery,
+      ...selectParams
+    );
     } catch (error) {
       console.error("❌ [DB-UPSERT] Query error:", error);
       throw new Error(
@@ -1815,7 +1815,7 @@ const executeDbUpsert = async (node, context, appId, userId) => {
             const cleanField = field.replace(/^["']|["']$/g, '');
             return {
               field: cleanField,
-              operator: "=",
+            operator: "=",
               value: processedInsertData[cleanField] || processedUpdateData[cleanField],
             };
           }),
@@ -1878,7 +1878,7 @@ const executeDbUpsert = async (node, context, appId, userId) => {
 
       result = {
         success: true,
-        tableName,
+          tableName,
         recordId: insertedId,
         tableCreated: false,
         columnsInserted: insertColumns.length - 1, // Exclude app_id
@@ -2894,7 +2894,7 @@ const executeAuthVerify = async (node, context, appId, userId) => {
 
     return {
       success: isAuthorized,
-      isAuthenticated: true,
+        isAuthenticated: true,
       isAuthorized,
       failureReason: authVerifyResult.failureReason,
       user: sanitizedUser,
@@ -3477,6 +3477,269 @@ const executeMatch = async (node, context, appId, userId) => {
       success: false,
       error: error.message,
       matches: false,
+      context: context,
+    };
+  }
+};
+
+// audit.log block handler
+const executeAuditLog = async (node, context, appId, userId) => {
+  try {
+    console.log("📋 [AUDIT-LOG] Starting audit log retrieval for app:", appId);
+
+    const hasAccess = await securityValidator.validateAppAccess(
+      appId,
+      userId,
+      prisma
+    );
+    if (!hasAccess) {
+      throw new Error("Access denied to this app");
+    }
+
+    const {
+      logLimit = 100,
+      logFilter = "all", // "all", "app", "user", "action"
+      logAction = "",
+      logUserId = "",
+      dateFrom = "",
+      dateTo = "",
+      outputFormat = "formatted", // "formatted", "raw", "json"
+      logFileName = "audit.log", // Allow custom log file name
+    } = node.data || {};
+
+    // Read audit log file - try multiple possible locations
+    // auth.js uses relative path "server/logs", so we need to check relative to cwd
+    // Also check absolute paths from __dirname
+    const cwd = process.cwd();
+    const possibleLogDirs = [
+      path.resolve(cwd, "server", "logs"),                    // server/logs (relative to cwd)
+      path.resolve(cwd, "server", "server", "logs"),        // server/server/logs (relative to cwd)
+      path.join(__dirname, "..", "logs"),                    // server/logs (from __dirname)
+      path.join(__dirname, "..", "server", "logs"),          // server/server/logs (from __dirname)
+      path.resolve(cwd, "logs"),                             // logs (project root)
+      path.join(__dirname, "..", "..", "logs"),              // logs (from __dirname)
+    ];
+    
+    console.log(`📋 [AUDIT-LOG] Searching for log files. CWD: ${cwd}, __dirname: ${__dirname}`);
+    console.log(`📋 [AUDIT-LOG] Checking directories:`, possibleLogDirs);
+    
+    let logFilePath = null;
+    
+    // First, try to find audit.log
+    for (const logDir of possibleLogDirs) {
+      const testPath = path.join(logDir, logFileName);
+      console.log(`📋 [AUDIT-LOG] Checking: ${testPath} (exists: ${fs.existsSync(testPath)})`);
+      if (fs.existsSync(testPath)) {
+        logFilePath = testPath;
+        console.log(`📋 [AUDIT-LOG] ✅ Found ${logFileName} at: ${logFilePath}`);
+        break;
+      }
+    }
+    
+    // If audit.log not found and we're looking for audit.log, try auth.log
+    if (!logFilePath && logFileName === "audit.log") {
+      console.log(`📋 [AUDIT-LOG] audit.log not found, trying auth.log...`);
+      for (const logDir of possibleLogDirs) {
+        const authLogPath = path.join(logDir, "auth.log");
+        console.log(`📋 [AUDIT-LOG] Checking: ${authLogPath} (exists: ${fs.existsSync(authLogPath)})`);
+        if (fs.existsSync(authLogPath)) {
+          logFilePath = authLogPath;
+          console.log(`📋 [AUDIT-LOG] ✅ Found auth.log at: ${authLogPath} (using as fallback)`);
+          break;
+        }
+      }
+    }
+
+    if (!fs.existsSync(logFilePath)) {
+      console.log("📋 [AUDIT-LOG] Audit log file does not exist yet");
+      return {
+        success: true,
+        logs: [],
+        logCount: 0,
+        message: "No audit logs found",
+        context: {
+          ...context,
+          auditLogs: [],
+          auditLogCount: 0,
+        },
+      };
+    }
+
+    // Read and parse log file
+    const logContent = fs.readFileSync(logFilePath, "utf-8");
+    const logLines = logContent
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .reverse(); // Most recent first
+
+    console.log(`📋 [AUDIT-LOG] Reading from: ${logFilePath}`);
+    console.log(`📋 [AUDIT-LOG] Found ${logLines.length} log lines`);
+
+    // Parse log entries
+    const parsedLogs = [];
+    const isAuthLog = logFilePath.includes("auth.log");
+    
+    for (const line of logLines) {
+      try {
+        const logEntry = {
+          raw: line,
+        };
+
+        if (isAuthLog) {
+          // Parse auth.log format: "2025-11-04T11:30:39.876Z: Login success for demo@example.com"
+          // Find the first colon after the ISO timestamp (which ends with Z)
+          const timestampEnd = line.indexOf("Z:");
+          if (timestampEnd === -1) {
+            // Fallback: try to find first colon after a space (for non-ISO formats)
+            const firstColon = line.indexOf(":");
+            if (firstColon === -1) continue;
+            logEntry.timestamp = line.substring(0, firstColon).trim();
+            const message = line.substring(firstColon + 1).trim();
+          } else {
+            logEntry.timestamp = line.substring(0, timestampEnd + 1).trim();
+            const message = line.substring(timestampEnd + 2).trim();
+          }
+          
+          // Extract action and details from message
+          if (message.includes("Login success")) {
+            logEntry.action = "LOGIN_SUCCESS";
+            const emailMatch = message.match(/for\s+([^\s]+)/);
+            if (emailMatch) logEntry.userId = emailMatch[1];
+          } else if (message.includes("Logout")) {
+            logEntry.action = "LOGOUT";
+            const userIdMatch = message.match(/userId:\s*(\d+)/);
+            if (userIdMatch) logEntry.userId = userIdMatch[1];
+          } else {
+            logEntry.action = message.split(" ")[0] || "UNKNOWN";
+          }
+          
+          logEntry.message = message;
+          
+          // Ensure timestamp is valid ISO format
+          if (!logEntry.timestamp.endsWith("Z") && !logEntry.timestamp.includes("T")) {
+            // Try to parse as date and convert to ISO
+            try {
+              const date = new Date(logEntry.timestamp);
+              if (!isNaN(date.getTime())) {
+                logEntry.timestamp = date.toISOString();
+              }
+            } catch (e) {
+              // Keep original timestamp if parsing fails
+            }
+          }
+        } else {
+          // Parse audit.log format: "timestamp: ACTION app:appId record:recordId user:userId status:status"
+          const parts = line.split(":");
+          if (parts.length < 2) continue;
+
+          logEntry.timestamp = parts[0].trim();
+          const rest = parts.slice(1).join(":").trim();
+
+          // Extract fields from rest of the line
+          const kvPairs = rest.split(/\s+/);
+          for (const pair of kvPairs) {
+            if (pair.includes("app:")) {
+              logEntry.appId = pair.split("app:")[1];
+            } else if (pair.includes("record:")) {
+              logEntry.recordId = pair.split("record:")[1];
+            } else if (pair.includes("user:")) {
+              logEntry.userId = pair.split("user:")[1];
+            } else if (pair.includes("status:")) {
+              logEntry.status = pair.split("status:")[1];
+            } else if (!logEntry.action) {
+              logEntry.action = pair;
+            }
+          }
+        }
+
+        // Apply filters
+        let include = true;
+
+        if (logFilter === "app" && logEntry.appId !== String(appId)) {
+          include = false;
+        }
+        if (logAction && logEntry.action !== logAction) {
+          include = false;
+        }
+        if (logUserId && logEntry.userId !== logUserId) {
+          include = false;
+        }
+        if (dateFrom || dateTo) {
+          try {
+            const logDate = new Date(timestamp);
+            if (dateFrom && logDate < new Date(dateFrom)) {
+              include = false;
+            }
+            if (dateTo && logDate > new Date(dateTo)) {
+              include = false;
+            }
+          } catch (e) {
+            // Skip date filtering if parsing fails
+          }
+        }
+
+        if (include) {
+          parsedLogs.push(logEntry);
+        }
+      } catch (parseError) {
+        // Skip malformed lines
+        console.warn("⚠️ [AUDIT-LOG] Failed to parse log line:", line);
+      }
+    }
+
+    // Apply limit
+    const limitedLogs = parsedLogs.slice(0, parseInt(logLimit) || 100);
+
+    // Format output based on format option
+    let formattedOutput = "";
+    if (outputFormat === "formatted") {
+      formattedOutput = limitedLogs
+        .map((log) => {
+          try {
+            const date = new Date(log.timestamp).toLocaleString();
+            if (isAuthLog) {
+              return `[${date}] ${log.action || "UNKNOWN"} | ${log.message || log.raw}`;
+            } else {
+              return `[${date}] ${log.action || "UNKNOWN"} | App: ${log.appId || "N/A"} | Record: ${log.recordId || "N/A"} | User: ${log.userId || "N/A"} | Status: ${log.status || "N/A"}`;
+            }
+          } catch (e) {
+            return log.raw;
+          }
+        })
+        .join("\n");
+    } else if (outputFormat === "json") {
+      formattedOutput = JSON.stringify(limitedLogs, null, 2);
+    } else {
+      // raw format
+      formattedOutput = limitedLogs.map((log) => log.raw).join("\n");
+    }
+
+    console.log("✅ [AUDIT-LOG] Retrieved logs:", {
+      totalFound: parsedLogs.length,
+      returned: limitedLogs.length,
+      format: outputFormat,
+    });
+
+    return {
+      success: true,
+      logs: limitedLogs,
+      logCount: limitedLogs.length,
+      formattedLogs: formattedOutput,
+      message: `Retrieved ${limitedLogs.length} audit log entries`,
+      context: {
+        ...context,
+        auditLogs: limitedLogs,
+        auditLogCount: limitedLogs.length,
+        auditLogsFormatted: formattedOutput,
+      },
+    };
+  } catch (error) {
+    console.error("❌ [AUDIT-LOG] Error:", error.message);
+    return {
+      success: false,
+      error: error.message,
+      logs: [],
+      logCount: 0,
       context: context,
     };
   }
@@ -5570,9 +5833,18 @@ const runWorkflow = async (nodes, edges, initialContext = {}, appId, userId = 1)
       iteration++;
       const node = nodeMap[currentNodeId];
 
-      if (!node) break;
-      if (executedNodeIds.has(currentNodeId)) break;
+      if (!node) {
+        console.log(`⚠️ [WF-EXEC] Node not found: ${currentNodeId}`);
+        break;
+      }
+      if (executedNodeIds.has(currentNodeId)) {
+        console.log(`⚠️ [WF-EXEC] Node already executed: ${currentNodeId}`);
+        break;
+      }
       executedNodeIds.add(currentNodeId);
+
+      console.log(`🔄 [WF-EXEC] Processing node ${iteration}: ${node.data.label} (${node.id})`);
+      console.log(`🔄 [WF-EXEC] Node category: ${node.data.category}`);
 
       try {
         let result = null;
@@ -5600,6 +5872,9 @@ const runWorkflow = async (nodes, edges, initialContext = {}, appId, userId = 1)
               break;
             case "ai.summarize":
               result = await executeAiSummarize(node, currentContext, appId, userId);
+              break;
+            case "audit.log":
+              result = await executeAuditLog(node, currentContext, appId, userId);
               break;
             default:
               result = { success: true, message: `${node.data.label} executed (placeholder)` };
@@ -6096,6 +6371,15 @@ router.post("/execute", authenticateToken, async (req, res) => {
               );
               break;
 
+            case "audit.log":
+              result = await executeAuditLog(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
+              break;
+
             default:
               console.log(
                 `⚠️ [WF-EXEC] Unhandled action block: ${node.data.label}`
@@ -6121,7 +6405,7 @@ router.post("/execute", authenticateToken, async (req, res) => {
 
         case "inList":
           result = await executeInList(node, currentContext, appId, userId);
-          break;
+              break;
 
             case "roleIs":
               result = await executeRoleIs(node, currentContext, appId, userId);
@@ -6224,7 +6508,7 @@ router.post("/execute", authenticateToken, async (req, res) => {
           if (result.context) {
             currentContext = { ...currentContext, ...result.context };
           } else {
-            currentContext = { ...currentContext, ...result };
+          currentContext = { ...currentContext, ...result };
           }
         }
 
@@ -6305,6 +6589,10 @@ router.post("/execute", authenticateToken, async (req, res) => {
         }
 
         currentNodeId = nextNodeId;
+        console.log(`🔄 [WF-EXEC] Updated currentNodeId to: ${currentNodeId}`);
+        if (!currentNodeId) {
+          console.log(`⚠️ [WF-EXEC] No next node, ending workflow execution`);
+        }
       } catch (error) {
         console.error(
           `❌ [WF-EXEC] Error in node ${node.data.label}:`,
