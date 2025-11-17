@@ -4,37 +4,13 @@ const { PrismaClient } = require("@prisma/client");
 const { authenticateToken } = require("../middleware/auth");
 const { exportTableData } = require("../utils/exporters");
 const { emitTableCreated, emitDataUpdated } = require("../utils/dbEvents");
+const {
+  assertAppAccess,
+  isValidTableName,
+  parseAppId,
+} = require("../utils/databaseHelpers");
 
 const prisma = new PrismaClient();
-
-// Validate table names to prevent SQL injection
-const isValidTableName = (name) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name);
-
-// ✅ helper: parse & validate appId once
-function parseAppId(appIdParam) {                       // ⬅️ NEW
-  const id = Number(appIdParam);
-  if (!Number.isInteger(id) || id <= 0) return null;
-  return id;
-}
-
-// ✅ helper: strict app check (404 if not found, 403 if not owner)
-async function assertAppAccess(appIdInt, userId) {      // ⬅️ NEW
-  const app = await prisma.app.findUnique({
-    where: { id: appIdInt },
-    select: { id: true, ownerId: true },
-  });
-  if (!app) {
-    const err = new Error("App not found");
-    err.status = 404;
-    throw err;
-  }
-  if (app.ownerId !== userId) {
-    const err = new Error("Access denied to this app");
-    err.status = 403;
-    throw err;
-  }
-  return app;
-}
 
 /**
  * @route   GET /api/database/:appId/tables
@@ -53,7 +29,7 @@ router.get("/:appId/tables", authenticateToken, async (req, res) => {
     console.log(`[DATABASE] Fetching tables for appId=${appIdInt}`);
 
     // strict app access (404 vs 403)
-    await assertAppAccess(appIdInt, userId);             // ⬅️ NEW
+    await assertAppAccess(prisma, appIdInt, userId);     // ⬅️ UPDATED
 
     // Get table metadata only for this app
     const userTables = await prisma.userTable.findMany({
@@ -158,7 +134,7 @@ router.get("/:appId/tables/:tableName/data", authenticateToken, async (req, res)
     console.log(`[DATABASE] Fetching data for appId=${appIdInt} table=${tableName} page=${page} limit=${limit}`);
 
     // strict app access
-    await assertAppAccess(appIdInt, userId);             // ⬅️ NEW
+    await assertAppAccess(prisma, appIdInt, userId);     // ⬅️ UPDATED
 
     // Verify table metadata belongs to this app
     const userTable = await prisma.userTable.findFirst({
@@ -250,7 +226,7 @@ router.post("/:appId/tables/:tableName/export", authenticateToken, async (req, r
     }
 
     // strict app access
-    await assertAppAccess(appIdInt, userId);             // ⬅️ NEW
+    await assertAppAccess(prisma, appIdInt, userId);     // ⬅️ UPDATED
 
     // Validate table metadata
     const userTable = await prisma.userTable.findFirst({
@@ -316,7 +292,7 @@ router.post("/:appId/debug/broadcast", authenticateToken,
     const { type = "updated", tableName = "users", action = "update", rowsAffected = 1, preview = [], columns = [] } = req.body;
 
     // ensure access before emitting
-    await assertAppAccess(appIdInt, req.user.id);        // ⬅️ NEW
+    await assertAppAccess(prisma, appIdInt, req.user.id); // ⬅️ UPDATED
 
     let payload;
     if (type === "created") {

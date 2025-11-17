@@ -2762,6 +2762,252 @@ const executeAiSummarize = async (node, context, appId, userId) => {
   }
 };
 
+// File Upload action block handler
+const executeFileUpload = async (node, context, appId, userId) => {
+  try {
+    console.log("📤 [FILE-UPLOAD] Processing file upload action for app:", appId);
+
+    // Validate app access
+    const hasAccess = await securityValidator.validateAppAccess(
+      appId,
+      userId,
+      prisma
+    );
+    if (!hasAccess) {
+      throw new Error("Access denied to this app");
+    }
+
+    const config = node.data || {};
+    const {
+      fileUploadElementId,
+      fileUploadOutputVariable,
+      allowedFileTypes,
+      fileUploadMaxSizeMB,
+    } = config;
+
+    // Try to resolve file data from several possible context locations
+    let fileData = null;
+
+    if (fileUploadElementId) {
+      fileData =
+        (context.uploadedFiles && context.uploadedFiles[fileUploadElementId]) ||
+        context[fileUploadElementId] ||
+        (context.formData && context.formData[fileUploadElementId]) ||
+        null;
+    }
+
+    // Fallback to output variable if provided
+    if (!fileData && fileUploadOutputVariable) {
+      fileData = context[fileUploadOutputVariable] || null;
+    }
+
+    if (!fileData) {
+      throw new Error(
+        "No file found for file.upload. Ensure a file was uploaded and referenced by the configured element or variable."
+      );
+    }
+
+    // If the client already uploaded the file, metadata should include path/url/filename
+    const fileMeta = {
+      id: fileData.id || fileData.mediaId || null,
+      filename: fileData.filename || fileData.originalName || fileData.name,
+      url: fileData.url || (fileData.filename ? `/api/media/files/${fileData.filename}` : undefined),
+      mimeType: fileData.mimeType || fileData.mimetype || fileData.type,
+      size: fileData.size || fileData.length || null,
+      path: fileData.path || null,
+    };
+
+    // Basic validation: file type and size if configured
+    if (allowedFileTypes && fileMeta.mimeType) {
+      const allowed = String(allowedFileTypes)
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (allowed.length > 0) {
+        const matches = allowed.some((a) => fileMeta.mimeType.includes(a));
+        if (!matches) {
+          throw new Error(
+            `Uploaded file type '${fileMeta.mimeType}' is not allowed by block configuration`
+          );
+        }
+      }
+    }
+
+    if (fileUploadMaxSizeMB && fileMeta.size) {
+      const maxBytes = parseFloat(fileUploadMaxSizeMB) * 1024 * 1024;
+      if (fileMeta.size > maxBytes) {
+        throw new Error(
+          `Uploaded file size ${fileMeta.size} exceeds configured limit of ${fileUploadMaxSizeMB}MB`
+        );
+      }
+    }
+
+    // Prepare result context variable name
+    const outVar = fileUploadOutputVariable || fileUploadElementId || "lastUploadedFile";
+
+    const resultContext = {
+      [outVar]: fileMeta,
+      lastUploadedFile: fileMeta,
+    };
+
+    console.log("📤 [FILE-UPLOAD] File processed:", fileMeta.filename || fileMeta.url);
+
+    return {
+      success: true,
+      type: "fileUpload",
+      message: "File resolved for workflow",
+      file: fileMeta,
+      context: resultContext,
+    };
+  } catch (error) {
+    console.error("❌ [FILE-UPLOAD] Error:", error.message);
+    return {
+      success: false,
+      type: "fileUpload",
+      error: error.message,
+      context: context,
+    };
+  }
+};
+
+// File Download action block handler
+const executeFileDownload = async (node, context, appId, userId) => {
+  try {
+    console.log("📥 [FILE-DOWNLOAD] Processing file download action for app:", appId);
+
+    // Validate app access
+    const hasAccess = await securityValidator.validateAppAccess(
+      appId,
+      userId,
+      prisma
+    );
+    if (!hasAccess) {
+      throw new Error("Access denied to this app");
+    }
+
+    const config = node.data || {};
+    const {
+      downloadSourceType = "url",
+      downloadUrl,
+      downloadContextKey,
+      downloadPath,
+      downloadFileName,
+      downloadMimeType,
+    } = config;
+
+    let resolvedUrl = null;
+    let fileName = downloadFileName || "download";
+    let mimeType = downloadMimeType || undefined;
+
+    if (downloadSourceType === "url") {
+      if (!downloadUrl) {
+        throw new Error("No download URL configured");
+      }
+      resolvedUrl = substituteContextVariables(downloadUrl, context);
+
+      // Basic SSRF safety checks reuse logic from HTTP request
+      let urlObj;
+      try {
+        urlObj = new URL(resolvedUrl);
+      } catch (e) {
+        throw new Error("Invalid download URL format");
+      }
+
+      const blockedHosts = [
+        "localhost",
+        "127.0.0.1",
+        "0.0.0.0",
+        "::1",
+        "169.254.169.254",
+      ];
+      if (blockedHosts.includes(urlObj.hostname.toLowerCase())) {
+        throw new Error("Access to localhost/internal hosts is not allowed");
+      }
+
+      if (urlObj.port) {
+        const blockedPorts = [22, 23, 25, 3306, 5432, 6379, 27017];
+        if (blockedPorts.includes(parseInt(urlObj.port))) {
+          throw new Error(`Access to port ${urlObj.port} is not allowed`);
+        }
+      }
+
+      fileName = downloadFileName || path.basename(urlObj.pathname) || fileName;
+    } else if (downloadSourceType === "context") {
+      if (!downloadContextKey) {
+        throw new Error("No context key configured for download source");
+      }
+      const fileObj = context[downloadContextKey] || (context.uploadedFiles && context.uploadedFiles[downloadContextKey]);
+      if (!fileObj) {
+        throw new Error(`No file found in context under key '${downloadContextKey}'`);
+      }
+
+      if (fileObj.url) {
+        resolvedUrl = fileObj.url;
+      } else if (fileObj.filename) {
+        resolvedUrl = `/api/media/files/${fileObj.filename}`;
+      } else if (fileObj.path) {
+        // Try to find media record by path
+        const mediaRec = await prisma.mediaFile.findFirst({ where: { path: fileObj.path } });
+        if (mediaRec && mediaRec.filename) {
+          resolvedUrl = `/api/media/files/${mediaRec.filename}`;
+        } else {
+          throw new Error("File path provided but media record not found");
+        }
+      } else {
+        throw new Error("Context file object does not contain a usable URL or filename");
+      }
+
+      fileName = downloadFileName || fileObj.originalName || fileObj.filename || fileName;
+      mimeType = mimeType || fileObj.mimeType || fileObj.mimetype;
+    } else if (downloadSourceType === "path") {
+      if (!downloadPath) {
+        throw new Error("No server path configured for download");
+      }
+      // If a server path is provided, attempt to locate corresponding media record
+      const mediaRec = await prisma.mediaFile.findFirst({ where: { path: downloadPath } });
+      if (!mediaRec) {
+        throw new Error("No media record found for provided path");
+      }
+      if (!mediaRec.filename) {
+        throw new Error("Media record does not include a filename for URL construction");
+      }
+      resolvedUrl = `/api/media/files/${mediaRec.filename}`;
+      fileName = downloadFileName || mediaRec.originalName || mediaRec.filename;
+      mimeType = mimeType || mediaRec.mimeType;
+    } else {
+      throw new Error(`Unknown downloadSourceType: ${downloadSourceType}`);
+    }
+
+    console.log("📥 [FILE-DOWNLOAD] Resolved download URL:", resolvedUrl);
+
+    return {
+      success: true,
+      type: "download",
+      download: {
+        url: resolvedUrl,
+        fileName,
+        mimeType,
+      },
+      context: {
+        ...context,
+        lastDownload: {
+          url: resolvedUrl,
+          fileName,
+          mimeType,
+        },
+      },
+    };
+  } catch (error) {
+    console.error("❌ [FILE-DOWNLOAD] Error:", error.message);
+    return {
+      success: false,
+      type: "download",
+      error: error.message,
+      context: context,
+    };
+  }
+};
+
 // Match block handler
 const executeMatch = async (node, context, appId, userId) => {
   try {
@@ -4983,6 +5229,24 @@ router.post("/execute", authenticateToken, async (req, res) => {
 
             case "ai.summarize":
               result = await executeAiSummarize(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
+              break;
+
+            case "file.upload":
+              result = await executeFileUpload(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
+              break;
+
+            case "file.download":
+              result = await executeFileDownload(
                 node,
                 currentContext,
                 appId,
