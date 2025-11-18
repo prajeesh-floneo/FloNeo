@@ -3305,6 +3305,94 @@ export function PropertiesPanel({
                   </>
                 )}
 
+                {/* Chart specific content */}
+                {(selectedElement.type === "chart-bar" ||
+                  selectedElement.type === "chart-line" ||
+                  selectedElement.type === "chart-pie" ||
+                  selectedElement.type === "chart-donut") && (
+                  <>
+                    {/* Chart Title */}
+                    <div>
+                      <Label>Chart Title</Label>
+                      <Input
+                        type="text"
+                        value={
+                          selectedElement.properties.title || "Monthly Revenue"
+                        }
+                        onChange={(e) =>
+                          onUpdateElement("title", e.target.value)
+                        }
+                        placeholder="Enter chart title..."
+                      />
+                    </div>
+                    {/* Chart Description */}
+                    <div>
+                      <Label>Description</Label>
+                      <Input
+                        type="text"
+                        value={selectedElement.properties.description || ""}
+                        onChange={(e) =>
+                          onUpdateElement("description", e.target.value)
+                        }
+                        placeholder="Enter description..."
+                      />
+                    </div>
+                    {/* Show Header Toggle */}
+                    <div className="flex items-center space-x-2">
+                      <Switch
+                        checked={selectedElement.properties.showHeader ?? true}
+                        onCheckedChange={(checked) =>
+                          onUpdateElement("showHeader", checked)
+                        }
+                      />
+                      <Label>Show Header</Label>
+                    </div>
+                    {/* Show Legend Toggle */}
+                    <div className="flex items-center space-x-2">
+                      <Switch
+                        checked={selectedElement.properties.legend ?? true}
+                        onCheckedChange={(checked) =>
+                          onUpdateElement("legend", checked)
+                        }
+                      />
+                      <Label>Show Legend</Label>
+                    </div>
+                    {/* Show Grid Toggle */}
+                    <div className="flex items-center space-x-2">
+                      <Switch
+                        checked={selectedElement.properties.showGrid ?? true}
+                        onCheckedChange={(checked) =>
+                          onUpdateElement("showGrid", checked)
+                        }
+                      />
+                      <Label>Show Grid</Label>
+                    </div>
+                    {/* Chart Data - JSON input */}
+                    <div>
+                      <Label>Chart Data (JSON)</Label>
+                      <textarea
+                        className="w-full p-2 border rounded-md dark:bg-gray-800 dark:border-gray-600 dark:text-gray-100"
+                        rows={8}
+                        value={
+                          selectedElement.properties.data
+                            ? JSON.stringify(selectedElement.properties.data, null, 2)
+                            : ''
+                        }
+                        onChange={(e) => {
+                          try {
+                            const parsedData = JSON.parse(e.target.value);
+                            onUpdateElement('data', parsedData);
+                          } catch (error) {
+                            // Invalid JSON - you can optionally show error message
+                            console.log('Invalid JSON:', error);
+                          }
+                        }}
+                        placeholder='[{"month": "Jan", "desktop": 186, "mobile": 80}]'
+                      />
+                    </div>
+                  </>
+                )}
+
                 {/* TEXT_DISPLAY Element Properties */}
                 {(selectedElement.type === "TEXT_DISPLAY" ||
                   selectedElement.type === "text_display") && (
