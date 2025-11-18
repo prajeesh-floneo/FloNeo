@@ -1911,83 +1911,129 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
               </div>
               <div className="space-y-2 max-h-48 overflow-y-auto">
                 {(data.insertData ? Object.entries(data.insertData) : []).map(
-                  ([column, value], index) => (
-                    <div key={index} className="flex gap-2">
-                      <input
-                        type="text"
-                        placeholder="column name"
-                        value={column || ""}
-                        onChange={(e) => {
-                          const newData = { ...(data.insertData || {}) };
-                          const oldColumn = column;
-                          const newColumn = e.target.value;
+                  ([column, fieldData], index) => {
+                    // Support both old format (string value) and new format (object with value and type)
+                    const isNewFormat = typeof fieldData === 'object' && fieldData !== null && 'value' in fieldData;
+                    const value = isNewFormat ? (fieldData as any).value : (fieldData as string);
+                    const fieldType = isNewFormat ? (fieldData as any).type || 'TEXT' : 'TEXT';
+                    
+                    return (
+                      <div key={index} className="flex gap-2">
+                        <input
+                          type="text"
+                          placeholder="column name"
+                          value={column || ""}
+                          onChange={(e) => {
+                            const newData = { ...(data.insertData || {}) };
+                            const oldColumn = column;
+                            const newColumn = e.target.value;
 
-                          // Remove old key and add new key with same value
-                          delete newData[oldColumn];
-                          newData[newColumn] = value;
+                            // Remove old key and add new key with same value
+                            const fieldValue = newData[oldColumn];
+                            delete newData[oldColumn];
+                            newData[newColumn] = fieldValue;
 
-                          setNodes((nodes) =>
-                            nodes.map((node) =>
-                              node.id === id
-                                ? {
-                                    ...node,
-                                    data: { ...node.data, insertData: newData },
-                                  }
-                                : node
-                            )
-                          );
-                        }}
-                        className="flex-1 px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
-                      <input
-                        type="text"
-                        placeholder="value"
-                        value={(value as string) || ""}
-                        onChange={(e) => {
-                          const newData = { ...(data.insertData || {}) };
-                          newData[column] = e.target.value;
-                          setNodes((nodes) =>
-                            nodes.map((node) =>
-                              node.id === id
-                                ? {
-                                    ...node,
-                                    data: { ...node.data, insertData: newData },
-                                  }
-                                : node
-                            )
-                          );
-                        }}
-                        className="flex-1 px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
-                      <button
-                        onClick={() => {
-                          const newData = { ...(data.insertData || {}) };
-                          delete newData[column];
-                          setNodes((nodes) =>
-                            nodes.map((node) =>
-                              node.id === id
-                                ? {
-                                    ...node,
-                                    data: { ...node.data, insertData: newData },
-                                  }
-                                : node
-                            )
-                          );
-                        }}
-                        className="px-2 py-2 text-sm border rounded-md hover:bg-red-500/10 hover:border-red-500 transition-colors"
-                        title="Remove field"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  )
+                            setNodes((nodes) =>
+                              nodes.map((node) =>
+                                node.id === id
+                                  ? {
+                                      ...node,
+                                      data: { ...node.data, insertData: newData },
+                                    }
+                                  : node
+                              )
+                            );
+                          }}
+                          className="flex-1 px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                        <select
+                          value={fieldType}
+                          onChange={(e) => {
+                            const newData = { ...(data.insertData || {}) };
+                            const currentValue = isNewFormat ? (fieldData as any).value : (fieldData as string);
+                            newData[column] = {
+                              value: currentValue,
+                              type: e.target.value,
+                            };
+                            setNodes((nodes) =>
+                              nodes.map((node) =>
+                                node.id === id
+                                  ? {
+                                      ...node,
+                                      data: { ...node.data, insertData: newData },
+                                    }
+                                  : node
+                              )
+                            );
+                          }}
+                          className="w-32 px-2 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                          <option value="TEXT">TEXT</option>
+                          <option value="VARCHAR(255)">VARCHAR(255)</option>
+                          <option value="INTEGER">INTEGER</option>
+                          <option value="DECIMAL(10,2)">DECIMAL</option>
+                          <option value="BOOLEAN">BOOLEAN</option>
+                          {/* DATE and TIMESTAMP removed due to complexity - use TEXT for date strings */}
+                          <option value="TIME">TIME</option>
+                        </select>
+                        <input
+                          type="text"
+                          placeholder="value"
+                          value={value || ""}
+                          onChange={(e) => {
+                            const newData = { ...(data.insertData || {}) };
+                            const currentType = isNewFormat ? (fieldData as any).type || 'TEXT' : 'TEXT';
+                            newData[column] = {
+                              value: e.target.value,
+                              type: currentType,
+                            };
+                            setNodes((nodes) =>
+                              nodes.map((node) =>
+                                node.id === id
+                                  ? {
+                                      ...node,
+                                      data: { ...node.data, insertData: newData },
+                                    }
+                                  : node
+                              )
+                            );
+                          }}
+                          className="flex-1 px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                        <button
+                          onClick={() => {
+                            const newData = { ...(data.insertData || {}) };
+                            delete newData[column];
+                            setNodes((nodes) =>
+                              nodes.map((node) =>
+                                node.id === id
+                                  ? {
+                                      ...node,
+                                      data: { ...node.data, insertData: newData },
+                                    }
+                                  : node
+                              )
+                            );
+                          }}
+                          className="px-2 py-2 text-sm border rounded-md hover:bg-red-500/10 hover:border-red-500 transition-colors"
+                          title="Remove field"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    );
+                  }
                 )}
               </div>
               <button
                 onClick={() => {
                   const newData = { ...(data.insertData || {}) };
                   const newKey = `field_${Object.keys(newData).length + 1}`;
-                  newData[newKey] = "";
+                  // Use new format with value and type
+                  newData[newKey] = {
+                    value: "",
+                    type: "TEXT",
+                  };
                   setNodes((nodes) =>
                     nodes.map((node) =>
                       node.id === id
@@ -3734,47 +3780,128 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
       case "roleIs":
         return (
           <div className="space-y-4">
-            {/* ---- Multi Role Toggle ---- */}
-            <div className="flex items-center space-x-2">
-              <input
-                type="checkbox"
-                checked={data.checkMultiple || false}
-                onChange={(e) => {
-                  const checked = e.target.checked;
+            {/* ================== USER CREATION SECTION ================== */}
+            <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+              <div className="text-sm font-medium text-blue-900 dark:text-blue-100 mb-3">
+                👤 Create User & Generate Credentials (Optional)
+              </div>
+              
+              <div className="space-y-3">
+                {/* Username/Email Field */}
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-blue-800 dark:text-blue-200">
+                    Username/Email:
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="user@example.com or username"
+                    value={data.userEmail || ""}
+                    onChange={(e) => {
+                      const value = e.target.value.trim();
+                      setNodes((nodes) =>
+                        nodes.map((node) =>
+                          node.id === id
+                            ? {
+                                ...node,
+                                data: {
+                                  ...node.data,
+                                  userEmail: value,
+                                },
+                              }
+                            : node
+                        )
+                      );
+                    }}
+                    className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Enter email or username for the new user
+                  </p>
+                </div>
 
-                  setNodes((nodes) =>
-                    nodes.map((node) =>
-                      node.id === id
-                        ? {
-                            ...node,
-                            data: {
-                              ...node.data,
-                              checkMultiple: checked,
-                              // Reset fields automatically
-                              requiredRole: checked
-                                ? ""
-                                : data.requiredRole || "user",
-                              roles: checked ? [] : undefined,
-                            },
-                          }
-                        : node
-                    )
-                  );
-                }}
-              />
-              <label className="text-sm">Allow multiple roles</label>
+                {/* Password Field */}
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-blue-800 dark:text-blue-200">
+                    Password:
+                  </label>
+                  <input
+                    type="password"
+                    placeholder="Enter password"
+                    value={data.userPassword || ""}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setNodes((nodes) =>
+                        nodes.map((node) =>
+                          node.id === id
+                            ? {
+                                ...node,
+                                data: {
+                                  ...node.data,
+                                  userPassword: value,
+                                },
+                              }
+                            : node
+                        )
+                      );
+                    }}
+                    className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Password for the new user account
+                  </p>
+                </div>
+
+                {/* Custom Role Field - Used when creating user */}
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-blue-800 dark:text-blue-200">
+                    Role for New User:
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="admin / manager / staff"
+                    value={data.customRole || ""}
+                    onChange={(e) => {
+                      const value = e.target.value.trim().toLowerCase();
+                      setNodes((nodes) =>
+                        nodes.map((node) =>
+                          node.id === id
+                            ? {
+                                ...node,
+                                data: {
+                                  ...node.data,
+                                  customRole: value,
+                                },
+                              }
+                            : node
+                        )
+                      );
+                    }}
+                    className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Role to assign when creating user. Will be created if it doesn't exist.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-3 p-2 bg-blue-100 dark:bg-blue-900/30 rounded text-xs text-blue-800 dark:text-blue-200">
+                💡 <strong>Note:</strong> If username/email and password are provided, a new AppUser will be created for this app (appId: {appId || 'N/A'}) with the specified role when this block executes.
+              </div>
             </div>
 
-            {/* ================== SINGLE ROLE MODE ================== */}
-            {!data.checkMultiple && (
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Required Role:</label>
+            {/* ================== ROLE CHECK SECTION ================== */}
+            <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
+              <div className="text-sm font-medium text-green-900 dark:text-green-100 mb-3">
+                🔐 Role Check Configuration
+              </div>
+
+              {/* ---- Multi Role Toggle ---- */}
+              <div className="flex items-center space-x-2 mb-3">
                 <input
-                  type="text"
-                  placeholder="admin / manager / custom-role"
-                  value={data.requiredRole || ""}
+                  type="checkbox"
+                  checked={data.checkMultiple || false}
                   onChange={(e) => {
-                    const value = e.target.value.trim().toLowerCase();
+                    const checked = e.target.checked;
 
                     setNodes((nodes) =>
                       nodes.map((node) =>
@@ -3783,76 +3910,111 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
                               ...node,
                               data: {
                                 ...node.data,
-                                requiredRole: value || "user",
+                                checkMultiple: checked,
+                                // Reset fields automatically
+                                requiredRole: checked
+                                  ? ""
+                                  : data.requiredRole || "user",
+                                roles: checked ? [] : undefined,
                               },
                             }
                           : node
                       )
                     );
                   }}
-                  className="w-full px-3 py-2 text-sm border rounded-md bg-background"
                 />
-
-                <p className="text-xs text-muted-foreground">
-                  Only continue if user has selected role.
-                </p>
+                <label className="text-sm">Allow multiple roles</label>
               </div>
-            )}
 
-            {/* ================== MULTIPLE ROLES MODE ================== */}
-            {data.checkMultiple && (
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Allowed Roles:</label>
+              {/* ================== SINGLE ROLE MODE ================== */}
+              {!data.checkMultiple && (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Required Role to Check:</label>
+                  <input
+                    type="text"
+                    placeholder="admin / manager / user"
+                    value={data.requiredRole || ""}
+                    onChange={(e) => {
+                      const value = e.target.value.trim().toLowerCase();
 
-                <div className="border rounded-md px-3 py-2 space-y-1 max-h-48 overflow-y-auto">
-                  {appRoles?.length > 0 ? (
-                    appRoles.map((role) => (
-                      <div key={role} className="flex items-center space-x-2">
-                        <input
-                          type="checkbox"
-                          checked={data.roles?.includes(role) || false}
-                          onChange={(e) => {
-                            const isChecked = e.target.checked;
+                      setNodes((nodes) =>
+                        nodes.map((node) =>
+                          node.id === id
+                            ? {
+                                ...node,
+                                data: {
+                                  ...node.data,
+                                  requiredRole: value || "user",
+                                },
+                              }
+                            : node
+                        )
+                      );
+                    }}
+                    className="w-full px-3 py-2 text-sm border rounded-md bg-background"
+                  />
 
-                            let updated = data.roles || [];
-
-                            if (isChecked) {
-                              updated.push(role);
-                            } else {
-                              updated = updated.filter((x) => x !== role);
-                            }
-
-                            setNodes((nodes) =>
-                              nodes.map((node) =>
-                                node.id === id
-                                  ? {
-                                      ...node,
-                                      data: { ...node.data, roles: updated },
-                                    }
-                                  : node
-                              )
-                            );
-                          }}
-                        />
-                        <label className="text-sm">{role}</label>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="text-xs text-muted-foreground">
-                      No roles found…
-                    </p>
-                  )}
+                  <p className="text-xs text-muted-foreground">
+                    Only continue if user has this role. Used for checking existing users.
+                  </p>
                 </div>
+              )}
 
-                <p className="text-xs text-muted-foreground">
-                  Select all roles that are allowed to pass this condition.
-                </p>
-              </div>
-            )}
+              {/* ================== MULTIPLE ROLES MODE ================== */}
+              {data.checkMultiple && (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Allowed Roles:</label>
+
+                  <div className="border rounded-md px-3 py-2 space-y-1 max-h-48 overflow-y-auto">
+                    {appRoles?.length > 0 ? (
+                      appRoles.map((role) => (
+                        <div key={role} className="flex items-center space-x-2">
+                          <input
+                            type="checkbox"
+                            checked={data.roles?.includes(role) || false}
+                            onChange={(e) => {
+                              const isChecked = e.target.checked;
+
+                              let updated = data.roles || [];
+
+                              if (isChecked) {
+                                updated.push(role);
+                              } else {
+                                updated = updated.filter((x) => x !== role);
+                              }
+
+                              setNodes((nodes) =>
+                                nodes.map((node) =>
+                                  node.id === id
+                                    ? {
+                                        ...node,
+                                        data: { ...node.data, roles: updated },
+                                      }
+                                    : node
+                                )
+                              );
+                            }}
+                          />
+                          <label className="text-sm">{role}</label>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        No roles found…
+                      </p>
+                    )}
+                  </div>
+
+                  <p className="text-xs text-muted-foreground">
+                    Select all roles that are allowed to pass this condition.
+                  </p>
+                </div>
+              )}
+            </div>
 
             {/* ================== PAGE ACCESS CHECKBOXES ================== */}
             <div className="space-y-2">
-              <label className="text-sm font-medium">Allowed Pages:</label>
+              <label className="text-sm font-medium">Required Page Access:</label>
 
               <div className="border rounded-md px-3 py-2 space-y-1 max-h-48 overflow-y-auto">
                 {canvasPages && canvasPages.length > 0 ? (
@@ -3901,7 +4063,7 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
               </div>
 
               <p className="text-xs text-muted-foreground">
-                Select pages this role or user must have access to.
+                Select pages the user must have access to (checked via role or direct assignment).
               </p>
             </div>
           </div>

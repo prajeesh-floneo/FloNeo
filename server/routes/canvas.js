@@ -934,14 +934,18 @@ router.patch("/:appId/state", authenticateToken, async (req, res) => {
         for (const page of canvasState.pages) {
           if (!page.id || !page.name) continue;
           
-          // Generate slug from page name
-          const slug = page.name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+          // Use page ID as slug for consistency (e.g., "page-1" stays as "page-1")
+          // This ensures workflow blocks can reference pages by their canvas ID
+          const slug = page.id;
           
-          // Check if AppPage already exists
+          // Check if AppPage already exists (by slug or by matching page ID)
           const existingPage = await prisma.appPage.findFirst({
             where: {
               appId: parseInt(appId),
-              slug: slug,
+              OR: [
+                { slug: slug },
+                { slug: page.id }, // Also check by page ID
+              ],
             },
           });
           
@@ -957,13 +961,16 @@ router.patch("/:appId/state", authenticateToken, async (req, res) => {
             });
             console.log(`✅ Created AppPage: ${page.name} (${slug})`);
           } else {
-            // Update existing AppPage title if name changed
-            if (existingPage.title !== page.name) {
+            // Update existing AppPage if slug or title changed
+            if (existingPage.slug !== slug || existingPage.title !== page.name) {
               await prisma.appPage.update({
                 where: { id: existingPage.id },
-                data: { title: page.name },
+                data: { 
+                  title: page.name,
+                  slug: slug, // Update slug to match page ID
+                },
               });
-              console.log(`🔄 Updated AppPage: ${page.name}`);
+              console.log(`🔄 Updated AppPage: ${page.name} (${slug})`);
             }
           }
         }

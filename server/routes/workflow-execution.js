@@ -5,6 +5,7 @@ const DOMPurify = require("isomorphic-dompurify");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
+const bcrypt = require("bcryptjs");
 const { SafeQueryBuilder, DatabaseUtils } = require("../utils/database");
 const { SecurityValidator } = require("../utils/security");
 const emailService = require("../utils/email");
@@ -27,12 +28,34 @@ const sanitizeIdentifier = (identifier) => {
   }
 
   // Remove special characters, keep only alphanumeric and underscore
-  const sanitized = identifier.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+  let sanitized = identifier.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+  console.log(`🔧 [SANITIZE] Input: "${identifier}" -> After replace: "${sanitized}"`);
+
+  // Handle leading underscores (e.g., _success -> meta_success)
+  if (sanitized.startsWith("_")) {
+    sanitized = "meta" + sanitized;
+    console.log(`🔧 [SANITIZE] Had leading underscore, converted to: "${sanitized}"`);
+  }
 
   // Ensure it doesn't start with a number
   if (/^[0-9]/.test(sanitized)) {
-    return `field_${sanitized}`;
+    sanitized = `field_${sanitized}`;
+    console.log(`🔧 [SANITIZE] Started with number, prefixed: "${sanitized}"`);
   }
+  
+  // Ensure the result is not empty and starts with a letter
+  if (!sanitized || sanitized.trim() === "") {
+    sanitized = "field_" + Math.random().toString(36).substring(2, 9);
+    console.log(`🔧 [SANITIZE] Was empty, generated: "${sanitized}"`);
+  }
+  
+  // Final check: ensure it starts with a letter (for validation)
+  if (!/^[a-zA-Z]/.test(sanitized)) {
+    sanitized = "field_" + sanitized;
+    console.log(`🔧 [SANITIZE] Didn't start with letter, prefixed: "${sanitized}"`);
+  }
+  
+  console.log(`✅ [SANITIZE] Final result: "${identifier}" -> "${sanitized}"`);
 
   // Check against SQL reserved words
   const reservedWords = [
@@ -648,94 +671,390 @@ const executeDbCreate = async (node, context, appId, userId) => {
     }
 
     // Check if we have manual insertData from workflow builder
-    const hasManualInsertData =
-      node.data.insertData && Object.keys(node.data.insertData).length > 0;
+    // Support both old format (simple object) and new format (object with value/type)
+    const insertDataRaw = node.data.insertData || {};
+    const hasManualInsertData = Object.keys(insertDataRaw).length > 0;
+    
+    // Normalize insertData to check if it has actual values
+    let hasValidInsertData = false;
+    if (hasManualInsertData) {
+      for (const [key, fieldData] of Object.entries(insertDataRaw)) {
+        if (key && key.trim() !== '') {
+          // Check if it's new format (object) or old format (string)
+          if (typeof fieldData === 'object' && fieldData !== null && 'value' in fieldData) {
+            if (fieldData.value !== undefined && fieldData.value !== null && fieldData.value !== '') {
+              hasValidInsertData = true;
+              break;
+            }
+          } else if (fieldData !== undefined && fieldData !== null && fieldData !== '') {
+            hasValidInsertData = true;
+            break;
+          }
+        }
+      }
+    }
+
+    // ========== COLLECT DATA FROM ALL SOURCES ==========
+    // Priority: manual insertData > httpResponse.data > formData > context data > appUser data
+    
+    let dataToInsert = {};
+    let dataSource = "none";
+    
+    // 1. Check manual insertData (highest priority)
+    if (hasValidInsertData) {
+      // Extract values from insertData (support both old and new format)
+      dataToInsert = {};
+      for (const [fieldName, fieldData] of Object.entries(insertDataRaw)) {
+        // Skip empty field names
+        if (!fieldName || fieldName.trim() === '') continue;
+        
+        // Extract the actual value from the field data
+        let extractedValue;
+        if (typeof fieldData === 'object' && fieldData !== null && 'value' in fieldData) {
+          // New format: { value: "...", type: "TEXT" }
+          extractedValue = fieldData.value;
+        } else {
+          // Old format: just the value
+          extractedValue = fieldData;
+        }
+        
+        // Only add if we have a valid value (not undefined, but null is OK)
+        if (extractedValue !== undefined) {
+          dataToInsert[fieldName] = extractedValue;
+        }
+      }
+      dataSource = "manual";
+      console.log("📋 [DB-CREATE] Using manual insertData from workflow configuration");
+      console.log("📋 [DB-CREATE] Extracted dataToInsert keys:", Object.keys(dataToInsert));
+      console.log("📋 [DB-CREATE] Sample values with types:", Object.keys(dataToInsert).slice(0, 5).reduce((acc, key) => {
+        const val = dataToInsert[key];
+        if (typeof val === 'object' && val !== null) {
+          if ('value' in val) {
+            acc[key] = `[OBJECT with value: ${typeof val.value}]`;
+          } else {
+            acc[key] = `[OBJECT: ${JSON.stringify(val).substring(0, 50)}]`;
+          }
+        } else {
+          acc[key] = `${typeof val}: ${String(val).substring(0, 20)}`;
+        }
+        return acc;
+      }, {}));
+    }
+    // 2. Check http.request response data
+    else if (context.httpResponse?.data) {
+      const httpData = context.httpResponse.data;
+      
+      console.log("📋 [DB-CREATE] ========== HTTP RESPONSE DATA EXTRACTION ==========");
+      console.log("📋 [DB-CREATE] Raw httpResponse.data type:", typeof httpData);
+      console.log("📋 [DB-CREATE] Raw httpResponse.data isArray:", Array.isArray(httpData));
+      
+      // Helper function to extract data from nested structures
+      const extractDataFromResponse = (data) => {
+        console.log("📋 [DB-CREATE] [EXTRACT] Input data type:", typeof data, "isArray:", Array.isArray(data));
+        
+        // PRIORITY 1: If data has a 'data' field that is an array, extract from it (common API pattern)
+        if (typeof data === 'object' && data !== null && !Array.isArray(data)) {
+          if ('data' in data) {
+            console.log("📋 [DB-CREATE] [EXTRACT] Found 'data' field, type:", typeof data.data, "isArray:", Array.isArray(data.data));
+            
+            if (Array.isArray(data.data) && data.data.length > 0) {
+              console.log("📋 [DB-CREATE] ✅ [EXTRACT] Found nested 'data' array with", data.data.length, "items, extracting first element");
+              const firstItem = data.data[0];
+              
+              if (typeof firstItem === 'object' && firstItem !== null) {
+                // Flatten the object and merge with top-level metadata (if needed)
+                const flattened = { ...firstItem };
+                // Optionally add metadata fields with prefixes to avoid conflicts
+                if (data.success !== undefined) flattened._success = data.success;
+                if (data.tableName) flattened._tableName = data.tableName;
+                if (data.count !== undefined) flattened._count = data.count;
+                console.log("📋 [DB-CREATE] ✅ [EXTRACT] Extracted flattened object with", Object.keys(flattened).length, "keys:", Object.keys(flattened));
+                return flattened;
+              } else {
+                console.warn("⚠️ [DB-CREATE] [EXTRACT] First item in data array is not an object:", typeof firstItem);
+              }
+            } else if (!Array.isArray(data.data)) {
+              console.log("📋 [DB-CREATE] [EXTRACT] 'data' field exists but is not an array, type:", typeof data.data);
+            } else {
+              console.log("📋 [DB-CREATE] [EXTRACT] 'data' array is empty");
+            }
+          }
+          
+          // If we reach here, the object doesn't have a nested 'data' array, so use it directly
+          console.log("📋 [DB-CREATE] [EXTRACT] Using entire object directly with keys:", Object.keys(data));
+          return { ...data };
+        }
+        
+        // If it's an array, take first element
+        if (Array.isArray(data) && data.length > 0) {
+          console.log("📋 [DB-CREATE] [EXTRACT] Response is an array, extracting first element");
+          return typeof data[0] === 'object' ? { ...data[0] } : { data: JSON.stringify(data) };
+        }
+        
+        // If it's a string, try to parse
+        if (typeof data === 'string') {
+          console.log("📋 [DB-CREATE] [EXTRACT] Response is a string, attempting to parse JSON");
+          try {
+            const parsed = JSON.parse(data);
+            return extractDataFromResponse(parsed); // Recursively process parsed data
+          } catch (e) {
+            console.warn("⚠️ [DB-CREATE] [EXTRACT] Failed to parse string as JSON:", e.message);
+            return { data: data };
+          }
+        }
+        
+        console.warn("⚠️ [DB-CREATE] [EXTRACT] Unknown data type, storing as JSON string");
+        return { data: JSON.stringify(data) };
+      };
+      
+      if (typeof httpData === 'object' && httpData !== null) {
+        console.log("📋 [DB-CREATE] Raw httpResponse.data keys:", Object.keys(httpData));
+        if ('data' in httpData) {
+          console.log("📋 [DB-CREATE] Raw httpResponse.data.data type:", typeof httpData.data);
+          console.log("📋 [DB-CREATE] Raw httpResponse.data.data isArray:", Array.isArray(httpData.data));
+          if (Array.isArray(httpData.data)) {
+            console.log("📋 [DB-CREATE] Raw httpResponse.data.data length:", httpData.data.length);
+            if (httpData.data.length > 0) {
+              console.log("📋 [DB-CREATE] Raw httpResponse.data.data[0] keys:", Object.keys(httpData.data[0] || {}));
+            }
+          }
+        }
+      }
+      
+      dataToInsert = extractDataFromResponse(httpData);
+      dataSource = "httpResponse";
+      console.log("📋 [DB-CREATE] ✅ Using data from http.request response");
+      console.log("📋 [DB-CREATE] ✅ Final extracted fields:", Object.keys(dataToInsert));
+      console.log("📋 [DB-CREATE] ✅ Sample values:", Object.keys(dataToInsert).slice(0, 10).reduce((acc, key) => {
+        const val = dataToInsert[key];
+        if (typeof val === 'object' && val !== null && !Array.isArray(val) && !(val instanceof Date)) {
+          acc[key] = `[OBJECT: ${JSON.stringify(val).substring(0, 50)}]`;
+        } else if (Array.isArray(val)) {
+          acc[key] = `[ARRAY: ${val.length} items]`;
+        } else {
+          acc[key] = `${typeof val}: ${String(val).substring(0, 30)}`;
+        }
+        return acc;
+      }, {}));
+      console.log("📋 [DB-CREATE] ========== END HTTP RESPONSE DATA EXTRACTION ==========");
+    }
+    // 3. Check for other http response keys (custom saveResponseTo)
+    else {
+      // Check all context keys that might contain http response
+      for (const [key, value] of Object.entries(context)) {
+        if (value && typeof value === 'object' && 'data' in value && 'statusCode' in value) {
+          const httpData = value.data;
+          if (typeof httpData === 'object' && httpData !== null && !Array.isArray(httpData)) {
+            dataToInsert = { ...httpData };
+            dataSource = `httpResponse_${key}`;
+            console.log(`📋 [DB-CREATE] Using data from http.request response (${key})`);
+            break;
+          } else if (Array.isArray(httpData) && httpData.length > 0) {
+            dataToInsert = typeof httpData[0] === 'object' ? { ...httpData[0] } : { data: JSON.stringify(httpData) };
+            dataSource = `httpResponse_${key}`;
+            console.log(`📋 [DB-CREATE] Using data from http.request response (${key}, array)`);
+            break;
+          }
+        }
+      }
+    }
+    
+    // 4. Check formData
+    if (Object.keys(dataToInsert).length === 0 && context.formData) {
+      dataToInsert = { ...context.formData };
+      dataSource = "formData";
+      console.log("📋 [DB-CREATE] Using formData from context");
+    }
+    
+    // 5. Check appUser data from roleIs block
+    if (context.appUser) {
+      dataToInsert = {
+        ...dataToInsert,
+        email: context.appUser.email || dataToInsert.email,
+        role: context.appUser.role || dataToInsert.role,
+        appUserId: context.appUser.id || dataToInsert.appUserId,
+      };
+      if (dataSource === "none") dataSource = "appUser";
+      console.log("📋 [DB-CREATE] Merged appUser data from roleIs block");
+    }
+    
+    // 6. Check other context data (userEmail, customRole, etc.)
+    if (context.userEmail && !dataToInsert.email) {
+      dataToInsert.email = context.userEmail;
+    }
+    if (context.customRole && !dataToInsert.role) {
+      dataToInsert.role = context.customRole;
+    }
+    if (context.createdAppUserId && !dataToInsert.appUserId) {
+      dataToInsert.appUserId = context.createdAppUserId;
+    }
+    
+    // 7. CRITICAL: Re-check for nested 'data' array if we still have it (fallback extraction)
+    // This ensures we extract even if the initial extraction didn't work
+    if (dataSource.includes('httpResponse') && Object.keys(dataToInsert).length > 0) {
+      console.log("📋 [DB-CREATE] 🔍 FALLBACK CHECK: Checking for nested 'data' array...");
+      console.log("📋 [DB-CREATE] 🔍 FALLBACK CHECK: dataToInsert keys:", Object.keys(dataToInsert));
+      console.log("📋 [DB-CREATE] 🔍 FALLBACK CHECK: Has 'data' key?", 'data' in dataToInsert);
+      
+      // Check if we still have a 'data' field that is an array (extraction might have failed)
+      if ('data' in dataToInsert) {
+        console.log("📋 [DB-CREATE] 🔍 FALLBACK CHECK: 'data' field type:", typeof dataToInsert.data, "isArray:", Array.isArray(dataToInsert.data));
+        
+        if (Array.isArray(dataToInsert.data) && dataToInsert.data.length > 0) {
+          console.log("📋 [DB-CREATE] ⚠️ FALLBACK: Still found nested 'data' array with", dataToInsert.data.length, "items, extracting now!");
+          const firstItem = dataToInsert.data[0];
+          console.log("📋 [DB-CREATE] 🔍 FALLBACK: First item type:", typeof firstItem, "keys:", typeof firstItem === 'object' && firstItem !== null ? Object.keys(firstItem) : 'N/A');
+          
+          if (typeof firstItem === 'object' && firstItem !== null) {
+            // Extract fields from the nested array
+            const extracted = { ...firstItem };
+            // Keep metadata fields with prefixes
+            if (dataToInsert.success !== undefined) extracted._success = dataToInsert.success;
+            if (dataToInsert.tableName) extracted._tableName = dataToInsert.tableName;
+            if (dataToInsert.count !== undefined) extracted._count = dataToInsert.count;
+            dataToInsert = extracted;
+            console.log("📋 [DB-CREATE] ✅ FALLBACK: Extracted", Object.keys(dataToInsert).length, "fields from nested data array");
+            console.log("📋 [DB-CREATE] ✅ FALLBACK: Extracted field names:", Object.keys(dataToInsert));
+          } else {
+            console.warn("⚠️ [DB-CREATE] FALLBACK: First item is not an object, cannot extract");
+          }
+        } else if (typeof dataToInsert.data === 'string') {
+          // Try to parse if it's a JSON string
+          console.log("📋 [DB-CREATE] 🔍 FALLBACK: 'data' is a string, attempting to parse...");
+          try {
+            const parsed = JSON.parse(dataToInsert.data);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              console.log("📋 [DB-CREATE] ⚠️ FALLBACK: Parsed string contains array, extracting...");
+              const firstItem = parsed[0];
+              if (typeof firstItem === 'object' && firstItem !== null) {
+                const extracted = { ...firstItem };
+                if (dataToInsert.success !== undefined) extracted._success = dataToInsert.success;
+                if (dataToInsert.tableName) extracted._tableName = dataToInsert.tableName;
+                if (dataToInsert.count !== undefined) extracted._count = dataToInsert.count;
+                dataToInsert = extracted;
+                console.log("📋 [DB-CREATE] ✅ FALLBACK: Extracted", Object.keys(dataToInsert).length, "fields from parsed JSON string");
+              }
+            }
+          } catch (e) {
+            console.warn("⚠️ [DB-CREATE] FALLBACK: Failed to parse 'data' string as JSON:", e.message);
+          }
+        }
+      } else {
+        console.log("📋 [DB-CREATE] 🔍 FALLBACK CHECK: No 'data' key found in dataToInsert");
+      }
+    }
+    
+    // 8. Flatten nested objects (for API responses with nested data)
+    const flattenObject = (obj, prefix = '') => {
+      const flattened = {};
+      for (const [key, value] of Object.entries(obj)) {
+        const newKey = prefix ? `${prefix}_${key}` : key;
+        if (value && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
+          Object.assign(flattened, flattenObject(value, newKey));
+        } else {
+          flattened[newKey] = value;
+        }
+      }
+      return flattened;
+    };
+    
+    // Flatten if data came from http response and has nested objects (but skip if we just extracted from 'data' array)
+    if (dataSource.includes('httpResponse') && Object.keys(dataToInsert).length > 0) {
+      // Only flatten if we don't have a 'data' array field (we already extracted from it)
+      const hasDataArray = 'data' in dataToInsert && Array.isArray(dataToInsert.data);
+      if (!hasDataArray) {
+        const hasNestedObjects = Object.values(dataToInsert).some(
+          v => v && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Date)
+        );
+        if (hasNestedObjects) {
+          dataToInsert = flattenObject(dataToInsert);
+          console.log("📋 [DB-CREATE] Flattened nested objects from http response");
+        }
+      }
+    }
 
     console.log("🔍 [DB-CREATE] Data source check:", {
+      dataSource,
       hasManualInsertData,
-      insertDataKeys: hasManualInsertData
-        ? Object.keys(node.data.insertData)
-        : [],
       hasFormData: !!context.formData,
-      formDataKeys: context.formData ? Object.keys(context.formData) : [],
+      hasHttpResponse: !!context.httpResponse,
+      hasAppUser: !!context.appUser,
+      dataKeys: Object.keys(dataToInsert),
+      dataSample: Object.keys(dataToInsert).slice(0, 5).reduce((acc, key) => {
+        acc[key] = typeof dataToInsert[key];
+        return acc;
+      }, {}),
     });
 
-    // Extract all saveable elements from canvas
-    // This includes form inputs, media elements, and other interactive elements
+    // Extract all saveable elements from canvas (for form-based workflows)
     const formElements = allElements.filter((element) => {
       const saveableTypes = [
-        // Text inputs (lowercase and uppercase variants)
-        "textfield",
-        "textarea",
-        "input",
-        "TEXT_FIELD",
-        "TEXT_AREA",
-        "INPUT",
-
-        // Selection inputs
-        "select",
-        "dropdown",
-        "radio",
-        "SELECT",
-        "DROPDOWN",
-        "RADIO",
-
-        // Boolean inputs
-        "checkbox",
-        "toggle",
-        "CHECKBOX",
-        "TOGGLE",
-
-        // Date/Time inputs
-        "date",
-        "time",
-        "datetime",
-        "DATE",
-        "TIME",
-        "DATETIME",
-
-        // File inputs
-        "file",
-        "addfile",
-        "upload",
-        "file_upload",
-        "FILE",
-        "ADDFILE",
-        "UPLOAD",
-        "FILE_UPLOAD",
-
-        // Media elements (save src URLs)
-        "image",
-        "video",
-        "audio",
-        "media",
-        "IMAGE",
-        "VIDEO",
-        "AUDIO",
-        "MEDIA",
-
-        // Other inputs
-        "button",
-        "BUTTON", // Save button text/label
-        "slider",
-        "range",
-        "number", // Save numeric values
-        "SLIDER",
-        "RANGE",
-        "NUMBER",
+        "textfield", "textarea", "input", "TEXT_FIELD", "TEXT_AREA", "INPUT",
+        "select", "dropdown", "radio", "SELECT", "DROPDOWN", "RADIO",
+        "checkbox", "toggle", "CHECKBOX", "TOGGLE",
+        "date", "time", "datetime", "DATE", "TIME", "DATETIME",
+        "file", "addfile", "upload", "file_upload", "FILE", "ADDFILE", "UPLOAD", "FILE_UPLOAD",
+        "image", "video", "audio", "media", "IMAGE", "VIDEO", "AUDIO", "MEDIA",
+        "button", "BUTTON", "slider", "range", "number", "SLIDER", "RANGE", "NUMBER",
       ];
-
       return saveableTypes.includes(element.type);
     });
 
-    // If we have manual insertData, we don't need form elements
-    if (formElements.length === 0 && !hasManualInsertData) {
+    console.log("📋 [DB-CREATE] Found saveable elements:", formElements.length);
+    
+    // If we have data from context but no form elements, we can still proceed
+    // We'll create table columns from the data itself
+    if (formElements.length === 0 && Object.keys(dataToInsert).length === 0 && !hasManualInsertData) {
       throw new Error(
-        "No saveable elements found on canvas and no manual insertData provided"
+        "No data found from any source (formData, httpResponse, context, or manual insertData)"
       );
     }
 
-    console.log("📋 [DB-CREATE] Found saveable elements:", formElements.length);
+    // Helper function to infer SQL type from JavaScript value
+    const inferSQLType = (value) => {
+      if (value === null || value === undefined) {
+        return "TEXT"; // Default for null/undefined
+      }
+      
+      const valueType = typeof value;
+      
+      if (valueType === 'boolean') {
+        return "BOOLEAN";
+      } else if (valueType === 'number') {
+        // Check if it's an integer or decimal
+        if (Number.isInteger(value)) {
+          return "INTEGER";
+        } else {
+          return "DECIMAL(10,2)";
+        }
+      } else if (value instanceof Date) {
+        return "TIMESTAMP";
+      } else if (valueType === 'string') {
+        // Try to detect time strings (HH:MM or HH:MM:SS format)
+        if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(value)) {
+          return "TIME";
+        }
+        // Try to detect date strings (YYYY-MM-DD format)
+        if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+          return "DATE";
+        }
+        // Try to detect timestamp strings (YYYY-MM-DD HH:MM:SS or ISO format)
+        if (/^\d{4}-\d{2}-\d{2}T/.test(value) || /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(value)) {
+          return "TIMESTAMP";
+        }
+        // Check length for VARCHAR vs TEXT
+        if (value.length <= 255) {
+          return "VARCHAR(255)";
+        }
+        return "TEXT";
+      } else if (Array.isArray(value)) {
+        return "TEXT"; // Store as JSON string
+      } else if (valueType === 'object') {
+        return "TEXT"; // Store as JSON string
+      }
+      
+      return "TEXT"; // Default fallback
+    };
 
     // Generate secure table name (use node configuration or default)
     const baseName = node.data.tableName || "form_data";
@@ -756,20 +1075,70 @@ const executeDbCreate = async (node, context, appId, userId) => {
       // Build column definitions for new table
       const columns = ["id SERIAL PRIMARY KEY"];
 
+      // Determine data source for column creation
+      const hasDataForColumns = Object.keys(dataToInsert).length > 0;
+      
       // If we have manual insertData, create columns from it
-      if (hasManualInsertData) {
+      if (hasValidInsertData) {
         console.log("🔧 [DB-CREATE] Creating table from manual insertData");
 
-        Object.keys(node.data.insertData).forEach((fieldName) => {
+        Object.keys(insertDataRaw).forEach((fieldName) => {
+          // Skip empty field names
+          if (!fieldName || fieldName.trim() === '') return;
+          
           const columnName = sanitizeIdentifier(fieldName);
-
-          // Validate column name for security
           securityValidator.validateColumnName(columnName);
 
-          // Default to TEXT type for manual fields
-          const sqlType = "TEXT";
+          const fieldData = insertDataRaw[fieldName];
+          
+          // Support both old format (string value) and new format (object with value and type)
+          let value, sqlType;
+          if (typeof fieldData === 'object' && fieldData !== null && 'value' in fieldData) {
+            // New format: { value: "...", type: "TEXT" }
+            value = fieldData.value;
+            // CRITICAL: Use user-selected type if provided, otherwise infer from value
+            if (fieldData.type && fieldData.type.trim() !== '') {
+              sqlType = fieldData.type.toUpperCase().trim();
+              console.log(`✅ [DB-CREATE] Using user-selected type "${sqlType}" for field "${fieldName}"`);
+            } else {
+              sqlType = inferSQLType(value);
+              console.log(`🔍 [DB-CREATE] Inferred type "${sqlType}" for field "${fieldName}" from value`);
+            }
+          } else {
+            // Old format: just the value string
+            value = fieldData;
+            sqlType = inferSQLType(value);
+            console.log(`🔍 [DB-CREATE] Inferred type "${sqlType}" for field "${fieldName}" from value (old format)`);
+          }
 
-          // Avoid duplicate column names
+          // Normalize SQL type (handle variations like VARCHAR vs VARCHAR(255))
+          const normalizeSQLType = (type) => {
+            const upperType = type.toUpperCase().trim();
+            if (upperType === 'VARCHAR' || (upperType.startsWith('VARCHAR') && !upperType.includes('('))) {
+              return 'VARCHAR(255)';
+            }
+            if (upperType === 'INTEGER' || upperType === 'INT') {
+              return 'INTEGER';
+            }
+            if (upperType === 'BOOLEAN' || upperType === 'BOOL') {
+              return 'BOOLEAN';
+            }
+            if (upperType === 'DECIMAL' && !upperType.includes('(')) {
+              return 'DECIMAL(10,2)';
+            }
+            return type; // Return as-is for valid types
+          };
+          
+          sqlType = normalizeSQLType(sqlType);
+
+          // Validate SQL type
+          const validTypes = ['TEXT', 'VARCHAR(255)', 'INTEGER', 'DECIMAL(10,2)', 'BOOLEAN', 'TIMESTAMP', 'DATE', 'TIME'];
+          const isValidType = validTypes.some(t => sqlType.toUpperCase().includes(t.split('(')[0]));
+          if (!isValidType) {
+            console.warn(`⚠️ [DB-CREATE] Invalid SQL type "${sqlType}" for field "${fieldName}", defaulting to TEXT`);
+            sqlType = 'TEXT';
+          }
+
           let finalColumnName = columnName;
           let counter = 1;
           while (columnMap.has(finalColumnName)) {
@@ -786,8 +1155,112 @@ const executeDbCreate = async (node, context, appId, userId) => {
 
           columns.push(`"${finalColumnName}" ${sqlType}`);
         });
-      } else {
-        // Create columns from form elements
+      } 
+      // If we have data from context (http.request, roleIs, etc.), create columns from it
+      else if (hasDataForColumns) {
+        // FINAL CHECK: If we have a 'data' array field, extract from it NOW before creating table
+        if (dataSource.includes('httpResponse') && 'data' in dataToInsert) {
+          if (Array.isArray(dataToInsert.data) && dataToInsert.data.length > 0) {
+            console.log("📋 [DB-CREATE] 🚨 FINAL CHECK: Found 'data' array before table creation, extracting NOW!");
+            const firstItem = dataToInsert.data[0];
+            if (typeof firstItem === 'object' && firstItem !== null) {
+              const extracted = { ...firstItem };
+              if (dataToInsert.success !== undefined) extracted._success = dataToInsert.success;
+              if (dataToInsert.tableName) extracted._tableName = dataToInsert.tableName;
+              if (dataToInsert.count !== undefined) extracted._count = dataToInsert.count;
+              dataToInsert = extracted;
+              console.log("📋 [DB-CREATE] ✅ FINAL CHECK: Extracted", Object.keys(dataToInsert).length, "fields:", Object.keys(dataToInsert));
+            }
+          } else if (typeof dataToInsert.data === 'string') {
+            try {
+              const parsed = JSON.parse(dataToInsert.data);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                console.log("📋 [DB-CREATE] 🚨 FINAL CHECK: Parsed 'data' string contains array, extracting NOW!");
+                const firstItem = parsed[0];
+                if (typeof firstItem === 'object' && firstItem !== null) {
+                  const extracted = { ...firstItem };
+                  if (dataToInsert.success !== undefined) extracted._success = dataToInsert.success;
+                  if (dataToInsert.tableName) extracted._tableName = dataToInsert.tableName;
+                  if (dataToInsert.count !== undefined) extracted._count = dataToInsert.count;
+                  dataToInsert = extracted;
+                  console.log("📋 [DB-CREATE] ✅ FINAL CHECK: Extracted", Object.keys(dataToInsert).length, "fields from parsed string");
+                }
+              }
+            } catch (e) {
+              // Ignore parse errors
+            }
+          }
+        }
+        
+        console.log("🔧 [DB-CREATE] Creating table from context data (http.request/roleIs/etc.)");
+        console.log("🔧 [DB-CREATE] Total fields to process:", Object.keys(dataToInsert).length);
+        console.log("🔧 [DB-CREATE] Field names:", Object.keys(dataToInsert));
+
+        const fieldNames = Object.keys(dataToInsert);
+        for (let index = 0; index < fieldNames.length; index++) {
+          const fieldName = fieldNames[index];
+          console.log(`📋 [DB-CREATE] Processing field ${index + 1}/${Object.keys(dataToInsert).length}: "${fieldName}"`);
+          
+          let columnName;
+          try {
+            columnName = sanitizeIdentifier(fieldName);
+            console.log(`✅ [DB-CREATE] Sanitized "${fieldName}" -> "${columnName}"`);
+          } catch (sanitizeError) {
+            console.error(`❌ [DB-CREATE] Failed to sanitize field name "${fieldName}":`, sanitizeError.message);
+            throw new Error(`Invalid field name "${fieldName}": ${sanitizeError.message}`);
+          }
+          
+          // Double-check the sanitized name is valid before validation
+          if (!columnName || typeof columnName !== 'string' || columnName.trim() === '') {
+            console.error(`❌ [DB-CREATE] Sanitized column name is empty for field "${fieldName}"`);
+            columnName = `field_${Math.random().toString(36).substring(2, 9)}`;
+            console.log(`🔧 [DB-CREATE] Generated fallback column name: "${columnName}"`);
+          }
+          
+          // Ensure it starts with a letter (final safety check)
+          if (!/^[a-zA-Z]/.test(columnName)) {
+            console.warn(`⚠️ [DB-CREATE] Sanitized name "${columnName}" doesn't start with letter, fixing...`);
+            columnName = "field_" + columnName;
+            console.log(`🔧 [DB-CREATE] Fixed column name: "${columnName}"`);
+          }
+          
+          try {
+            securityValidator.validateColumnName(columnName);
+            console.log(`✅ [DB-CREATE] Validation passed for "${fieldName}" -> "${columnName}"`);
+          } catch (validateError) {
+            console.error(`❌ [DB-CREATE] Column name validation failed for "${fieldName}" (sanitized: "${columnName}"):`, validateError.message);
+            console.error(`❌ [DB-CREATE] Column name details:`, {
+              original: fieldName,
+              sanitized: columnName,
+              length: columnName.length,
+              startsWithLetter: /^[a-zA-Z]/.test(columnName),
+              matchesPattern: /^[a-zA-Z][a-zA-Z0-9_]*$/.test(columnName)
+            });
+            throw new Error(`Column name validation failed for "${fieldName}" (sanitized: "${columnName}"): ${validateError.message}`);
+          }
+
+          const value = dataToInsert[fieldName];
+          const sqlType = inferSQLType(value);
+
+          let finalColumnName = columnName;
+          let counter = 1;
+          while (columnMap.has(finalColumnName)) {
+            finalColumnName = `${columnName}_${counter}`;
+            counter++;
+          }
+
+          columnMap.set(finalColumnName, {
+            elementId: fieldName,
+            type: sqlType,
+            required: false,
+            originalName: fieldName,
+          });
+
+          columns.push(`"${finalColumnName}" ${sqlType}`);
+        }
+      }
+      // Otherwise, create columns from form elements
+      else if (formElements.length > 0) {
         console.log("🔧 [DB-CREATE] Creating table from form elements");
 
         formElements.forEach((element) => {
@@ -795,7 +1268,6 @@ const executeDbCreate = async (node, context, appId, userId) => {
             element.properties?.label || element.id
           );
 
-          // Validate column name for security
           securityValidator.validateColumnName(columnName);
 
           const sqlType = mapFieldTypeToSQL(
@@ -803,7 +1275,6 @@ const executeDbCreate = async (node, context, appId, userId) => {
             element.properties?.inputType
           );
 
-          // Avoid duplicate column names
           let finalColumnName = columnName;
           let counter = 1;
           while (columnMap.has(finalColumnName)) {
@@ -821,6 +1292,8 @@ const executeDbCreate = async (node, context, appId, userId) => {
           const notNull = element.properties?.required ? " NOT NULL" : "";
           columns.push(`"${finalColumnName}" ${sqlType}${notNull}`);
         });
+      } else {
+        throw new Error("Cannot create table: No data or form elements available");
       }
 
       // Add metadata columns
@@ -866,25 +1339,87 @@ const executeDbCreate = async (node, context, appId, userId) => {
 
     // INSERT DATA INTO TABLE
     console.log("💾 [DB-CREATE] Inserting data into table:", tableName);
-
-    // Get data from either manual insertData or context formData
-    let dataToInsert = {};
-
-    if (hasManualInsertData) {
-      console.log(
-        "📋 [DB-CREATE] Using manual insertData from workflow configuration"
-      );
-      dataToInsert = node.data.insertData;
-    } else {
-      console.log("📋 [DB-CREATE] Using formData from context");
-      dataToInsert = context.formData || {};
-    }
-
-    console.log("📋 [DB-CREATE] Data to insert:", Object.keys(dataToInsert));
+    console.log("💾 [DB-CREATE] Data source:", dataSource);
+    console.log("💾 [DB-CREATE] Data to insert keys:", Object.keys(dataToInsert));
 
     if (Object.keys(dataToInsert).length === 0) {
       throw new Error("No data provided for database insertion");
     }
+    
+    // Convert complex types to strings for storage
+    const prepareValueForInsert = (value) => {
+      if (value === null || value === undefined) {
+        return null;
+      }
+      
+      // If it's the new format object { value: "...", type: "..." }, extract just the value
+      if (typeof value === 'object' && value !== null && 'value' in value && !(value instanceof Date)) {
+        // This is the new format - extract the actual value
+        return prepareValueForInsert(value.value);
+      }
+      
+      if (typeof value === 'object' && !(value instanceof Date)) {
+        // Convert objects and arrays to JSON strings
+        return JSON.stringify(value);
+      }
+      return value;
+    };
+    
+    // Prepare data values - ensure we extract values from objects
+    const preparedData = {};
+    for (const [key, value] of Object.entries(dataToInsert)) {
+      // Triple-check: if value is still an object with 'value' property, extract it
+      let finalValue = value;
+      
+      // Check if it's the new format object
+      if (typeof value === 'object' && value !== null && 'value' in value && !(value instanceof Date) && !Array.isArray(value)) {
+        console.warn(`⚠️ [DB-CREATE] Found object format in dataToInsert for key "${key}", extracting value`);
+        finalValue = value.value;
+      }
+      
+      // Prepare the value (this will handle any remaining objects by JSON.stringify)
+      preparedData[key] = prepareValueForInsert(finalValue);
+    }
+    
+    console.log("💾 [DB-CREATE] Prepared data for insertion:", Object.keys(preparedData).reduce((acc, key) => {
+      const val = preparedData[key];
+      let typeInfo = typeof val;
+      if (val !== null && typeof val === 'object') {
+        if (val instanceof Date) {
+          typeInfo = 'Date';
+        } else if (Array.isArray(val)) {
+          typeInfo = 'Array';
+        } else if ('value' in val) {
+          typeInfo = 'Object with value property';
+        } else {
+          typeInfo = 'OBJECT!';
+        }
+      }
+      acc[key] = typeInfo;
+      return acc;
+    }, {}));
+    
+    // Final validation: ensure no objects remain
+    for (const [key, value] of Object.entries(preparedData)) {
+      if (typeof value === 'object' && value !== null && !(value instanceof Date) && !Array.isArray(value)) {
+        console.error(`❌ [DB-CREATE] CRITICAL: Object still present in preparedData for key "${key}":`, value);
+        // Try to extract value if it's the new format
+        if ('value' in value) {
+          console.warn(`⚠️ [DB-CREATE] Extracting value from object for key "${key}"`);
+          preparedData[key] = prepareValueForInsert(value.value);
+        } else {
+          // Force convert to JSON string as last resort
+          preparedData[key] = JSON.stringify(value);
+        }
+      }
+    }
+    
+    // Log final prepared data types
+    console.log("💾 [DB-CREATE] Final prepared data types:", Object.keys(preparedData).reduce((acc, key) => {
+      const val = preparedData[key];
+      acc[key] = typeof val + (val !== null && typeof val === 'object' && !(val instanceof Date) && !Array.isArray(val) ? ' (STILL OBJECT!)' : '');
+      return acc;
+    }, {}));
 
     // Get table schema to map form data to columns
     let tableSchema;
@@ -899,7 +1434,7 @@ const executeDbCreate = async (node, context, appId, userId) => {
 
       if (!existingTable) {
         throw new Error(
-          `Table '${tableName}' exists but not found in registry`
+          `Table '${tableName}' exists but not found in registry. Please recreate the table.`
         );
       }
 
@@ -912,13 +1447,109 @@ const executeDbCreate = async (node, context, appId, userId) => {
           originalName: col.originalName,
         });
       });
+      
+      // Check if we have new fields in data that don't exist in table
+      const existingColumnNames = new Set(tableSchema.keys());
+      const newFields = Object.keys(preparedData).filter(
+        key => !existingColumnNames.has(key) && 
+                !['id', 'created_at', 'updated_at', 'app_id'].includes(key)
+      );
+      
+      // PRODUCTION-LEVEL: Automatically add new columns to existing table
+      if (newFields.length > 0) {
+        console.log(`🔧 [DB-CREATE] Detected ${newFields.length} new field(s) that don't exist in table. Adding columns automatically...`);
+        
+        for (const fieldName of newFields) {
+          const columnName = sanitizeIdentifier(fieldName);
+          securityValidator.validateColumnName(columnName);
+          
+          // Get the value to infer type
+          const fieldValue = preparedData[fieldName];
+          
+          // Try to get type from insertDataRaw if available (user-selected type)
+          let sqlType = 'TEXT'; // Default
+          if (hasValidInsertData && insertDataRaw[fieldName]) {
+            const fieldData = insertDataRaw[fieldName];
+            if (typeof fieldData === 'object' && fieldData !== null && 'value' in fieldData && fieldData.type) {
+              sqlType = fieldData.type.toUpperCase().trim();
+              console.log(`✅ [DB-CREATE] Using user-selected type "${sqlType}" for new column "${columnName}"`);
+            } else {
+              sqlType = inferSQLType(fieldValue);
+              console.log(`🔍 [DB-CREATE] Inferred type "${sqlType}" for new column "${columnName}" from value`);
+            }
+          } else {
+            sqlType = inferSQLType(fieldValue);
+            console.log(`🔍 [DB-CREATE] Inferred type "${sqlType}" for new column "${columnName}" from value`);
+          }
+          
+          // Normalize SQL type
+          const normalizeSQLType = (type) => {
+            const upperType = type.toUpperCase().trim();
+            if (upperType === 'VARCHAR' || (upperType.startsWith('VARCHAR') && !upperType.includes('('))) {
+              return 'VARCHAR(255)';
+            }
+            if (upperType === 'INTEGER' || upperType === 'INT') {
+              return 'INTEGER';
+            }
+            if (upperType === 'BOOLEAN' || upperType === 'BOOL') {
+              return 'BOOLEAN';
+            }
+            if (upperType === 'DECIMAL' && !upperType.includes('(')) {
+              return 'DECIMAL(10,2)';
+            }
+            return type;
+          };
+          
+          sqlType = normalizeSQLType(sqlType);
+          
+          // Validate SQL type
+          const validTypes = ['TEXT', 'VARCHAR(255)', 'INTEGER', 'DECIMAL(10,2)', 'BOOLEAN', 'TIME'];
+          const isValidType = validTypes.some(t => sqlType.toUpperCase().includes(t.split('(')[0]));
+          if (!isValidType) {
+            console.warn(`⚠️ [DB-CREATE] Invalid SQL type "${sqlType}" for new column "${columnName}", defaulting to TEXT`);
+            sqlType = 'TEXT';
+          }
+          
+          // Add column to table using ALTER TABLE
+          try {
+            const alterSQL = `ALTER TABLE "${tableName}" ADD COLUMN "${columnName}" ${sqlType}`;
+            console.log(`🔨 [DB-CREATE] Adding new column: ${alterSQL}`);
+            await prisma.$executeRawUnsafe(alterSQL);
+            
+            // Add to tableSchema map so it can be used in INSERT
+            tableSchema.set(columnName, {
+              elementId: fieldName,
+              type: sqlType,
+              originalName: fieldName,
+            });
+            
+            // Update the UserTable registry
+            const updatedColumns = Array.from(tableSchema.entries()).map(([name, info]) => ({
+              name,
+              type: info.type,
+              elementId: info.elementId,
+              originalName: info.originalName,
+            }));
+            
+            await prisma.userTable.update({
+              where: { id: existingTable.id },
+              data: { columns: JSON.stringify(updatedColumns) },
+            });
+            
+            console.log(`✅ [DB-CREATE] Successfully added new column "${columnName}" (${sqlType}) to table "${tableName}"`);
+          } catch (alterError) {
+            console.error(`❌ [DB-CREATE] Failed to add column "${columnName}" to table "${tableName}":`, alterError.message);
+            // Continue with other fields even if one fails
+          }
+        }
+        
+        console.log(`✅ [DB-CREATE] Finished adding ${newFields.length} new column(s) to existing table`);
+      }
     }
 
-    // Build INSERT statement
+    // Build INSERT statement with proper SQL escaping
     const insertColumns = [];
-    const insertValues = [];
-    const insertParams = [];
-    let paramIndex = 1;
+    const escapedValues = [];
 
     // Map data to table columns
     for (const [columnName, columnInfo] of tableSchema) {
@@ -935,42 +1566,170 @@ const executeDbCreate = async (node, context, appId, userId) => {
       // Find data for this column
       let dataValue = null;
 
-      if (hasManualInsertData) {
-        // For manual insertData, match by column name or original name
-        dataValue =
-          dataToInsert[columnName] ||
-          dataToInsert[columnInfo.originalName] ||
-          null;
-      } else {
-        // For form data, match by element ID or original name
-        dataValue =
-          dataToInsert[columnInfo.elementId] ||
-          dataToInsert[columnInfo.originalName] ||
-          null;
+      // Try multiple matching strategies
+      const possibleKeys = [
+        columnName,
+        columnInfo.originalName,
+        columnInfo.elementId,
+      ];
+      
+      // Also try with different case variations
+      for (const key of possibleKeys) {
+        if (preparedData[key] !== undefined) {
+          dataValue = preparedData[key];
+          console.log(`✅ [DB-CREATE] Found data for column "${columnName}" using exact key "${key}"`);
+          break;
+        }
+        // Try case-insensitive match
+        const lowerKey = key.toLowerCase();
+        for (const dataKey of Object.keys(preparedData)) {
+          if (dataKey.toLowerCase() === lowerKey) {
+            dataValue = preparedData[dataKey];
+            console.log(`✅ [DB-CREATE] Found data for column "${columnName}" using case-insensitive match: "${dataKey}"`);
+            break;
+          }
+        }
+        if (dataValue !== null) break;
       }
+      
+      // If still not found and we have manual insertData, check there with case-insensitive matching
+      if (dataValue === null && hasValidInsertData) {
+        // First try exact keys
+        for (const key of possibleKeys) {
+          const fieldData = insertDataRaw[key];
+          if (fieldData !== undefined) {
+            // Support both old format (string) and new format (object with value)
+            if (typeof fieldData === 'object' && fieldData !== null && 'value' in fieldData) {
+              dataValue = fieldData.value; // Extract value directly
+            } else {
+              dataValue = fieldData; // Use as-is if it's already a primitive
+            }
+            console.log(`✅ [DB-CREATE] Found data for column "${columnName}" from insertDataRaw using key "${key}"`);
+            break;
+          }
+        }
+        
+        // If still not found, try case-insensitive match in insertDataRaw
+        if (dataValue === null) {
+          for (const key of possibleKeys) {
+            const lowerKey = key.toLowerCase();
+            for (const dataKey of Object.keys(insertDataRaw)) {
+              if (dataKey.toLowerCase() === lowerKey) {
+                const fieldData = insertDataRaw[dataKey];
+                if (typeof fieldData === 'object' && fieldData !== null && 'value' in fieldData) {
+                  dataValue = fieldData.value;
+                } else {
+                  dataValue = fieldData;
+                }
+                console.log(`✅ [DB-CREATE] Found data for column "${columnName}" from insertDataRaw using case-insensitive match: "${dataKey}"`);
+                break;
+              }
+            }
+            if (dataValue !== null) break;
+          }
+        }
+      }
+      
+      // Log if we found data
+      if (dataValue !== null) {
+        const dataType = typeof dataValue;
+        const preview = dataType === 'object' && dataValue !== null ? (dataValue instanceof Date ? dataValue.toISOString() : '[OBJECT]') : String(dataValue).substring(0, 50);
+        console.log(`📊 [DB-CREATE] DataValue for column "${columnName}": ${dataType} = ${preview}`);
+      } else {
+        console.warn(`⚠️ [DB-CREATE] No data found for column "${columnName}". Available keys in preparedData:`, Object.keys(preparedData));
+        console.warn(`⚠️ [DB-CREATE] Available keys in insertDataRaw:`, Object.keys(insertDataRaw));
+      }
+      
+      // CRITICAL: Final check - if dataValue is still an object, extract or convert
+      if (dataValue !== null && typeof dataValue === 'object' && !(dataValue instanceof Date) && !Array.isArray(dataValue)) {
+        if ('value' in dataValue) {
+          console.warn(`⚠️ [DB-CREATE] Found object in dataValue for column "${columnName}", extracting value property`);
+          dataValue = dataValue.value;
+        } else {
+          console.error(`❌ [DB-CREATE] CRITICAL: Object without 'value' property found for column "${columnName}":`, dataValue);
+          // Convert to JSON string as last resort
+          dataValue = JSON.stringify(dataValue);
+        }
+      }
+      
+      // Prepare the value for insertion (handles dates, arrays, etc.)
+      dataValue = prepareValueForInsert(dataValue);
 
       insertColumns.push(`"${columnName}"`);
-      insertValues.push(`$${paramIndex}`);
-      insertParams.push(dataValue);
-      paramIndex++;
+      
+      // CRITICAL: Final validation before SQL escaping
+      // If dataValue is still an object at this point, something went wrong
+      if (dataValue !== null && dataValue !== undefined && typeof dataValue === 'object' && !(dataValue instanceof Date) && !Array.isArray(dataValue)) {
+        console.error(`❌ [DB-CREATE] CRITICAL ERROR: Object found in dataValue for column "${columnName}" right before SQL escaping!`, dataValue);
+        // Last resort: try to extract value or stringify
+        if ('value' in dataValue) {
+          dataValue = dataValue.value;
+        } else {
+          dataValue = JSON.stringify(dataValue);
+        }
+      }
+      
+      // Escape value properly for PostgreSQL
+      if (dataValue === null || dataValue === undefined) {
+        escapedValues.push('NULL');
+      } else if (typeof dataValue === 'boolean') {
+        escapedValues.push(dataValue ? 'TRUE' : 'FALSE');
+      } else if (dataValue instanceof Date) {
+        escapedValues.push(`'${dataValue.toISOString()}'::timestamp`);
+      } else if (typeof dataValue === 'number') {
+        escapedValues.push(String(dataValue));
+      } else if (typeof dataValue === 'string') {
+        // Check column type to handle TIME values correctly
+        const columnType = columnInfo.type?.toUpperCase() || '';
+        if (columnType === 'TIME') {
+          // For TIME type, ensure the value is in HH:MM:SS format
+          // If it's just HH:MM, add :00 for seconds
+          let timeValue = dataValue.trim();
+          if (/^\d{1,2}:\d{2}$/.test(timeValue)) {
+            timeValue = timeValue + ':00';
+          }
+          escapedValues.push(`'${timeValue.replace(/'/g, "''")}'::time`);
+        } else if (columnType === 'DATE') {
+          // For DATE type, ensure it's a valid date format
+          escapedValues.push(`'${dataValue.replace(/'/g, "''")}'::date`);
+        } else if (columnType === 'TIMESTAMP') {
+          // For TIMESTAMP, try to parse and format correctly
+          // If it's just a time (HH:MM), it's invalid for timestamp
+          if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(dataValue)) {
+            console.error(`❌ [DB-CREATE] Invalid timestamp value "${dataValue}" for column "${columnName}" (looks like TIME, not TIMESTAMP)`);
+            // Try to use current date with the time
+            const today = new Date().toISOString().split('T')[0];
+            escapedValues.push(`'${today} ${dataValue}:00'::timestamp`);
+          } else {
+            escapedValues.push(`'${dataValue.replace(/'/g, "''")}'::timestamp`);
+          }
+        } else {
+          // For other string types, escape normally
+          escapedValues.push(`'${dataValue.replace(/'/g, "''")}'`);
+        }
+      } else if (Array.isArray(dataValue)) {
+        // Convert arrays to JSON strings
+        escapedValues.push(`'${JSON.stringify(dataValue).replace(/'/g, "''")}'`);
+      } else {
+        // This should NEVER happen after our checks, but just in case
+        console.error(`❌ [DB-CREATE] UNEXPECTED TYPE for column "${columnName}":`, typeof dataValue, dataValue);
+        const stringValue = JSON.stringify(dataValue);
+        escapedValues.push(`'${stringValue.replace(/'/g, "''")}'`);
+      }
     }
 
     // Add app_id
     insertColumns.push('"app_id"');
-    insertValues.push(`$${paramIndex}`);
-    insertParams.push(parseInt(appId));
+    escapedValues.push(String(parseInt(appId)));
 
     const insertSQL = `INSERT INTO "${tableName}" (${insertColumns.join(
       ", "
-    )}) VALUES (${insertValues.join(", ")}) RETURNING id`;
+    )}) VALUES (${escapedValues.join(", ")}) RETURNING id`;
 
     console.log("💾 [DB-CREATE] Insert SQL:", insertSQL);
-    console.log("💾 [DB-CREATE] Insert params:", insertParams);
+    console.log("💾 [DB-CREATE] Escaped values:", escapedValues);
 
-    const insertResult = await prisma.$queryRawUnsafe(
-      insertSQL,
-      ...insertParams
-    );
+    const insertResult = await prisma.$queryRawUnsafe(insertSQL);
     const insertedId = insertResult[0]?.id;
 
     console.log(
@@ -4085,28 +4844,203 @@ async function executeRoleIs(node, context, appId, userId) {
       requiredRole = "",
       roles = [],
       requiredPages = [],
-      checkMultiple = false
+      checkMultiple = false,
+      userEmail,
+      userPassword,
+      customRole
     } = node.data || {};
 
-    // 1️⃣ FETCH USER ROLE (context → DB)
-    let userRole = context?.user?.role || null;
+    // ================== USER CREATION (if credentials provided) ==================
+    let createdAppUserId = null;
+    let createdUserRole = null;
 
-    if (!userRole) {
-      const user = await prisma.user.findUnique({
-        where: { id: userId },
-        select: { role: true }
-      });
-      if (user) userRole = user.role;
+    if (userEmail && userPassword) {
+      try {
+        console.log("👤 [ROLE-IS] Creating new AppUser with credentials...");
+        
+        // Check if AppUser table exists by trying a safe query first
+        try {
+          // Check if user already exists for this app
+          const existingAppUser = await prisma.appUser.findFirst({
+            where: {
+              appId: Number(appId),
+              email: userEmail.trim().toLowerCase(),
+            },
+          });
+
+          if (existingAppUser) {
+            console.log("⚠️ [ROLE-IS] AppUser already exists, using existing user");
+            createdAppUserId = existingAppUser.id;
+            
+            // Get existing user's roles
+            const userRoles = await prisma.appUserRole.findMany({
+              where: { appUserId: existingAppUser.id },
+              include: { appRole: true },
+            });
+            
+            if (userRoles.length > 0) {
+              createdUserRole = userRoles[0].appRole.slug;
+            }
+          } else {
+            // Hash password
+            const saltRounds = parseInt(process.env.BCRYPT_SALT_ROUNDS) || 12;
+            const hashedPassword = await bcrypt.hash(userPassword, saltRounds);
+
+            // Determine role to assign (customRole or requiredRole)
+            const roleToAssign = customRole || requiredRole || "user";
+            const roleSlug = roleToAssign.trim().toLowerCase().replace(/\s+/g, "-");
+
+            // Find or create role
+            let appRole = await prisma.appRole.findFirst({
+              where: {
+                appId: Number(appId),
+                slug: roleSlug,
+              },
+            });
+
+            if (!appRole) {
+              // Create role if it doesn't exist
+              appRole = await prisma.appRole.create({
+                data: {
+                  appId: Number(appId),
+                  name: roleToAssign.charAt(0).toUpperCase() + roleToAssign.slice(1),
+                  slug: roleSlug,
+                  description: `Auto-created role: ${roleToAssign}`,
+                  isPredefined: false,
+                },
+              });
+              console.log(`✅ [ROLE-IS] Created new role: ${roleSlug}`);
+            }
+
+            // Create AppUser
+            const appUser = await prisma.appUser.create({
+              data: {
+                appId: Number(appId),
+                email: userEmail.trim().toLowerCase(),
+                password: hashedPassword,
+                name: null,
+                isActive: true,
+              },
+            });
+
+            createdAppUserId = appUser.id;
+
+            // Assign role to user
+            await prisma.appUserRole.create({
+              data: {
+                appUserId: appUser.id,
+                appRoleId: appRole.id,
+                grantedBy: userId || null,
+              },
+            });
+
+            createdUserRole = appRole.slug;
+            console.log(`✅ [ROLE-IS] Created AppUser ${appUser.id} with role ${roleSlug}`);
+            
+            // Assign page access if requiredPages are specified
+            if (requiredPages && requiredPages.length > 0 && appUser.id) {
+              try {
+                // Get all AppPages for this app to match by slug or page ID
+                const allAppPages = await prisma.appPage.findMany({
+                  where: {
+                    appId: Number(appId),
+                  },
+                });
+                
+                // Match requiredPages (could be page IDs like "page-1" or slugs)
+                const matchedPages = allAppPages.filter((page) => {
+                  // Check if slug matches
+                  if (requiredPages.includes(page.slug)) return true;
+                  // Check if page ID from canvas matches (e.g., "page-1" matches page with slug "page-1" or name "Page 1")
+                  const pageIdFromCanvas = page.slug.startsWith('page-') ? page.slug : `page-${page.id}`;
+                  if (requiredPages.includes(pageIdFromCanvas)) return true;
+                  // Check if page name matches (case-insensitive)
+                  const pageNameSlug = page.title.toLowerCase().replace(/\s+/g, '-');
+                  if (requiredPages.includes(pageNameSlug)) return true;
+                  return false;
+                });
+                
+                // Create PageAccess records for each matched page
+                const pageAccessData = matchedPages.map((page) => ({
+                  appId: Number(appId),
+                  appUserId: appUser.id,
+                  pageId: page.id,
+                  pageSlug: page.slug,
+                }));
+                
+                if (pageAccessData.length > 0) {
+                  await prisma.pageAccess.createMany({
+                    data: pageAccessData,
+                    skipDuplicates: true,
+                  });
+                  console.log(`✅ [ROLE-IS] Assigned ${pageAccessData.length} page(s) to AppUser ${appUser.id}:`, pageAccessData.map(p => p.pageSlug));
+                } else {
+                  console.warn(`⚠️ [ROLE-IS] No pages matched for requiredPages:`, requiredPages);
+                }
+              } catch (pageAccessErr) {
+                console.error("❌ [ROLE-IS] Error assigning page access:", pageAccessErr);
+                // Don't fail user creation if page access assignment fails
+              }
+            }
+          }
+        } catch (tableErr) {
+          // If AppUser table doesn't exist, log warning and continue
+          if (tableErr.code === 'P2021' || tableErr.message?.includes('does not exist')) {
+            console.warn("⚠️ [ROLE-IS] AppUser table does not exist. Please run database migrations: npx prisma migrate dev");
+            console.warn("⚠️ [ROLE-IS] Skipping user creation. Continuing with role check using platform user.");
+          } else {
+            console.error("❌ [ROLE-IS] Error creating AppUser:", createErr);
+          }
+          // Continue with role check even if user creation fails
+        }
+      } catch (createErr) {
+        console.error("❌ [ROLE-IS] Error creating AppUser:", createErr);
+        // Continue with role check even if user creation fails
+      }
     }
 
-    if (!userRole) {
-      console.log("⚠️ User role missing → fail");
-      return {
-        success: true,
-        isFilled: false,
-        context,
-        message: "User role missing"
-      };
+    // ================== ROLE CHECK ==================
+    // Determine which user to check (created AppUser or platform User)
+    let userRole = null;
+    let appUserIdForCheck = createdAppUserId;
+
+    // If we created a user, use that user's role
+    if (createdUserRole) {
+      userRole = createdUserRole;
+      console.log(`👤 [ROLE-IS] Using created AppUser role: ${userRole}`);
+    } else {
+      // Otherwise, check platform user role
+      userRole = context?.user?.role || null;
+
+      if (!userRole) {
+        const user = await prisma.user.findUnique({
+          where: { id: userId },
+          select: { role: true }
+        });
+        if (user) userRole = user.role;
+      }
+
+      if (!userRole) {
+        console.log("⚠️ [ROLE-IS] User role missing → fail");
+        return {
+          success: true,
+          isFilled: false,
+          context: {
+            ...context,
+            createdAppUserId,
+            roleCheck: {
+              isValid: false,
+              roleValid: false,
+              pageValid: true,
+              userRole: null,
+              requiredRole,
+              roles,
+              requiredPages
+            }
+          },
+          message: "User role missing"
+        };
+      }
     }
 
     userRole = userRole.trim().toLowerCase(); // normalize
@@ -4124,17 +5058,52 @@ async function executeRoleIs(node, context, appId, userId) {
       roleValid = userRole === finalRequired;
     }
 
-    // 3️⃣ PAGE ACCESS CHECK
+    // 3️⃣ PAGE ACCESS CHECK (for AppUser if created, otherwise skip for platform users)
     let pageValid = true;
 
     if (requiredPages.length > 0) {
-      const access = await prisma.pageAccess.findMany({
-        where: { userId },
-        select: { pageSlug: true }
-      });
-
-      const userPages = access.map((p) => p.pageSlug);
-      pageValid = requiredPages.every((slug) => userPages.includes(slug));
+      if (appUserIdForCheck) {
+        // Check AppUser page access (direct page access)
+        const directAccess = await prisma.pageAccess.findMany({
+          where: { appUserId: appUserIdForCheck },
+          select: { pageSlug: true }
+        });
+        const directPages = directAccess.map((p) => p.pageSlug);
+        
+        // Also check role-based page access
+        if (createdUserRole) {
+          const appRole = await prisma.appRole.findFirst({
+            where: {
+              appId: Number(appId),
+              slug: createdUserRole,
+            },
+            include: {
+              rolePages: {
+                include: {
+                  appPage: true,
+                },
+              },
+            },
+          });
+          
+          if (appRole) {
+            const rolePages = appRole.rolePages.map((rp) => rp.appPage.slug);
+            const allUserPages = [...new Set([...directPages, ...rolePages])];
+            pageValid = requiredPages.every((slug) => allUserPages.includes(slug));
+            console.log(`📄 [ROLE-IS] AppUser page check (role-based): ${pageValid}`, { requiredPages, userPages: allUserPages });
+          } else {
+            pageValid = requiredPages.every((slug) => directPages.includes(slug));
+            console.log(`📄 [ROLE-IS] AppUser page check (direct only): ${pageValid}`, { requiredPages, userPages: directPages });
+          }
+        } else {
+          pageValid = requiredPages.every((slug) => directPages.includes(slug));
+          console.log(`📄 [ROLE-IS] AppUser page check (direct only): ${pageValid}`, { requiredPages, userPages: directPages });
+        }
+      } else {
+        // Platform users don't have PageAccess - skip page check for them
+        console.log("📄 [ROLE-IS] Platform user - skipping page access check");
+        pageValid = true;
+      }
     }
 
     const isValid = roleValid && pageValid;
@@ -4144,6 +5113,12 @@ async function executeRoleIs(node, context, appId, userId) {
       isFilled: isValid,
       context: {
         ...context,
+        createdAppUserId,
+        appUser: createdAppUserId ? {
+          id: createdAppUserId,
+          email: userEmail,
+          role: createdUserRole
+        } : null,
         roleCheck: {
           isValid,
           roleValid,

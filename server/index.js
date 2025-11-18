@@ -39,6 +39,7 @@ setupSocket(io);
 const authRoutes = require("./routes/auth");
 const appRoutes = require("./routes/apps");
 const appRoles =  require("./routes/appRoles");
+const appUsersRoutes = require("./routes/appUsers");
 const templateRoutes = require("./routes/templates");
 const aiRoutes = require("./routes/ai");
 // Admin user routes removed - developer-only platform
@@ -108,6 +109,7 @@ app.get("/health", (_req, res) => {
 -----------------------------------------------------------------*/
 app.use("/auth", authRoutes);
 app.use("/api/app-roles", appRoles);
+app.use("/api/app-users", appUsersRoutes);
 app.use("/api/apps", appRoutes);
 app.use("/api/templates", templateRoutes);
 app.use("/api/floneo-ai", aiRoutes);

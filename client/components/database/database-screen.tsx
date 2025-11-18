@@ -73,6 +73,9 @@ export function DatabaseScreen() {
   const [totalPages, setTotalPages] = useState(1);
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [selectedRecord, setSelectedRecord] = useState<any | null>(null);
+  const [showRecordDetailsModal, setShowRecordDetailsModal] = useState(false);
+  const [visibleColumnsCount, setVisibleColumnsCount] = useState(4); // Show first 4 columns by default
 
   // Create Table Modal State
   const [showCreateTableModal, setShowCreateTableModal] = useState(false);
@@ -798,6 +801,40 @@ export function DatabaseScreen() {
       );
     }
 
+    // Try to parse JSON strings that start with { or [
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if ((trimmed.startsWith("{") || trimmed.startsWith("[")) && trimmed.length > 2) {
+        try {
+          const parsed = JSON.parse(value);
+          if (typeof parsed === "object" && parsed !== null) {
+            // If it's an array, show it nicely
+            if (Array.isArray(parsed)) {
+              return (
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs text-gray-500">Array ({parsed.length} items):</span>
+                  <pre className="text-xs bg-gray-100 p-2 rounded max-w-md overflow-auto max-h-32">
+                    {JSON.stringify(parsed, null, 2)}
+                  </pre>
+                </div>
+              );
+            }
+            // If it's an object, show it nicely
+            return (
+              <div className="flex flex-col gap-1">
+                <span className="text-xs text-gray-500">Object:</span>
+                <pre className="text-xs bg-gray-100 p-2 rounded max-w-md overflow-auto max-h-32">
+                  {JSON.stringify(parsed, null, 2)}
+                </pre>
+              </div>
+            );
+          }
+        } catch {
+          // Not valid JSON, continue to default
+        }
+      }
+    }
+
     // Default: convert to string
     return String(value);
   };
@@ -1479,56 +1516,117 @@ export function DatabaseScreen() {
 
               {/* Table */}
               <div className="flex-1 overflow-auto p-4">
+                {/* Column Visibility Toggle */}
+                <div className="mb-4 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-gray-600 dark:text-gray-400">
+                      Showing {Math.min(visibleColumnsCount, selectedTable.columns.length)} of {selectedTable.columns.length} columns
+                    </span>
+                    {selectedTable.columns.length > visibleColumnsCount && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setVisibleColumnsCount(selectedTable.columns.length)}
+                      >
+                        Show All
+                      </Button>
+                    )}
+                    {visibleColumnsCount === selectedTable.columns.length && selectedTable.columns.length > 4 && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setVisibleColumnsCount(4)}
+                      >
+                        Show Less
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
                 <div className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 overflow-hidden">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        {selectedTable.columns.map((column) => (
-                          <TableHead
-                            key={column.name}
-                            className="cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800"
-                            onClick={() => handleSort(column.name)}
-                          >
-                            <div className="flex items-center gap-2">
-                              <span className="font-semibold">
-                                {column.name}
-                              </span>
-                              <Badge variant="outline" className="text-xs">
-                                {column.type}
-                              </Badge>
-                              {sortColumn === column.name && (
-                                <span className="text-xs">
-                                  {sortDirection === "asc" ? "↑" : "↓"}
-                                </span>
-                              )}
-                            </div>
-                          </TableHead>
-                        ))}
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {sortedData.length === 0 ? (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
                         <TableRow>
-                          <TableCell
-                            colSpan={selectedTable.columns.length}
-                            className="text-center py-8 text-gray-500"
-                          >
-                            No data found
-                          </TableCell>
+                          <TableHead className="w-12">#</TableHead>
+                          {selectedTable.columns.slice(0, visibleColumnsCount).map((column) => (
+                            <TableHead
+                              key={column.name}
+                              className="cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 min-w-[150px]"
+                              onClick={() => handleSort(column.name)}
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold">
+                                  {column.name}
+                                </span>
+                                <Badge variant="outline" className="text-xs">
+                                  {column.type}
+                                </Badge>
+                                {sortColumn === column.name && (
+                                  <span className="text-xs">
+                                    {sortDirection === "asc" ? "↑" : "↓"}
+                                  </span>
+                                )}
+                              </div>
+                            </TableHead>
+                          ))}
+                          {selectedTable.columns.length > visibleColumnsCount && (
+                            <TableHead className="w-24">Actions</TableHead>
+                          )}
                         </TableRow>
-                      ) : (
-                        sortedData.map((row, index) => (
-                          <TableRow key={index}>
-                            {selectedTable.columns.map((column) => (
-                              <TableCell key={column.name}>
-                                {formatCellValue(row[column.name], column.type)}
-                              </TableCell>
-                            ))}
+                      </TableHeader>
+                      <TableBody>
+                        {sortedData.length === 0 ? (
+                          <TableRow>
+                            <TableCell
+                              colSpan={visibleColumnsCount + 2}
+                              className="text-center py-8 text-gray-500"
+                            >
+                              No data found
+                            </TableCell>
                           </TableRow>
-                        ))
-                      )}
-                    </TableBody>
-                  </Table>
+                        ) : (
+                          sortedData.map((row, index) => (
+                            <TableRow 
+                              key={index}
+                              className="cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
+                              onClick={() => {
+                                setSelectedRecord(row);
+                                setShowRecordDetailsModal(true);
+                              }}
+                            >
+                              <TableCell className="text-gray-500">
+                                {index + 1 + (currentPage - 1) * 50}
+                              </TableCell>
+                              {selectedTable.columns.slice(0, visibleColumnsCount).map((column) => (
+                                <TableCell key={column.name} className="max-w-[200px]">
+                                  <div className="truncate" title={String(row[column.name] || '')}>
+                                    {formatCellValue(row[column.name], column.type)}
+                                  </div>
+                                </TableCell>
+                              ))}
+                              {selectedTable.columns.length > visibleColumnsCount && (
+                                <TableCell>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedRecord(row);
+                                      setShowRecordDetailsModal(true);
+                                    }}
+                                    className="text-blue-600 hover:text-blue-700"
+                                  >
+                                    View All
+                                  </Button>
+                                </TableCell>
+                              )}
+                            </TableRow>
+                          ))
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
                 </div>
 
                 {/* Pagination */}
@@ -1827,6 +1925,52 @@ export function DatabaseScreen() {
               ) : (
                 "Add Record"
               )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Record Details Modal */}
+      <Dialog open={showRecordDetailsModal} onOpenChange={setShowRecordDetailsModal}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Record Details</DialogTitle>
+            <DialogDescription>
+              Full details for record from {selectedTable?.name}
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedRecord && selectedTable && (
+            <div className="space-y-4 py-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {selectedTable.columns.map((column) => (
+                  <div
+                    key={column.name}
+                    className="space-y-2 p-4 border rounded-lg bg-gray-50 dark:bg-gray-800/50"
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <Label className="font-semibold text-sm">
+                        {column.name}
+                      </Label>
+                      <Badge variant="outline" className="text-xs">
+                        {column.type}
+                      </Badge>
+                    </div>
+                    <div className="min-h-[40px] break-words">
+                      {formatCellValue(selectedRecord[column.name], column.type)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowRecordDetailsModal(false)}
+            >
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>
