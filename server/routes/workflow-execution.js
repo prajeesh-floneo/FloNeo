@@ -578,6 +578,15 @@ const executeOnSubmit = async (node, context, appId) => {
     const formData = context.formData || {};
     const triggerElement = context.triggerElement;
 
+    console.log("🧾 [ON-SUBMIT] Incoming context snapshot:", {
+      formGroupId,
+      contextKeys: Object.keys(context || {}),
+      formDataPreview: formData,
+      rawContext: {
+        ...context,
+      },
+    });
+
     console.log("📋 [ON-SUBMIT] Form submission details:", {
       formGroupId,
       formDataKeys: Object.keys(formData),
@@ -2503,9 +2512,9 @@ const executeDbUpsert = async (node, context, appId, userId) => {
     let existingRecords;
     try {
       existingRecords = await prisma.$queryRawUnsafe(
-        selectQuery,
-        ...selectParams
-      );
+      selectQuery,
+      ...selectParams
+    );
     } catch (error) {
       console.error("❌ [DB-UPSERT] Query error:", error);
       throw new Error(
@@ -2565,7 +2574,7 @@ const executeDbUpsert = async (node, context, appId, userId) => {
             const cleanField = field.replace(/^["']|["']$/g, '');
             return {
               field: cleanField,
-              operator: "=",
+            operator: "=",
               value: processedInsertData[cleanField] || processedUpdateData[cleanField],
             };
           }),
@@ -2628,7 +2637,7 @@ const executeDbUpsert = async (node, context, appId, userId) => {
 
       result = {
         success: true,
-        tableName,
+          tableName,
         recordId: insertedId,
         tableCreated: false,
         columnsInserted: insertColumns.length - 1, // Exclude app_id
@@ -3644,7 +3653,7 @@ const executeAuthVerify = async (node, context, appId, userId) => {
 
     return {
       success: isAuthorized,
-      isAuthenticated: true,
+        isAuthenticated: true,
       isAuthorized,
       failureReason: authVerifyResult.failureReason,
       user: sanitizedUser,
@@ -4232,6 +4241,493 @@ const executeMatch = async (node, context, appId, userId) => {
   }
 };
 
+// audit.log block handler
+const executeAuditLog = async (node, context, appId, userId) => {
+  try {
+    console.log("📋 [AUDIT-LOG] Starting audit log retrieval for app:", appId);
+
+    const hasAccess = await securityValidator.validateAppAccess(
+      appId,
+      userId,
+      prisma
+    );
+    if (!hasAccess) {
+      throw new Error("Access denied to this app");
+    }
+
+    const {
+      logLimit = 100,
+      logFilter = "all", // "all", "app", "user", "action"
+      logAction = "",
+      logUserId = "",
+      dateFrom = "",
+      dateTo = "",
+      outputFormat = "formatted", // "formatted", "raw", "json"
+      logFileName = "audit.log", // Allow custom log file name
+    } = node.data || {};
+
+    // Read audit log file - try multiple possible locations
+    // auth.js uses relative path "server/logs", so we need to check relative to cwd
+    // Also check absolute paths from __dirname
+    const cwd = process.cwd();
+    const possibleLogDirs = [
+      path.resolve(cwd, "server", "logs"),                    // server/logs (relative to cwd)
+      path.resolve(cwd, "server", "server", "logs"),        // server/server/logs (relative to cwd)
+      path.join(__dirname, "..", "logs"),                    // server/logs (from __dirname)
+      path.join(__dirname, "..", "server", "logs"),          // server/server/logs (from __dirname)
+      path.resolve(cwd, "logs"),                             // logs (project root)
+      path.join(__dirname, "..", "..", "logs"),              // logs (from __dirname)
+    ];
+    
+    console.log(`📋 [AUDIT-LOG] Searching for log files. CWD: ${cwd}, __dirname: ${__dirname}`);
+    console.log(`📋 [AUDIT-LOG] Checking directories:`, possibleLogDirs);
+    
+    let logFilePath = null;
+    
+    // First, try to find audit.log
+    for (const logDir of possibleLogDirs) {
+      const testPath = path.join(logDir, logFileName);
+      console.log(`📋 [AUDIT-LOG] Checking: ${testPath} (exists: ${fs.existsSync(testPath)})`);
+      if (fs.existsSync(testPath)) {
+        logFilePath = testPath;
+        console.log(`📋 [AUDIT-LOG] ✅ Found ${logFileName} at: ${logFilePath}`);
+        break;
+      }
+    }
+    
+    // If audit.log not found and we're looking for audit.log, try auth.log
+    if (!logFilePath && logFileName === "audit.log") {
+      console.log(`📋 [AUDIT-LOG] audit.log not found, trying auth.log...`);
+      for (const logDir of possibleLogDirs) {
+        const authLogPath = path.join(logDir, "auth.log");
+        console.log(`📋 [AUDIT-LOG] Checking: ${authLogPath} (exists: ${fs.existsSync(authLogPath)})`);
+        if (fs.existsSync(authLogPath)) {
+          logFilePath = authLogPath;
+          console.log(`📋 [AUDIT-LOG] ✅ Found auth.log at: ${authLogPath} (using as fallback)`);
+          break;
+        }
+      }
+    }
+
+    if (!fs.existsSync(logFilePath)) {
+      console.log("📋 [AUDIT-LOG] Audit log file does not exist yet");
+      return {
+        success: true,
+        logs: [],
+        logCount: 0,
+        message: "No audit logs found",
+        context: {
+          ...context,
+          auditLogs: [],
+          auditLogCount: 0,
+        },
+      };
+    }
+
+    // Read and parse log file
+    const logContent = fs.readFileSync(logFilePath, "utf-8");
+    const logLines = logContent
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .reverse(); // Most recent first
+
+    console.log(`📋 [AUDIT-LOG] Reading from: ${logFilePath}`);
+    console.log(`📋 [AUDIT-LOG] Found ${logLines.length} log lines`);
+
+    // Parse log entries
+    const parsedLogs = [];
+    const isAuthLog = logFilePath.includes("auth.log");
+    
+    for (const line of logLines) {
+      try {
+        const logEntry = {
+          raw: line,
+        };
+
+        if (isAuthLog) {
+          // Parse auth.log format: "2025-11-04T11:30:39.876Z: Login success for demo@example.com"
+          // Find the first colon after the ISO timestamp (which ends with Z)
+          const timestampEnd = line.indexOf("Z:");
+          if (timestampEnd === -1) {
+            // Fallback: try to find first colon after a space (for non-ISO formats)
+            const firstColon = line.indexOf(":");
+            if (firstColon === -1) continue;
+            logEntry.timestamp = line.substring(0, firstColon).trim();
+            const message = line.substring(firstColon + 1).trim();
+          } else {
+            logEntry.timestamp = line.substring(0, timestampEnd + 1).trim();
+            const message = line.substring(timestampEnd + 2).trim();
+          }
+          
+          // Extract action and details from message
+          if (message.includes("Login success")) {
+            logEntry.action = "LOGIN_SUCCESS";
+            const emailMatch = message.match(/for\s+([^\s]+)/);
+            if (emailMatch) logEntry.userId = emailMatch[1];
+          } else if (message.includes("Logout")) {
+            logEntry.action = "LOGOUT";
+            const userIdMatch = message.match(/userId:\s*(\d+)/);
+            if (userIdMatch) logEntry.userId = userIdMatch[1];
+          } else {
+            logEntry.action = message.split(" ")[0] || "UNKNOWN";
+          }
+          
+          logEntry.message = message;
+          
+          // Ensure timestamp is valid ISO format
+          if (!logEntry.timestamp.endsWith("Z") && !logEntry.timestamp.includes("T")) {
+            // Try to parse as date and convert to ISO
+            try {
+              const date = new Date(logEntry.timestamp);
+              if (!isNaN(date.getTime())) {
+                logEntry.timestamp = date.toISOString();
+              }
+            } catch (e) {
+              // Keep original timestamp if parsing fails
+            }
+          }
+        } else {
+          // Parse audit.log format: "timestamp: ACTION app:appId record:recordId user:userId status:status"
+          const parts = line.split(":");
+          if (parts.length < 2) continue;
+
+          logEntry.timestamp = parts[0].trim();
+          const rest = parts.slice(1).join(":").trim();
+
+          // Extract fields from rest of the line
+          const kvPairs = rest.split(/\s+/);
+          for (const pair of kvPairs) {
+            if (pair.includes("app:")) {
+              logEntry.appId = pair.split("app:")[1];
+            } else if (pair.includes("record:")) {
+              logEntry.recordId = pair.split("record:")[1];
+            } else if (pair.includes("user:")) {
+              logEntry.userId = pair.split("user:")[1];
+            } else if (pair.includes("status:")) {
+              logEntry.status = pair.split("status:")[1];
+            } else if (!logEntry.action) {
+              logEntry.action = pair;
+            }
+          }
+        }
+
+        // Apply filters
+        let include = true;
+
+        if (logFilter === "app" && logEntry.appId !== String(appId)) {
+          include = false;
+        }
+        if (logAction && logEntry.action !== logAction) {
+          include = false;
+        }
+        if (logUserId && logEntry.userId !== logUserId) {
+          include = false;
+        }
+        if (dateFrom || dateTo) {
+          try {
+            const logDate = new Date(timestamp);
+            if (dateFrom && logDate < new Date(dateFrom)) {
+              include = false;
+            }
+            if (dateTo && logDate > new Date(dateTo)) {
+              include = false;
+            }
+          } catch (e) {
+            // Skip date filtering if parsing fails
+          }
+        }
+
+        if (include) {
+          parsedLogs.push(logEntry);
+        }
+      } catch (parseError) {
+        // Skip malformed lines
+        console.warn("⚠️ [AUDIT-LOG] Failed to parse log line:", line);
+      }
+    }
+
+    // Apply limit
+    const limitedLogs = parsedLogs.slice(0, parseInt(logLimit) || 100);
+
+    // Format output based on format option
+    let formattedOutput = "";
+    if (outputFormat === "formatted") {
+      formattedOutput = limitedLogs
+        .map((log) => {
+          try {
+            const date = new Date(log.timestamp).toLocaleString();
+            if (isAuthLog) {
+              return `[${date}] ${log.action || "UNKNOWN"} | ${log.message || log.raw}`;
+            } else {
+              return `[${date}] ${log.action || "UNKNOWN"} | App: ${log.appId || "N/A"} | Record: ${log.recordId || "N/A"} | User: ${log.userId || "N/A"} | Status: ${log.status || "N/A"}`;
+            }
+          } catch (e) {
+            return log.raw;
+          }
+        })
+        .join("\n");
+    } else if (outputFormat === "json") {
+      formattedOutput = JSON.stringify(limitedLogs, null, 2);
+    } else {
+      // raw format
+      formattedOutput = limitedLogs.map((log) => log.raw).join("\n");
+    }
+
+    console.log("✅ [AUDIT-LOG] Retrieved logs:", {
+      totalFound: parsedLogs.length,
+      returned: limitedLogs.length,
+      format: outputFormat,
+    });
+
+    return {
+      success: true,
+      logs: limitedLogs,
+      logCount: limitedLogs.length,
+      formattedLogs: formattedOutput,
+      message: `Retrieved ${limitedLogs.length} audit log entries`,
+      context: {
+        ...context,
+        auditLogs: limitedLogs,
+        auditLogCount: limitedLogs.length,
+        auditLogsFormatted: formattedOutput,
+      },
+    };
+  } catch (error) {
+    console.error("❌ [AUDIT-LOG] Error:", error.message);
+    return {
+      success: false,
+      error: error.message,
+      logs: [],
+      logCount: 0,
+      context: context,
+    };
+  }
+};
+
+// inList block handler
+const executeInList = async (node, context, appId, userId) => {
+  try {
+    console.log("📋 [IN-LIST] Starting list membership check for app:", appId);
+
+    const hasAccess = await securityValidator.validateAppAccess(
+      appId,
+      userId,
+      prisma
+    );
+    if (!hasAccess) {
+      throw new Error("Access denied to this app");
+    }
+
+    const {
+      inListValue,
+      inListMode = "static",
+      inListStaticList = "",
+      inListContextPath = "",
+      inListTableName = "",
+      inListTableColumn = "name",
+      inListIgnoreCase = true,
+      inListTrimValues = true,
+    } = node.data || {};
+
+    if (
+      inListValue === undefined ||
+      inListValue === null ||
+      (typeof inListValue === "string" && inListValue.trim() === "")
+    ) {
+      throw new Error("Value to check is required for inList");
+    }
+
+    const rawValue =
+      typeof inListValue === "string"
+        ? inListValue
+        : JSON.stringify(inListValue);
+    const substitutedValue = substituteContextVariables(rawValue, context);
+    const preparedValue =
+      typeof substitutedValue === "string" && inListTrimValues
+        ? substitutedValue.trim()
+        : substitutedValue;
+
+  console.log("📋 [IN-LIST] Value resolution:", {
+    rawValue,
+    substitutedValue,
+    preparedValue,
+    hasFormData: Boolean(context?.formData),
+  });
+
+    const normalizeText = (value) => {
+      if (value === undefined || value === null) {
+        return "";
+      }
+      let text = typeof value === "string" ? value : String(value);
+      if (inListTrimValues) {
+        text = text.trim();
+      }
+      return inListIgnoreCase ? text.toLowerCase() : text;
+    };
+
+    const normalizedInput = normalizeText(preparedValue);
+
+    let isInList = false;
+    const sourceDetails = {
+      mode: inListMode,
+      totalItems: null,
+      table: null,
+    };
+
+    if (inListMode === "table") {
+      if (!inListTableName) {
+        throw new Error("Table name is required when list mode is 'table'");
+      }
+
+      const columnName =
+        (inListTableColumn && inListTableColumn.trim()) || "name";
+
+      const fullTableName = inListTableName.startsWith("app_")
+        ? inListTableName
+        : `app_${appId}_${inListTableName}`;
+
+      securityValidator.validateTableName(fullTableName, appId);
+
+      const tableExists = await dbUtils.tableExists(fullTableName);
+      if (!tableExists) {
+        throw new Error(`Table '${fullTableName}' does not exist`);
+      }
+
+      const tableSchema = await dbUtils.discoverTableSchema(fullTableName);
+      if (!tableSchema || tableSchema.length === 0) {
+        throw new Error(
+          `Unable to discover schema for table '${fullTableName}'`
+        );
+      }
+
+      const columnInfo = tableSchema.find((col) => col.name === columnName);
+      if (!columnInfo) {
+        throw new Error(
+          `Column '${columnName}' not found on table '${fullTableName}'`
+        );
+      }
+
+      const columnIdentifier = `"${columnInfo.name}"`;
+      const textTypes = [
+        "text",
+        "character varying",
+        "varchar",
+        "char",
+        "character",
+      ];
+      const isTextColumn = textTypes.includes(
+        (columnInfo.type || "").toLowerCase()
+      );
+
+      let query;
+      let params;
+      let queryValue = preparedValue;
+
+      if (typeof queryValue === "string") {
+        queryValue = inListTrimValues ? queryValue.trim() : queryValue;
+      }
+
+      if (isTextColumn && typeof queryValue !== "string") {
+        queryValue =
+          queryValue === undefined || queryValue === null
+            ? ""
+            : String(queryValue);
+      }
+
+      if (isTextColumn && inListIgnoreCase) {
+        query = `SELECT 1 FROM "${fullTableName}" WHERE LOWER(${columnIdentifier}) = LOWER($1) LIMIT 1`;
+        params = [queryValue];
+      } else {
+        const typedValue = dbUtils.convertValue(queryValue, columnInfo.type);
+        query = `SELECT 1 FROM "${fullTableName}" WHERE ${columnIdentifier} = $1 LIMIT 1`;
+        params = [typedValue];
+      }
+
+      console.log(
+        `📋 [IN-LIST] Checking table ${fullTableName}.${columnInfo.name} for value:`,
+        queryValue
+      );
+
+      const rows = await prisma.$queryRawUnsafe(query, ...params);
+      isInList = Array.isArray(rows) && rows.length > 0;
+
+      sourceDetails.table = {
+        tableName: fullTableName,
+        column: columnInfo.name,
+      };
+    } else {
+      let values = [];
+
+      if (inListMode === "context") {
+        if (!inListContextPath) {
+          throw new Error(
+            "Context path is required when list mode is 'context'"
+          );
+        }
+
+        const resolved = resolveContextPathValue(context, inListContextPath);
+        if (Array.isArray(resolved)) {
+          values = resolved;
+        } else if (resolved && typeof resolved === "object") {
+          values = Object.values(resolved);
+        } else if (resolved !== undefined && resolved !== null) {
+          values = [resolved];
+        } else {
+          values = [];
+        }
+      } else {
+        const staticListString = substituteContextVariables(
+          String(inListStaticList || ""),
+          context
+        );
+
+        values = staticListString
+          .split(/[\n,]+/)
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0);
+
+        if (values.length === 0) {
+          throw new Error("Provide at least one list value to compare against");
+        }
+      }
+
+      const normalizedList = values.map((item) => normalizeText(item));
+      sourceDetails.totalItems = normalizedList.length;
+      sourceDetails.sample = values.slice(0, 20);
+
+      isInList = normalizedList.includes(normalizedInput);
+    }
+
+    console.log(
+      `📋 [IN-LIST] Result: ${isInList ? "✅ value found" : "❌ value missing"}`
+    );
+
+    return {
+      success: true,
+      isInList,
+      checkedValue: preparedValue,
+      source: sourceDetails,
+      context: {
+        ...context,
+        inListResult: {
+          isInList,
+          checkedValue: preparedValue,
+          source: sourceDetails,
+          evaluatedAt: new Date().toISOString(),
+        },
+      },
+    };
+  } catch (error) {
+    console.error("❌ [IN-LIST] Error:", error.message);
+    return {
+      success: false,
+      isInList: false,
+      error: error.message,
+      context,
+    };
+  }
+};
+
 // Text comparison helper function
 const performTextComparison = (left, right, operator, options = {}) => {
   const { ignoreCase = false, trimSpaces = false } = options;
@@ -4499,20 +4995,67 @@ const performListComparison = (left, right, operator, options = {}) => {
   }
 };
 
+// Context path resolution helpers
+const normalizeContextPath = (path) => {
+  if (!path || typeof path !== "string") return "";
+  let normalized = path.trim();
+  if (!normalized) return "";
+  if (normalized.startsWith("{{") && normalized.endsWith("}}")) {
+    normalized = normalized.slice(2, -2).trim();
+  }
+  if (!normalized) return "";
+  normalized = normalized.replace(/\[(\d+)\]/g, ".$1");
+  normalized = normalized.replace(/\[["']([^"']+)["']\]/g, ".$1");
+  normalized = normalized.replace(/\.{2,}/g, ".");
+  normalized = normalized.replace(/^\./, "");
+  return normalized;
+};
+
+const resolveContextPathValue = (context, path) => {
+  const normalizedPath = normalizeContextPath(path);
+  if (!normalizedPath) return undefined;
+
+  const runtimeContext = context || {};
+  const root = {
+    context: runtimeContext,
+    formData: runtimeContext.formData || {},
+    ...runtimeContext,
+  };
+
+  const segments = normalizedPath.split(".").filter(Boolean);
+  let current = root;
+
+  for (const segment of segments) {
+    if (current === null || current === undefined) {
+      return undefined;
+    }
+    current = current[segment];
+  }
+
+  return current;
+};
+
+const resolveContextDateValue = (context, path) => {
+  return resolveContextPathValue(context, path);
+};
+
 // Context variable substitution helper
 const substituteContextVariables = (value, context) => {
   if (typeof value !== "string") return value;
 
-  return value.replace(/\{\{([^}]+)\}\}/g, (match, path) => {
-    const keys = path.split(".");
-    let result = context;
-
-    for (const key of keys) {
-      result = result?.[key];
-      if (result === undefined) break;
+  return value.replace(/\{\{([^}]+)\}\}/g, (match, pathExpression) => {
+    const resolvedValue = resolveContextPathValue(context, pathExpression);
+    if (resolvedValue === undefined || resolvedValue === null) {
+      return match;
     }
-
-    return result !== undefined ? result : match;
+    if (typeof resolvedValue === "object") {
+      try {
+        return JSON.stringify(resolvedValue);
+      } catch (error) {
+        return match;
+      }
+    }
+    return resolvedValue;
   });
 };
 
@@ -5277,21 +5820,36 @@ const validateDateValue = (dateValue, rules, format) => {
   let isValid = true;
   let parsedDate = null;
   let formattedDate = null;
+  const hasValue =
+    dateValue instanceof Date
+      ? true
+      : typeof dateValue === "string"
+      ? dateValue.trim() !== ""
+      : dateValue !== null &&
+        dateValue !== undefined &&
+        String(dateValue).trim() !== "";
 
   // Check if value is provided when required
-  if (rules.required && (!dateValue || dateValue.trim() === "")) {
+  if (rules.required && !hasValue) {
     errors.push("Date is required");
     return { isValid: false, errors, parsedDate, formattedDate };
   }
 
   // If not required and empty, consider it valid
-  if (!rules.required && (!dateValue || dateValue.trim() === "")) {
+  if (!rules.required && !hasValue) {
     return { isValid: true, errors: [], parsedDate: null, formattedDate: null };
   }
 
+  const valueForParsing =
+    dateValue instanceof Date
+      ? dateValue
+      : typeof dateValue === "string"
+      ? dateValue.trim()
+      : String(dateValue).trim();
+
   // Parse the date value
   try {
-    parsedDate = parseDate(dateValue, format);
+    parsedDate = parseDate(valueForParsing, format);
     if (!parsedDate || isNaN(parsedDate.getTime())) {
       errors.push(
         `Invalid date format. Expected: ${
@@ -5310,7 +5868,8 @@ const validateDateValue = (dateValue, rules, format) => {
 
   // Validate date range - minimum date
   if (rules.minDate) {
-    const minDate = parseDate(rules.minDate, format);
+    const minDate =
+      parseDate(rules.minDate, format) || parseDate(rules.minDate, undefined);
     if (minDate && parsedDate < minDate) {
       errors.push(
         `Date must be after ${formatDate(minDate, format || "YYYY-MM-DD")}`
@@ -5321,7 +5880,8 @@ const validateDateValue = (dateValue, rules, format) => {
 
   // Validate date range - maximum date
   if (rules.maxDate) {
-    const maxDate = parseDate(rules.maxDate, format);
+    const maxDate =
+      parseDate(rules.maxDate, format) || parseDate(rules.maxDate, undefined);
     if (maxDate && parsedDate > maxDate) {
       errors.push(
         `Date must be before ${formatDate(maxDate, format || "YYYY-MM-DD")}`
@@ -5428,13 +5988,27 @@ const executeDateValid = async (node, context, appId) => {
     console.log("📅 [DATE-VALID] Starting date validation for app:", appId);
 
     const dateConfig = node.data || {};
-    const { selectedElementIds, dateFormat, validationRules } = dateConfig;
+    const {
+      selectedElementIds,
+      dateFormat,
+      validationRules,
+      customDateFields,
+    } = dateConfig;
 
-    if (!selectedElementIds || selectedElementIds.length === 0) {
-      console.warn("⚠️ [DATE-VALID] No date elements selected");
+    const selectedElements = Array.isArray(selectedElementIds)
+      ? selectedElementIds.filter(Boolean)
+      : [];
+    const contextFields = Array.isArray(customDateFields)
+      ? customDateFields.filter(
+          (field) => typeof field === "string" && field.trim() !== ""
+        )
+      : [];
+
+    if (selectedElements.length === 0 && contextFields.length === 0) {
+      console.warn("⚠️ [DATE-VALID] No date sources configured");
       return {
         success: false,
-        error: "No date elements selected for validation",
+        error: "No date inputs or context fields selected for validation",
         isValid: false,
         context: context,
       };
@@ -5447,14 +6021,16 @@ const executeDateValid = async (node, context, appId) => {
     let anyValid = false;
 
     console.log("📋 [DATE-VALID] Validation details:", {
-      selectedElementIds,
+      selectedElementIds: selectedElements,
+      customDateFields: contextFields,
       dateFormat: dateFormat || "auto-detect",
       validationRules: validationRules || {},
       formDataKeys: Object.keys(formData),
+      contextKeys: Object.keys(context || {}),
     });
 
     // Validate each selected date element
-    for (const elementId of selectedElementIds) {
+    for (const elementId of selectedElements) {
       const dateValue = formData[elementId];
       console.log(
         `📅 [DATE-VALID] Validating element ${elementId}:`,
@@ -5474,6 +6050,38 @@ const executeDateValid = async (node, context, appId) => {
         errors: validation.errors,
         parsedDate: validation.parsedDate,
         formattedDate: validation.formattedDate,
+        sourceType: "formElement",
+      });
+
+      if (!validation.isValid) {
+        allValid = false;
+      } else {
+        anyValid = true;
+      }
+    }
+
+    // Validate context/record fields
+    for (const fieldPath of contextFields) {
+      const resolvedValue = resolveContextDateValue(context, fieldPath);
+      console.log(
+        `📅 [DATE-VALID] Validating context field ${fieldPath}:`,
+        resolvedValue
+      );
+
+      const validation = validateDateValue(
+        resolvedValue,
+        validationRules || {},
+        dateFormat
+      );
+
+      validationResults.push({
+        elementId: fieldPath,
+        value: resolvedValue,
+        isValid: validation.isValid,
+        errors: validation.errors,
+        parsedDate: validation.parsedDate,
+        formattedDate: validation.formattedDate,
+        sourceType: "context",
       });
 
       if (!validation.isValid) {
@@ -5490,17 +6098,18 @@ const executeDateValid = async (node, context, appId) => {
       totalCount: validationResults.length,
     });
 
+    const totalSources = Math.max(validationResults.length, 1);
+    const validCount = validationResults.filter((r) => r.isValid).length;
+
     return {
       success: true,
       isValid: allValid,
       allValid,
       anyValid,
       validationResults,
-      elementCount: selectedElementIds.length,
-      validCount: validationResults.filter((r) => r.isValid).length,
-      message: `${validationResults.filter((r) => r.isValid).length}/${
-        selectedElementIds.length
-      } dates are valid`,
+      elementCount: totalSources,
+      validCount,
+      message: `${validCount}/${totalSources} dates are valid`,
       context: {
         ...context,
         dateValidation: {
@@ -5508,6 +6117,10 @@ const executeDateValid = async (node, context, appId) => {
           allValid,
           anyValid,
           validatedAt: new Date().toISOString(),
+          sources: {
+            formElements: selectedElements,
+            customFields: contextFields,
+          },
         },
       },
     };
@@ -6491,9 +7104,18 @@ const runWorkflow = async (nodes, edges, initialContext = {}, appId, userId = 1)
       iteration++;
       const node = nodeMap[currentNodeId];
 
-      if (!node) break;
-      if (executedNodeIds.has(currentNodeId)) break;
+      if (!node) {
+        console.log(`⚠️ [WF-EXEC] Node not found: ${currentNodeId}`);
+        break;
+      }
+      if (executedNodeIds.has(currentNodeId)) {
+        console.log(`⚠️ [WF-EXEC] Node already executed: ${currentNodeId}`);
+        break;
+      }
       executedNodeIds.add(currentNodeId);
+
+      console.log(`🔄 [WF-EXEC] Processing node ${iteration}: ${node.data.label} (${node.id})`);
+      console.log(`🔄 [WF-EXEC] Node category: ${node.data.category}`);
 
       try {
         let result = null;
@@ -6521,6 +7143,9 @@ const runWorkflow = async (nodes, edges, initialContext = {}, appId, userId = 1)
               break;
             case "ai.summarize":
               result = await executeAiSummarize(node, currentContext, appId, userId);
+              break;
+            case "audit.log":
+              result = await executeAuditLog(node, currentContext, appId, userId);
               break;
             default:
               result = { success: true, message: `${node.data.label} executed (placeholder)` };
@@ -7017,6 +7642,15 @@ router.post("/execute", authenticateToken, async (req, res) => {
               );
               break;
 
+            case "audit.log":
+              result = await executeAuditLog(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
+              break;
+
             default:
               console.log(
                 `⚠️ [WF-EXEC] Unhandled action block: ${node.data.label}`
@@ -7038,6 +7672,10 @@ router.post("/execute", authenticateToken, async (req, res) => {
 
             case "match":
               result = await executeMatch(node, currentContext, appId, userId);
+              break;
+
+        case "inList":
+          result = await executeInList(node, currentContext, appId, userId);
               break;
 
             case "roleIs":
@@ -7141,7 +7779,7 @@ router.post("/execute", authenticateToken, async (req, res) => {
           if (result.context) {
             currentContext = { ...currentContext, ...result.context };
           } else {
-            currentContext = { ...currentContext, ...result };
+          currentContext = { ...currentContext, ...result };
           }
         }
 
@@ -7179,7 +7817,12 @@ router.post("/execute", authenticateToken, async (req, res) => {
           } else {
             // For other condition nodes, check the result and follow appropriate connector
             const conditionResult =
-              result?.isFilled || result?.isValid || result?.match || false;
+              result?.isFilled ||
+              result?.isValid ||
+              result?.match ||
+              result?.matches ||
+              result?.isInList ||
+              false;
             const connectorLabel = conditionResult ? "yes" : "no";
             const edgeKey = `${node.id}:${connectorLabel}`;
             nextNodeId = edgeMap[edgeKey];
@@ -7217,6 +7860,10 @@ router.post("/execute", authenticateToken, async (req, res) => {
         }
 
         currentNodeId = nextNodeId;
+        console.log(`🔄 [WF-EXEC] Updated currentNodeId to: ${currentNodeId}`);
+        if (!currentNodeId) {
+          console.log(`⚠️ [WF-EXEC] No next node, ending workflow execution`);
+        }
       } catch (error) {
         console.error(
           `❌ [WF-EXEC] Error in node ${node.data.label}:`,

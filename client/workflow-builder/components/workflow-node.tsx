@@ -29,6 +29,8 @@ import {
   AlertCircle,
   Check,
   Sparkles,
+  CheckSquare,
+  FileCheck,
 } from "lucide-react";
 import {
   Dialog,
@@ -426,6 +428,7 @@ const getBlockIcon = (label: string) => {
     dateValid: Calendar,
     isFilled: CheckCircle,
     match: Shuffle,
+    inList: CheckSquare,
     roleIs: UserCheck,
     "auth.verify": Shield,
 
@@ -442,6 +445,7 @@ const getBlockIcon = (label: string) => {
     "http.request": Globe,
     "page.redirect": ArrowRight,
     "ai.summarize": Sparkles,
+    "audit.log": FileCheck,
   };
 
   return iconMap[label] || Settings;
@@ -470,11 +474,20 @@ const isBlockConfigured = (data: WorkflowNodeData): boolean => {
       return !!data.targetElementId;
 
     case "dateValid":
-      return !!(data.selectedElementIds && data.selectedElementIds.length > 0);
+      return !!(
+        (data.selectedElementIds && data.selectedElementIds.length > 0) ||
+        (data.customDateFields && data.customDateFields.length > 0)
+      );
 
     case "onSubmit":
-    case "isFilled":
       return !!data.selectedFormGroup;
+
+    case "isFilled":
+      return !!(
+        data.selectedFormGroup &&
+        data.selectedElementIds &&
+        data.selectedElementIds.length > 0
+      );
 
     case "db.create":
       return !!(data.tableName && data.insertData);
@@ -520,6 +533,18 @@ const isBlockConfigured = (data: WorkflowNodeData): boolean => {
     case "match":
       return !!(data.leftValue && data.rightValue);
 
+    case "inList": {
+      if (!data.inListValue) return false;
+      const mode = data.inListMode || "static";
+      if (mode === "context") {
+        return !!data.inListContextPath;
+      }
+      if (mode === "table") {
+        return !!data.inListTableName;
+      }
+      return !!data.inListStaticList;
+    }
+
     case "roleIs":
       return !!data.requiredRole;
 
@@ -528,6 +553,9 @@ const isBlockConfigured = (data: WorkflowNodeData): boolean => {
 
     case "ai.summarize":
       return !!(data.fileVariable && data.apiKey);
+
+    case "audit.log":
+      return true; // Always configured - optional filters
 
     default:
       return false;
@@ -616,6 +644,7 @@ export interface WorkflowNodeData {
     minDate?: string;
     maxDate?: string;
   };
+  customDateFields?: string[];
   tableName?: string;
   triggerType?: string;
   // DbFind configuration properties
@@ -704,6 +733,16 @@ export interface WorkflowNodeData {
     allowPartialMatches?: boolean;
   };
 
+  // inList configuration properties
+  inListValue?: string;
+  inListMode?: "static" | "context" | "table";
+  inListStaticList?: string;
+  inListContextPath?: string;
+  inListTableName?: string;
+  inListTableColumn?: string;
+  inListIgnoreCase?: boolean;
+  inListTrimValues?: boolean;
+
   // auth.verify configuration properties
   tokenSource?: "context" | "header" | "config";
   requireVerified?: boolean;
@@ -740,9 +779,23 @@ export interface WorkflowNodeData {
   apiKey?: string;
   outputVariable?: string;
 
+  // audit.log configuration properties
+  logLimit?: number;
+  logFilter?: "all" | "app" | "user" | "action";
+  logAction?: string;
+  logUserId?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  outputFormat?: "formatted" | "raw" | "json";
+
   // roleIs configuration properties
   checkMultiple?: boolean;
   roles?: string[];
+
+  // isFilled configuration properties
+  showToastOnFail?: boolean;
+  failureMessage?: string;
+  failureTitle?: string;
 }
 
 const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
@@ -774,6 +827,9 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
       pageName: string;
     }>
   >([]);
+
+  const [customDateFieldInput, setCustomDateFieldInput] = useState("");
+  const [selectedInListFieldId, setSelectedInListFieldId] = useState("");
 
   // State for db.find simple mode
   const [dbFindSimpleState, setDbFindSimpleState] = useState<DbFindSimpleState>(
@@ -3776,6 +3832,246 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
       //       </div>
       //     </div>
       //   );
+      case "inList": {
+        const listMode = data.inListMode || "static";
+        const updateField = (field: string, value: any) => {
+          setNodes((nodes) =>
+            nodes.map((node) =>
+              node.id === id
+                ? { ...node, data: { ...node.data, [field]: value } }
+                : node
+            )
+          );
+        };
+
+        const TEXT_INPUT_TYPES = [
+          "textfield",
+          "text_field",
+          "text",
+          "input",
+          "textarea",
+          "textarea_field",
+        ];
+
+        const formTextFields =
+          formGroups.length > 0
+            ? formGroups.flatMap((group) => {
+                const groupElements = formElements.filter((el) =>
+                  group.elementIds?.includes(el.id)
+                );
+                return groupElements
+                  .filter((element) =>
+                    TEXT_INPUT_TYPES.includes(
+                      (element.type || "").toLowerCase()
+                    )
+                  )
+                  .map((element) => ({
+                    value: element.id,
+                    label: `${group.name || "Form"} • ${
+                      element.name || element.id
+                    }`,
+                  }));
+              })
+            : formElements
+                .filter((element) =>
+                  TEXT_INPUT_TYPES.includes((element.type || "").toLowerCase())
+                )
+                .map((element) => ({
+                  value: element.id,
+                  label: element.name || element.id,
+                }));
+
+        const handleInsertSelectedField = () => {
+          if (!selectedInListFieldId) return;
+          const template = `{{context.formData["${selectedInListFieldId}"]}}`;
+          updateField("inListValue", template);
+          setSelectedInListFieldId("");
+        };
+
+        return (
+          <div className="space-y-4">
+            <div className="text-xs text-muted-foreground">
+              Determine whether a value exists within a static list, workflow
+              context array, or database table before continuing.
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Value to check</label>
+              <input
+                type="text"
+                placeholder="{{context.formData.name}}"
+                value={data.inListValue || ""}
+                onChange={(e) => updateField("inListValue", e.target.value)}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <div className="text-xs text-muted-foreground">
+                Accepts plain text or context variables (e.g.{" "}
+                {`{{context.dbFindResult[0].name}}`}).
+              </div>
+            </div>
+
+            {formTextFields.length > 0 ? (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Form text fields</label>
+                <div className="flex gap-2">
+                  <select
+                    value={selectedInListFieldId}
+                    onChange={(e) => setSelectedInListFieldId(e.target.value)}
+                    className="flex-1 px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">Select form field…</option>
+                    {formTextFields.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={handleInsertSelectedField}
+                    disabled={!selectedInListFieldId}
+                    className="px-3 py-2 text-sm font-medium border rounded-md bg-muted hover:bg-muted/80 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Insert
+                  </button>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Inserts {`{{context.formData["fieldId"]}}`} so you don’t have to
+                  remember element IDs.
+                </div>
+              </div>
+            ) : (
+              <div className="text-xs text-muted-foreground">
+                Add a form group with text fields to enable quick insertion.
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">List source</label>
+              <select
+                value={listMode}
+                onChange={(e) => {
+                  const nextMode = e.target.value;
+                  updateField("inListMode", nextMode);
+                  if (nextMode === "table" && !data.inListTableColumn) {
+                    updateField("inListTableColumn", "name");
+                  }
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="static">Static list (comma separated)</option>
+                <option value="context">Context / record field</option>
+                <option value="table">Database table column</option>
+              </select>
+            </div>
+
+            {listMode === "static" && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">List values</label>
+                <textarea
+                  rows={3}
+                  placeholder="Rahul, John, Shobhit"
+                  value={data.inListStaticList || ""}
+                  onChange={(e) => updateField("inListStaticList", e.target.value)}
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                />
+                <div className="text-xs text-muted-foreground">
+                  Separate entries with commas or new lines. You can embed
+                  variables like {`{{context.allowedNames}}`}.
+                </div>
+              </div>
+            )}
+
+            {listMode === "context" && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Context path</label>
+                <input
+                  type="text"
+                  placeholder="context.dbFindResult[0].name"
+                  value={data.inListContextPath || ""}
+                  onChange={(e) => updateField("inListContextPath", e.target.value)}
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <div className="text-xs text-muted-foreground">
+                  Use dot/bracket notation or wrap in {`{{ }}`} (e.g.{" "}
+                  {`{{context.formData.favoriteColors}}`}). Arrays and CSV
+                  strings are supported.
+                </div>
+              </div>
+            )}
+
+            {listMode === "table" && (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Table name</label>
+                  <input
+                    type="text"
+                    placeholder="app_3_demo or demo"
+                    value={data.inListTableName || ""}
+                    onChange={(e) => updateField("inListTableName", e.target.value)}
+                    className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <div className="text-xs text-muted-foreground">
+                    Enter the full table name or a short name to auto-prefix with
+                    your app ID.
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Column name</label>
+                  <input
+                    type="text"
+                    placeholder="name"
+                    value={data.inListTableColumn || ""}
+                    onChange={(e) =>
+                      updateField("inListTableColumn", e.target.value)
+                    }
+                    className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <div className="text-xs text-muted-foreground">
+                    Column searched for the matching value (defaults to "name").
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={data.inListIgnoreCase !== false}
+                  onChange={(e) =>
+                    updateField("inListIgnoreCase", e.target.checked)
+                  }
+                  className="rounded"
+                />
+                Ignore letter casing
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={data.inListTrimValues !== false}
+                  onChange={(e) =>
+                    updateField("inListTrimValues", e.target.checked)
+                  }
+                  className="rounded"
+                />
+                Trim whitespace
+              </label>
+            </div>
+
+            <div className="text-xs text-muted-foreground space-y-1">
+              <div>• Static/context lists run locally.</div>
+              <div>
+                • Table mode performs a fast `SELECT 1` lookup on the specified
+                column.
+              </div>
+              <div>
+                • Route "yes" for allowed items and "no" for fallback logic.
+              </div>
+            </div>
+          </div>
+        );
+      }
 
       case "roleIs":
         return (
@@ -4225,7 +4521,6 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
         );
 
       case "onSubmit":
-      case "isFilled":
         return (
           <div className="space-y-4">
             <div className="space-y-2">
@@ -4258,60 +4553,461 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
           </div>
         );
 
-      case "dateValid":
+      case "isFilled":
+        // Get elements for the selected form group
+        const selectedFormGroupData = formGroups.find(
+          (g) => g.id === data.selectedFormGroup
+        );
+        const formGroupElementIds = selectedFormGroupData?.elementIds || [];
+        const formGroupElements = formElements.filter((el) =>
+          formGroupElementIds.includes(el.id)
+        );
+
         return (
           <div className="space-y-4">
             <div className="space-y-2">
-              <label className="text-sm font-medium">Date Elements:</label>
-              <div className="text-xs text-muted-foreground mb-2">
-                Select date input elements to validate
+              <label className="text-sm font-medium">Form Group:</label>
+              <select
+                value={data.selectedFormGroup || ""}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  // Clear selected elements when form group changes
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: {
+                              ...node.data,
+                              selectedFormGroup: value,
+                              selectedElementIds: [],
+                            },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">Select a form group...</option>
+                {formGroups.map((group) => (
+                  <option key={group.id} value={group.id}>
+                    {group.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {data.selectedFormGroup && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Form Elements:</label>
+                <div className="text-xs text-muted-foreground mb-2">
+                  Select which elements to check if filled
+                </div>
+                {formGroupElements.length === 0 ? (
+                  <div className="p-3 text-sm text-yellow-600 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md">
+                    ⚠️ No form elements found in this form group
+                  </div>
+                ) : (
+                  <div className="max-h-60 overflow-y-auto border rounded-md p-2 space-y-1">
+                    {formGroupElements.map((element) => (
+                      <label
+                        key={element.id}
+                        className="flex items-center gap-2 p-2 hover:bg-muted rounded cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={(data.selectedElementIds || []).includes(
+                            element.id
+                          )}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            const currentIds = data.selectedElementIds || [];
+                            const newIds = checked
+                              ? [...currentIds, element.id]
+                              : currentIds.filter((id) => id !== element.id);
+                            setNodes((nodes) =>
+                              nodes.map((node) =>
+                                node.id === id
+                                  ? {
+                                      ...node,
+                                      data: {
+                                        ...node.data,
+                                        selectedElementIds: newIds,
+                                      },
+                                    }
+                                  : node
+                              )
+                            );
+                          }}
+                          className="rounded"
+                        />
+                        <span className="text-sm">
+                          {element.name || element.id} ({element.type})
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
               </div>
-              <div className="max-h-40 overflow-y-auto border rounded-md p-2 space-y-1">
-                {formElements
-                  .filter(
-                    (el) => el.type === "date" || el.type === "datetime-local"
-                  )
-                  .map((element) => (
-                    <label
-                      key={element.id}
-                      className="flex items-center gap-2 p-2 hover:bg-muted rounded cursor-pointer"
+            )}
+
+            {/* Optional: Show toast configuration */}
+            <div className="space-y-2 pt-2 border-t">
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={data.showToastOnFail || false}
+                  onChange={(e) => {
+                    setNodes((nodes) =>
+                      nodes.map((node) =>
+                        node.id === id
+                          ? {
+                              ...node,
+                              data: {
+                                ...node.data,
+                                showToastOnFail: e.target.checked,
+                              },
+                            }
+                          : node
+                      )
+                    );
+                  }}
+                  className="w-4 h-4"
+                />
+                Show toast notification on validation failure
+              </label>
+              {data.showToastOnFail && (
+                <div className="space-y-2 ml-6">
+                  <input
+                    type="text"
+                    placeholder="Failure message (optional)"
+                    value={data.failureMessage || ""}
+                    onChange={(e) => {
+                      setNodes((nodes) =>
+                        nodes.map((node) =>
+                          node.id === id
+                            ? {
+                                ...node,
+                                data: {
+                                  ...node.data,
+                                  failureMessage: e.target.value,
+                                },
+                              }
+                            : node
+                        )
+                      );
+                    }}
+                    className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        );
+
+      case "dateValid": {
+        const dateElements = formElements.filter((element) => {
+          const type = (element.type || "").toLowerCase();
+          return [
+            "date",
+            "datetime",
+            "datetime-local",
+            "datepicker",
+            "date_picker",
+            "calendar",
+            "date_field",
+          ].includes(type);
+        });
+        const selectedIds = data.selectedElementIds || [];
+        const customFields = data.customDateFields || [];
+
+        const toggleDateElement = (elementId: string, isChecked: boolean) => {
+          const currentIds = data.selectedElementIds || [];
+          const newIds = isChecked
+            ? Array.from(new Set([...currentIds, elementId]))
+            : currentIds.filter((idValue) => idValue !== elementId);
+
+          setNodes((nodes) =>
+            nodes.map((node) =>
+              node.id === id
+                ? {
+                    ...node,
+                    data: {
+                      ...node.data,
+                      selectedElementIds: newIds,
+                    },
+                  }
+                : node
+            )
+          );
+        };
+
+        const handleAddCustomField = () => {
+          const value = customDateFieldInput.trim();
+          if (!value) return;
+          if (customFields.includes(value)) {
+            setCustomDateFieldInput("");
+            return;
+          }
+
+          setNodes((nodes) =>
+            nodes.map((node) =>
+              node.id === id
+                ? {
+                    ...node,
+                    data: {
+                      ...node.data,
+                      customDateFields: [...customFields, value],
+                    },
+                  }
+                : node
+            )
+          );
+          setCustomDateFieldInput("");
+        };
+
+        const handleRemoveCustomField = (field: string) => {
+          setNodes((nodes) =>
+            nodes.map((node) =>
+              node.id === id
+                ? {
+                    ...node,
+                    data: {
+                      ...node.data,
+                      customDateFields: customFields.filter(
+                        (item) => item !== field
+                      ),
+                    },
+                  }
+                : node
+            )
+          );
+        };
+
+        const updateValidationRule = (
+          ruleKey: keyof NonNullable<WorkflowNodeData["validationRules"]>,
+          value: string | boolean
+        ) => {
+          setNodes((nodes) =>
+            nodes.map((node) => {
+              if (node.id !== id) return node;
+              const nextRules = { ...(node.data.validationRules || {}) };
+
+              const shouldRemove =
+                value === "" ||
+                value === null ||
+                value === undefined ||
+                (typeof value === "boolean" && !value);
+
+              if (shouldRemove) {
+                delete nextRules[ruleKey];
+              } else {
+                nextRules[ruleKey] = value;
+              }
+
+              return {
+                ...node,
+                data: {
+                  ...node.data,
+                  validationRules:
+                    Object.keys(nextRules).length > 0 ? nextRules : undefined,
+                },
+              };
+            })
+          );
+        };
+
+        return (
+          <div className="space-y-5">
+            <div className="text-xs text-muted-foreground">
+              Validate one or more date fields before letting the workflow
+              continue. Combine form inputs with values pulled from database
+              records or previous steps.
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium">
+                  Form Date Elements
+                </label>
+                <span className="text-xs text-muted-foreground">
+                  {selectedIds.length} selected
+                </span>
+              </div>
+              {dateElements.length === 0 ? (
+                <div className="w-full px-3 py-2 text-sm border rounded-md bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800 text-yellow-800 dark:text-yellow-200">
+                  No date inputs detected on your canvas. Add a Date Picker or
+                  Date/Time element to enable form validation.
+                </div>
+              ) : (
+                <div className="max-h-44 overflow-y-auto border rounded-md p-2 space-y-1">
+                  {dateElements.map((element) => {
+                    const isChecked = selectedIds.includes(element.id);
+                    return (
+                      <label
+                        key={element.id}
+                        className="flex items-center gap-2 p-2 hover:bg-muted rounded cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(event) =>
+                            toggleDateElement(element.id, event.target.checked)
+                          }
+                          className="rounded"
+                        />
+                        <span className="text-sm">
+                          {element.name || element.id}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">
+                Record / Context Fields
+              </label>
+              <div className="flex flex-col gap-2">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={customDateFieldInput}
+                    onChange={(e) => setCustomDateFieldInput(e.target.value)}
+                    placeholder="e.g., context.dbFindResult[0].dateOfBirth"
+                    className="flex-1 px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddCustomField}
+                    className="px-3 py-2 text-sm font-medium border rounded-md bg-muted hover:bg-muted/80"
+                  >
+                    Add
+                  </button>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Reference values returned from previous blocks (e.g.
+                  {` {{context.dbFindResult[0].dob}} `} or{" "}
+                  {`context.record.enrollmentDate`}). These will be validated
+                  alongside form inputs.
+                </div>
+              </div>
+              {customFields.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {customFields.map((field) => (
+                    <span
+                      key={field}
+                      className="inline-flex items-center gap-2 px-2 py-1 text-xs border rounded-full bg-muted"
                     >
-                      <input
-                        type="checkbox"
-                        checked={(data.selectedElementIds || []).includes(
-                          element.id
-                        )}
-                        onChange={(e) => {
-                          const checked = e.target.checked;
-                          const currentIds = data.selectedElementIds || [];
-                          const newIds = checked
-                            ? [...currentIds, element.id]
-                            : currentIds.filter((id) => id !== element.id);
-                          setNodes((nodes) =>
-                            nodes.map((node) =>
-                              node.id === id
-                                ? {
-                                    ...node,
-                                    data: {
-                                      ...node.data,
-                                      selectedElementIds: newIds,
-                                    },
-                                  }
-                                : node
-                            )
-                          );
-                        }}
-                        className="rounded"
-                      />
-                      <span className="text-sm">
-                        {element.name || element.id}
-                      </span>
-                    </label>
+                      {field}
+                      <button
+                        type="button"
+                        className="text-muted-foreground hover:text-foreground"
+                        onClick={() => handleRemoveCustomField(field)}
+                        aria-label={`Remove ${field}`}
+                      >
+                        ×
+                      </button>
+                    </span>
                   ))}
+                </div>
+              )}
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Date Format</label>
+                <select
+                  value={data.dateFormat || "auto-detect"}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setNodes((nodes) =>
+                      nodes.map((node) =>
+                        node.id === id
+                          ? {
+                              ...node,
+                              data: { ...node.data, dateFormat: value },
+                            }
+                          : node
+                      )
+                    );
+                  }}
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="auto-detect">Auto detect (recommended)</option>
+                  <option value="YYYY-MM-DD">YYYY-MM-DD</option>
+                  <option value="MM/DD/YYYY">MM/DD/YYYY</option>
+                  <option value="DD/MM/YYYY">DD/MM/YYYY</option>
+                  <option value="DD-MM-YYYY">DD-MM-YYYY</option>
+                </select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Require a value?</label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(data.validationRules?.required)}
+                    onChange={(e) =>
+                      updateValidationRule("required", e.target.checked)
+                    }
+                    className="rounded"
+                  />
+                  Must provide a valid date
+                </label>
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">
+                  Min Date (optional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="YYYY-MM-DD or {{context.minDate}}"
+                  value={data.validationRules?.minDate || ""}
+                  onChange={(e) =>
+                    updateValidationRule("minDate", e.target.value)
+                  }
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">
+                  Max Date (optional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="YYYY-MM-DD or {{context.maxDate}}"
+                  value={data.validationRules?.maxDate || ""}
+                  onChange={(e) =>
+                    updateValidationRule("maxDate", e.target.value)
+                  }
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            <div className="text-xs text-muted-foreground space-y-1 pt-1">
+              <div>
+                • Use with <code>onSubmit → dateValid → notify.toast</code> to
+                block invalid submissions.
+              </div>
+              <div>
+                • Chain <code>dateValid → db.create</code> to only persist valid
+                records.
+              </div>
+              <div>
+                • Route <code>dateValid → page.redirect</code> to guide users to
+                the next step when the date is acceptable.
               </div>
             </div>
           </div>
         );
+      }
 
       case "ai.summarize":
         return (
@@ -4438,6 +5134,238 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
                   <li>• Returns concise summary in output variable</li>
                   <li>• Supports files up to 50MB</li>
                 </ul>
+              </div>
+            </div>
+          </div>
+        );
+
+      case "audit.log":
+        return (
+          <div className="space-y-4">
+            {/* Info Box */}
+            <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+              <div className="text-sm text-blue-900 dark:text-blue-100">
+                <div className="font-medium mb-2">📋 Audit Log Block</div>
+                <div className="text-xs text-blue-700 dark:text-blue-300">
+                  Retrieves audit logs from the system. Use a Text Display
+                  element with binding path{" "}
+                  <code className="bg-blue-100 dark:bg-blue-800 px-1 rounded">
+                    {`{{context.auditLogsFormatted}}`}
+                  </code>{" "}
+                  to display the logs.
+                </div>
+              </div>
+            </div>
+
+            {/* Log Limit */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Max Logs to Retrieve:</label>
+              <input
+                type="number"
+                min="1"
+                max="1000"
+                placeholder="100"
+                value={data.logLimit || 100}
+                onChange={(e) => {
+                  const value = parseInt(e.target.value) || 100;
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: { ...node.data, logLimit: value },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <div className="text-xs text-muted-foreground">
+                Maximum number of log entries to retrieve (1-1000)
+              </div>
+            </div>
+
+            {/* Filter Type */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Filter Type:</label>
+              <select
+                value={data.logFilter || "all"}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: { ...node.data, logFilter: value },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="all">All logs</option>
+                <option value="app">This app only</option>
+                <option value="user">Specific user</option>
+                <option value="action">Specific action</option>
+              </select>
+            </div>
+
+            {/* Action Filter (if filter type is "action") */}
+            {data.logFilter === "action" && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Action Name:</label>
+                <input
+                  type="text"
+                  placeholder="e.g., FETCH_QUOTE, UPDATE_STATUS"
+                  value={data.logAction || ""}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setNodes((nodes) =>
+                      nodes.map((node) =>
+                        node.id === id
+                          ? {
+                              ...node,
+                              data: { ...node.data, logAction: value },
+                            }
+                          : node
+                      )
+                    );
+                  }}
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            )}
+
+            {/* User Filter (if filter type is "user") */}
+            {data.logFilter === "user" && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">User ID:</label>
+                <input
+                  type="text"
+                  placeholder="e.g., 123 or {{context.userId}}"
+                  value={data.logUserId || ""}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setNodes((nodes) =>
+                      nodes.map((node) =>
+                        node.id === id
+                          ? {
+                              ...node,
+                              data: { ...node.data, logUserId: value },
+                            }
+                          : node
+                      )
+                    );
+                  }}
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                />
+                <div className="text-xs text-muted-foreground">
+                  Use {`{{context.userId}}`} for dynamic user ID
+                </div>
+              </div>
+            )}
+
+            {/* Date Range Filters */}
+            <div className="space-y-3">
+              <label className="text-sm font-medium">Date Range (Optional):</label>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">From:</label>
+                  <input
+                    type="date"
+                    value={data.dateFrom || ""}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setNodes((nodes) =>
+                        nodes.map((node) =>
+                          node.id === id
+                            ? {
+                                ...node,
+                                data: { ...node.data, dateFrom: value },
+                              }
+                            : node
+                        )
+                      );
+                    }}
+                    className="w-full px-2 py-1 text-sm border rounded-md bg-background"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">To:</label>
+                  <input
+                    type="date"
+                    value={data.dateTo || ""}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setNodes((nodes) =>
+                        nodes.map((node) =>
+                          node.id === id
+                            ? {
+                                ...node,
+                                data: { ...node.data, dateTo: value },
+                              }
+                            : node
+                        )
+                      );
+                    }}
+                    className="w-full px-2 py-1 text-sm border rounded-md bg-background"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Output Format */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Output Format:</label>
+              <select
+                value={data.outputFormat || "formatted"}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: { ...node.data, outputFormat: value },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="formatted">Formatted (human-readable)</option>
+                <option value="raw">Raw (original log lines)</option>
+                <option value="json">JSON (structured data)</option>
+              </select>
+              <div className="text-xs text-muted-foreground">
+                Choose how logs are formatted in the output
+              </div>
+            </div>
+
+            {/* Usage Instructions */}
+            <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
+              <div className="text-sm text-green-900 dark:text-green-100">
+                <div className="font-medium mb-2">💡 How to Display Logs:</div>
+                <ol className="list-decimal list-inside space-y-1 text-xs text-green-700 dark:text-green-300">
+                  <li>Add a Text Display element to your canvas</li>
+                  <li>
+                    Set the binding path to{" "}
+                    <code className="bg-green-100 dark:bg-green-800 px-1 rounded">
+                      {`{{context.auditLogsFormatted}}`}
+                    </code>
+                  </li>
+                  <li>
+                    Connect this audit.log block before the page with the Text
+                    Display
+                  </li>
+                  <li>
+                    Logs will be available in context after this block executes
+                  </li>
+                </ol>
               </div>
             </div>
           </div>
