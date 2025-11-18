@@ -2,7 +2,7 @@
 
 import type React from "react";
 import { useState, useRef, useCallback, useEffect } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { authenticatedFetch, uploadFile } from "@/lib/auth";
 import { useToast } from "@/components/ui/use-toast";
 import { useCanvasWorkflow } from "@/lib/canvas-workflow-context";
@@ -55,9 +55,12 @@ import {
   Trash2,
   Download,
   Home,
+  LayoutGrid,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { PublishModal } from "@/components/publish-modal";
+import DatabaseTab from "@/components/canvas/database-tab";
+import ChartElement from "@/components/canvas/ChartElement";
 
 interface CanvasElement {
   id: string;
@@ -124,6 +127,7 @@ function CanvasPageContent() {
   const router = useRouter();
   const nextRouter = useNextRouter();
   const searchParams = useSearchParams();
+  const pathname = usePathname();
   const { toast } = useToast();
   const {
     selectedElementId,
@@ -137,6 +141,7 @@ function CanvasPageContent() {
     currentAppId: contextAppId,
     setCanvasElements,
     setFormGroups,
+    setSaveCanvasWorkflow,
   } = useCanvasWorkflow();
   const [selectedElement, setSelectedElement] = useState<CanvasElement | null>(
     null
@@ -225,6 +230,9 @@ function CanvasPageContent() {
   const [isDragOverCanvas, setIsDragOverCanvas] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
   const canvasContainerRef = useRef<HTMLDivElement>(null);
+  const [currentView, setCurrentView] = useState<"canvas" | "database">(
+    "canvas"
+  );
 
   // Auto-save state management
   const [autoSaveStatus, setAutoSaveStatus] = useState<
@@ -239,6 +247,11 @@ function CanvasPageContent() {
   const currentPage = pages.find((p) => p.id === currentPageId);
   const canvasElements = currentPage?.elements || [];
   const currentGroups = currentPage?.groups || []; // Get current groups
+
+  // Register function once on mount
+  useEffect(() => {
+    setSaveCanvasWorkflow?.(() => saveCanvasToBackend);
+  }, [setSaveCanvasWorkflow]);
 
   // Sync canvas elements to context for workflow blocks
   useEffect(() => {
@@ -348,6 +361,13 @@ function CanvasPageContent() {
       ICON_INFO: "icon-info",
       ICON_HELP: "icon-help",
       ICON_SEARCH: "icon-search",
+      CHART_BAR: "chart-bar",
+      CHART_LINE: "chart-line",
+      CHART_PIE: "chart-pie",
+      CHART_DONUT: "chart-donut",
+      CHART_KPI_CARD: "kpi-card",
+      TABLE: "table",
+      MATRIX_CHART: "matrix-chart",
     };
     return typeMap[backendType] || "rectangle";
   };
@@ -2095,63 +2115,20 @@ function CanvasPageContent() {
     initializeCanvas();
   }, [contextAppId]); // Re-run when context appId changes (for workflow split-screen)
 
-  // Split-screen mode detection and automatic panel hiding
+  // Detect split-screen mode based on URL pathname
   useEffect(() => {
-    const detectSplitScreenMode = () => {
-      if (typeof window !== "undefined") {
-        // Check if the component is rendered in a smaller container (split-screen)
-        // In split-screen, the Canvas is rendered in a 50% width container
-        const containerWidth = window.innerWidth;
-        const canvasContainer = document.querySelector(
-          ".h-screen.flex.flex-col.bg-gray-50"
-        );
+    const isSplitView = pathname === "/split-view";
 
-        if (canvasContainer) {
-          const containerRect = canvasContainer.getBoundingClientRect();
-          const isInSplitScreen = containerRect.width < containerWidth * 0.8; // Less than 80% of screen width
+    setIsSplitScreenMode(isSplitView);
 
-          if (isInSplitScreen !== isSplitScreenMode) {
-            setIsSplitScreenMode(isInSplitScreen);
-
-            // Automatically hide panels in split-screen mode
-            if (isInSplitScreen) {
-              setIsLeftPanelHidden(true);
-              setIsRightPanelHidden(true);
-            } else {
-              // Restore panels when exiting split-screen mode
-              setIsLeftPanelHidden(false);
-              setIsRightPanelHidden(false);
-            }
-          }
-        }
-      }
-    };
-
-    // Initial detection
-    detectSplitScreenMode();
-
-    // Set up resize observer to detect container size changes
-    let resizeObserver: ResizeObserver | null = null;
-
-    if (typeof window !== "undefined" && window.ResizeObserver) {
-      const canvasContainer = document.querySelector(
-        ".h-screen.flex.flex-col.bg-gray-50"
-      );
-      if (canvasContainer) {
-        resizeObserver = new ResizeObserver(() => {
-          detectSplitScreenMode();
-        });
-        resizeObserver.observe(canvasContainer);
-      }
+    if (isSplitView) {
+      setIsLeftPanelHidden(true);
+      setIsRightPanelHidden(true);
+    } else {
+      setIsLeftPanelHidden(false);
+      setIsRightPanelHidden(false);
     }
-
-    // Cleanup
-    return () => {
-      if (resizeObserver) {
-        resizeObserver.disconnect();
-      }
-    };
-  }, [isSplitScreenMode]); // Re-run when split-screen mode changes
+  }, [pathname]); // ✅ only depend on pathname
 
   const updateCanvasBackground = (
     background: Partial<Page["canvasBackground"]>
@@ -3389,6 +3366,13 @@ function CanvasPageContent() {
       "icon-home": { width: 32, height: 32 },
       "icon-back": { width: 32, height: 32 },
       "icon-forward": { width: 32, height: 32 },
+      "chart-bar": { width: 360, height: 240 },
+      "chart-line": { width: 360, height: 240 },
+      "chart-pie": { width: 320, height: 240 },
+      "chart-donut": { width: 320, height: 240 },
+      "kpi-card": { width: 280, height: 160 },
+      "table": { width: 400, height: 300 },
+      "matrix-chart": { width: 400, height: 300 },
     };
     return sizes[elementType] || { width: 100, height: 100 };
   };
@@ -3441,77 +3425,214 @@ function CanvasPageContent() {
       phone: {
         placeholder: "Phone number",
         value: "",
-        backgroundColor: "#ffffff",
-        color: "#000000",
-        borderColor: "#d1d5db",
-        borderWidth: 1,
-        borderRadius: 6,
-        padding: "8px 12px",
-        fontSize: 14,
-        fontFamily: "Poppins, system-ui, sans-serif",
       },
       password: {
-        placeholder: "Enter password",
+        placeholder: "Password",
         value: "",
-        backgroundColor: "#ffffff",
-        color: "#000000",
-        borderColor: "#d1d5db",
-        borderWidth: 1,
-        borderRadius: 6,
-        padding: "8px 12px",
-        fontSize: 14,
-        fontFamily: "Poppins, system-ui, sans-serif",
-        required: false,
-        minLength: 8,
-        maxLength: 128,
       },
-      calendar: { value: "" },
-      upload: {},
-      addfile: {},
-      media: {},
+      calendar: {
+        placeholder: "Select date",
+        value: "",
+      },
+      upload: {
+        placeholder: "Upload file",
+      },
+      addfile: {
+        placeholder: "Drop files here",
+      },
+      media: {
+        src: "",
+        alt: "Media",
+      },
       image: {
         src: "",
         alt: "Image",
-        objectFit: "cover",
       },
       video: {
         src: "",
-        controls: true,
-        autoplay: false,
-        muted: false,
       },
       audio: {
         src: "",
-        controls: true,
-        autoplay: false,
       },
-      rectangle: { backgroundColor: "#ffffff", borderRadius: 0 },
-      circle: { backgroundColor: "#ffffff" },
-      triangle: { backgroundColor: "#ffffff" },
-      line: { backgroundColor: "#000000" },
-      arrow: { backgroundColor: "#000000" },
-      star: { backgroundColor: "#fbbf24" },
-      heart: { backgroundColor: "#ef4444" },
-      frame: { backgroundColor: "#f3f4f6", borderRadius: 8, name: "Frame" },
-      divider: { backgroundColor: "#d1d5db" },
-      // Icon elements - all icons have similar default properties
-      "icon-minimize": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-maximize": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-close": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-settings": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-refresh": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-info": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-help": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-search": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-add": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-edit": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-delete": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-save": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-download": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-upload": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-home": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-back": { color: "#6b7280", backgroundColor: "transparent" },
-      "icon-forward": { color: "#6b7280", backgroundColor: "transparent" },
+      rectangle: {
+        backgroundColor: "#f3f4f6",
+        borderColor: "#d1d5db",
+        borderWidth: 1,
+      },
+      circle: {
+        backgroundColor: "#f3f4f6",
+        borderColor: "#d1d5db",
+        borderWidth: 1,
+      },
+      triangle: {
+        backgroundColor: "#f3f4f6",
+        borderColor: "#d1d5db",
+        borderWidth: 1,
+      },
+      line: {
+        strokeColor: "#1f2937",
+        strokeWidth: 2,
+        strokeStyle: "solid",
+      },
+      arrow: {
+        strokeColor: "#1f2937",
+        strokeWidth: 2,
+        strokeStyle: "solid",
+      },
+      star: {
+        backgroundColor: "#facc15",
+        borderColor: "#f59e0b",
+        borderWidth: 1,
+      },
+      heart: {
+        backgroundColor: "#f472b6",
+        borderColor: "#f43f5e",
+        borderWidth: 1,
+      },
+      frame: {
+        backgroundColor: "#ffffff",
+        borderColor: "#d1d5db",
+        borderWidth: 1,
+      },
+      divider: {
+        strokeColor: "#d1d5db",
+        strokeWidth: 1,
+      },
+      "chart-bar": {
+        title: "Monthly Revenue",
+        description: "Example dataset for drag & drop preview",
+        chartType: "bar",
+        xKey: "month",
+        legend: true,
+        showGrid: true,
+        showAxis: true,
+        series: [
+          { dataKey: "desktop", label: "Desktop" },
+          { dataKey: "mobile", label: "Mobile" },
+        ],
+        colors: ["#2563eb", "#7c3aed", "#22c55e"],
+        data: [
+          { month: "Jan", desktop: 186, mobile: 80 },
+          { month: "Feb", desktop: 305, mobile: 200 },
+          { month: "Mar", desktop: 237, mobile: 120 },
+          { month: "Apr", desktop: 173, mobile: 190 },
+          { month: "May", desktop: 209, mobile: 130 },
+          { month: "Jun", desktop: 214, mobile: 140 },
+        ],
+      },
+      "chart-line": {
+        title: "Active Users",
+        description: "Example trend line",
+        chartType: "line",
+        xKey: "month",
+        legend: true,
+        showGrid: true,
+        showAxis: true,
+        strokeCurve: "monotone",
+        series: [
+          { dataKey: "desktop", label: "Desktop", strokeWidth: 3 },
+          { dataKey: "mobile", label: "Mobile", strokeWidth: 3 },
+        ],
+        colors: ["#2563eb", "#7c3aed", "#f97316"],
+        data: [
+          { month: "Jan", desktop: 120, mobile: 80 },
+          { month: "Feb", desktop: 160, mobile: 110 },
+          { month: "Mar", desktop: 200, mobile: 140 },
+          { month: "Apr", desktop: 180, mobile: 150 },
+          { month: "May", desktop: 220, mobile: 170 },
+          { month: "Jun", desktop: 260, mobile: 210 },
+        ],
+      },
+      "chart-pie": {
+        title: "Traffic Sources",
+        description: "Distribution example",
+        chartType: "pie",
+        nameKey: "category",
+        valueKey: "value",
+        legend: true,
+        donut: false,
+        colors: ["#2563eb", "#7c3aed", "#22c55e", "#f97316", "#eab308"],
+        data: [
+          { category: "Organic", value: 45 },
+          { category: "Paid", value: 25 },
+          { category: "Referral", value: 15 },
+          { category: "Social", value: 10 },
+          { category: "Email", value: 5 },
+        ],
+      },
+      "chart-donut": {
+        title: "Plan Usage",
+        description: "Relative share of plans",
+        chartType: "donut",
+        nameKey: "plan",
+        valueKey: "value",
+        legend: true,
+        donut: true,
+        innerRadius: "55%",
+        outerRadius: "80%",
+        colors: ["#2563eb", "#7c3aed", "#22c55e", "#f97316"],
+        data: [
+          { plan: "Free", value: 40 },
+          { plan: "Starter", value: 25 },
+          { plan: "Pro", value: 22 },
+          { plan: "Enterprise", value: 13 },
+        ],
+      },
+      "kpi-card": {
+        title: "Revenue",
+        description: "Monthly performance",
+        kpiData: {
+          label: "Total Revenue",
+          value: "$45,231",
+          unit: "",
+          trend: 12.5,
+          target: 50000,
+          description: "vs last month",
+        },
+      },
+      "table": {
+        title: "Sales Report",
+        description: "Recent transactions",
+        columns: [
+          { key: "id", label: "ID", align: "left" },
+          { key: "product", label: "Product", align: "left" },
+          { key: "quantity", label: "Qty", align: "center" },
+          { key: "amount", label: "Amount", align: "right" },
+        ],
+        data: [
+          { id: "001", product: "Laptop", quantity: 2, amount: "$2,400" },
+          { id: "002", product: "Mouse", quantity: 5, amount: "$125" },
+          { id: "003", product: "Keyboard", quantity: 3, amount: "$210" },
+          { id: "004", product: "Monitor", quantity: 1, amount: "$450" },
+        ],
+        showHeader: true,
+        striped: true,
+      },
+      "matrix-chart": {
+        title: "Performance Matrix",
+        description: "Cross-category analysis",
+        matrixRows: ["Q1", "Q2", "Q3", "Q4"],
+        matrixCols: ["Sales", "Marketing", "Support", "Dev"],
+        data: [
+          { row: "Q1", col: "Sales", value: 85 },
+          { row: "Q1", col: "Marketing", value: 72 },
+          { row: "Q1", col: "Support", value: 68 },
+          { row: "Q1", col: "Dev", value: 90 },
+          { row: "Q2", col: "Sales", value: 78 },
+          { row: "Q2", col: "Marketing", value: 88 },
+          { row: "Q2", col: "Support", value: 75 },
+          { row: "Q2", col: "Dev", value: 82 },
+          { row: "Q3", col: "Sales", value: 92 },
+          { row: "Q3", col: "Marketing", value: 80 },
+          { row: "Q3", col: "Support", value: 85 },
+          { row: "Q3", col: "Dev", value: 88 },
+          { row: "Q4", col: "Sales", value: 88 },
+          { row: "Q4", col: "Marketing", value: 95 },
+          { row: "Q4", col: "Support", value: 90 },
+          { row: "Q4", col: "Dev", value: 93 },
+        ],
+        cellColors: ["#fee2e2", "#fef3c7", "#dcfce7", "#d1fae5", "#86efac"],
+      },
     };
     return defaults[elementType] || {};
   };
@@ -4691,6 +4812,29 @@ function CanvasPageContent() {
             </div>
           );
 
+        case "button":
+          return (
+            <button
+              style={style}
+              className="px-4 py-2 w-full h-full font-medium"
+            >
+              {element.properties.text || "Button"}
+            </button>
+          );
+        case "chart-bar":
+        case "chart-line":
+        case "chart-pie":
+        case "chart-donut":
+        case "kpi-card":
+        case "table":
+        case "matrix-chart":
+          return (
+            <ChartElement
+              type={element.type}
+              properties={element.properties}
+              showHeader={element.properties?.showHeader ?? true}
+            />
+          );
         default:
           return (
             <div
@@ -5562,6 +5706,22 @@ function CanvasPageContent() {
             </div>
           );
         }
+
+        case "chart-bar":
+        case "chart-line":
+        case "chart-pie":
+        case "chart-donut":
+        case "kpi-card":
+        case "table":
+        case "matrix-chart":
+          return (
+            <ChartElement
+              type={element.type}
+              properties={element.properties}
+              showHeader={element.properties?.showHeader ?? true}
+            />
+          );
+
         case "frame":
           return (
             <div
@@ -5924,246 +6084,8 @@ function CanvasPageContent() {
   };
 
   return (
-    <div className="h-screen w-full flex flex-col bg-gray-50 dark:bg-gray-900 overflow-hidden">
+    <div className="h-full w-full flex flex-col bg-gray-50 dark:bg-gray-900">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
-        <div className="flex items-center space-x-4">
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => router.push("/dashboard")}
-          >
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back
-          </Button>
-          <div className="flex items-center space-x-2">
-            <Image
-              src="/floneo-profile-logo.png"
-              alt="Floneo"
-              width={24}
-              height={24}
-            />
-            {isEditingName ? (
-              <input
-                type="text"
-                value={appName}
-                onChange={(e) => setAppName(e.target.value)}
-                onBlur={async () => {
-                  setIsEditingName(false);
-                  // persist name
-                  if (currentAppId) {
-                    try {
-                      const resp = await authenticatedFetch(`/api/apps/${currentAppId}`, {
-                        method: "PATCH",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ name: appName.trim() }),
-                      });
-                      const result = await resp.json();
-                      if (result.success) {
-                        toast({ title: "App name saved", description: `Saved as \"${appName}\"` });
-                      } else {
-                        throw new Error(result.message || "Failed to save name");
-                      }
-                    } catch (err: any) {
-                      console.error("Error saving app name:", err);
-                      toast({ title: "Save failed", description: err?.message || "Failed to save app name", variant: "destructive" });
-                    }
-                  }
-                }}
-                onKeyDown={async (e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    setIsEditingName(false);
-                    if (currentAppId) {
-                      try {
-                        const resp = await authenticatedFetch(`/api/apps/${currentAppId}`, {
-                          method: "PATCH",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ name: appName.trim() }),
-                        });
-                        const result = await resp.json();
-                        if (result.success) {
-                          toast({ title: "App name saved", description: `Saved as \"${appName}\"` });
-                        } else {
-                          throw new Error(result.message || "Failed to save name");
-                        }
-                      } catch (err: any) {
-                        console.error("Error saving app name:", err);
-                        toast({ title: "Save failed", description: err?.message || "Failed to save app name", variant: "destructive" });
-                      }
-                    }
-                  }
-                }}
-                className="text-lg font-semibold bg-transparent border-none outline-none dark:text-gray-100"
-                autoFocus
-              />
-            ) : (
-              <h1
-                className="text-lg font-semibold cursor-pointer dark:text-gray-100"
-                onClick={() => setIsEditingName(true)}
-              >
-                {appName}
-              </h1>
-            )}
-          </div>
-        </div>
-        <div className="flex items-center space-x-1 overflow-x-auto min-w-0 flex-shrink-0">
-          <ThemeToggle />
-
-          {/* Auto-save status indicator */}
-          {autoSaveStatus !== "idle" && (
-            <div className="flex items-center space-x-1 text-xs">
-              {autoSaveStatus === "saving" && (
-                <>
-                  <div className="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-                  <span className="text-blue-600 dark:text-blue-400">
-                    Saving...
-                  </span>
-                </>
-              )}
-              {autoSaveStatus === "saved" && (
-                <>
-                  <div className="w-3 h-3 bg-green-500 rounded-full"></div>
-                  <span className="text-green-600 dark:text-green-400">
-                    Saved
-                  </span>
-                </>
-              )}
-              {autoSaveStatus === "error" && (
-                <>
-                  <div className="w-3 h-3 bg-red-500 rounded-full"></div>
-                  <span
-                    className="text-red-600 dark:text-red-400"
-                    title={autoSaveError || "Auto-save failed"}
-                  >
-                    Save failed
-                  </span>
-                </>
-              )}
-            </div>
-          )}
-
-          <Button
-            size="sm"
-            onClick={saveApp}
-            data-save-button
-            className="bg-[var(--brand-blue)] hover:bg-[var(--brand-blue)]/90 text-white dark:text-white"
-          >
-            <Save className="w-3 h-3 mr-1" />
-            Save
-          </Button>
-
-          <Button size="sm" variant="outline" onClick={togglePreviewMode}>
-            <Eye className="w-3 h-3 mr-1" />
-            {isPreviewMode ? "Exit Preview" : "Preview"}
-          </Button>
-
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={async () => {
-              const appId = currentAppId || searchParams.get("appId") || "1";
-
-              // Save current state before publishing
-              try {
-                await saveCanvasToBackend(appId);
-                console.log(
-                  "✅ PUBLISH: Canvas saved before opening publish modal"
-                );
-              } catch (error) {
-                console.error("❌ PUBLISH: Failed to save canvas:", error);
-              }
-
-              // Open publish modal
-              setIsPublishModalOpen(true);
-            }}
-          >
-            <Upload className="w-3 h-3 mr-1" />
-            Publish
-          </Button>
-
-          <Button
-            size="sm"
-            variant="default"
-            onClick={async () => {
-              const appId = currentAppId || searchParams.get("appId") || "1";
-
-              // Save current state before opening preview
-              try {
-                await saveCanvasToBackend(appId);
-                console.log("✅ RUN APP: Canvas saved before opening preview");
-              } catch (error) {
-                console.error("❌ RUN APP: Failed to save canvas:", error);
-                // Continue anyway - user might want to preview unsaved changes
-              }
-
-              // Open preview with current page
-              const previewUrl = `/run?appId=${appId}&pageId=${currentPageId}`;
-              console.log("🚀 RUN APP: Opening preview:", previewUrl);
-              window.open(previewUrl, "_blank");
-            }}
-          >
-            <Play className="w-3 h-3 mr-1" />
-            Run App
-          </Button>
-
-          <Button
-            size="sm"
-            variant="outline"
-            title="Workflow"
-            className="px-2"
-            onClick={() => {
-              const appId = currentAppId || searchParams.get("appId") || "1";
-              router.push(`/workflow?appId=${appId}`);
-            }}
-          >
-            <Workflow className="w-3 h-3" />
-          </Button>
-
-          <Button
-            size="sm"
-            variant="outline"
-            title="Database"
-            className="px-2"
-            onClick={() => {
-              const appId = currentAppId || searchParams.get("appId") || "1";
-              router.push(`/database?appId=${appId}`);
-            }}
-          >
-            <Database className="w-3 h-3" />
-          </Button>
-
-          <div className="h-4 w-px bg-gray-300 dark:bg-gray-600 mx-2" />
-
-          {/* View Options */}
-          <div className="flex items-center space-x-1">
-            <Button
-              size="sm"
-              variant={isLeftPanelHidden ? "default" : "outline"}
-              title="Hide Elements Panel"
-              onClick={() => setIsLeftPanelHidden(!isLeftPanelHidden)}
-            >
-              <Eye className={`w-3 h-3 ${isLeftPanelHidden ? "hidden" : ""}`} />
-              <EyeOff
-                className={`w-3 h-3 ${isLeftPanelHidden ? "" : "hidden"}`}
-              />
-            </Button>
-            <Button
-              size="sm"
-              variant={isRightPanelHidden ? "default" : "outline"}
-              title="Hide Properties Panel"
-              onClick={() => setIsRightPanelHidden(!isRightPanelHidden)}
-            >
-              <Eye
-                className={`w-3 h-3 ${isRightPanelHidden ? "hidden" : ""}`}
-              />
-              <EyeOff
-                className={`w-3 h-3 ${isRightPanelHidden ? "" : "hidden"}`}
-              />
-            </Button>
-          </div>
-        </div>
-      </div>
 
       <div className="absolute bottom-4 left-4 z-10 bg-black bg-opacity-90 text-white text-xs p-4 rounded-lg opacity-0 hover:opacity-100 transition-opacity pointer-events-none max-w-md">
         <div className="grid grid-cols-2 gap-2 text-xs">
@@ -6286,7 +6208,7 @@ function CanvasPageContent() {
       {!isPreviewMode && (
         <div className="flex flex-1 overflow-hidden min-h-0">
           {/* Element toolbar */}
-          {!isLeftPanelHidden && (
+          {currentView === "canvas" && !isLeftPanelHidden && (
             <ElementToolbar
               onDragStart={handleDragStart}
               canvasElements={canvasElements}
@@ -6307,749 +6229,933 @@ function CanvasPageContent() {
           )}
 
           {/* Canvas area */}
-          <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-            {/* Page tabs */}
-            <div className="flex items-center px-4 py-2 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
-              <div className="flex items-center space-x-2 overflow-x-auto">
-                {pages.map((page, index) => (
-                  <div
-                    key={page.id}
-                    className="flex items-center space-x-1 group"
-                  >
-                    <div className="relative">
-                      <Button
-                        size="sm"
-                        variant={
-                          currentPageId === page.id ? "default" : "ghost"
-                        }
-                        onClick={() => switchToPage(page.id)}
-                        onDoubleClick={() =>
-                          startPageRename(page.id, page.name)
-                        }
-                        className={`flex items-center gap-2 h-8 pr-8 ${
-                          currentPageId === page.id
-                            ? "bg-[var(--brand-blue)] text-white dark:text-white"
-                            : "text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
-                        }`}
-                      >
-                        <span className="text-xs">{index + 1}</span>
-                        {editingPageId === page.id ? (
-                          <input
-                            type="text"
-                            value={editingPageName}
-                            onChange={(e) => setEditingPageName(e.target.value)}
-                            onBlur={finishPageRename}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") finishPageRename();
-                              if (e.key === "Escape") cancelPageRename();
-                            }}
-                            className="text-xs bg-transparent border-none outline-none w-20 text-gray-900 dark:text-white"
-                            autoFocus
-                            onClick={(e) => e.stopPropagation()}
-                          />
-                        ) : (
-                          <span className="text-xs">{page.name}</span>
-                        )}
-                        {!page.visible && <EyeOff className="w-3 h-3" />}
-                      </Button>
-
-                      <div className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <div className="flex items-center space-x-1">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              startPageRename(page.id, page.name);
-                            }}
-                            className="w-4 h-4 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 flex items-center justify-center"
-                            title="Rename page"
-                          >
-                            <svg
-                              className="w-3 h-3"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                              />
-                            </svg>
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              duplicatePage(page.id);
-                            }}
-                            className="w-4 h-4 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 flex items-center justify-center"
-                            title="Duplicate page"
-                          >
-                            <svg
-                              className="w-3 h-3"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-                              />
-                            </svg>
-                          </button>
-                          {pages.length > 1 && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (
-                                  confirm(
-                                    `Are you sure you want to delete "${page.name}"?`
-                                  )
-                                ) {
-                                  deletePage(page.id);
-                                }
-                              }}
-                              className="w-4 h-4 text-gray-400 dark:text-gray-500 hover:text-[var(--brand-pink)] dark:hover:text-[var(--brand-pink)] flex items-center justify-center"
-                              title="Delete page"
-                            >
-                              <svg
-                                className="w-3 h-3"
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
-                              >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  strokeWidth={2}
-                                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                                />
-                              </svg>
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                    {index < pages.length - 1 && (
-                      <div className="w-px h-4 bg-gray-300 dark:bg-gray-600" />
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Canvas */}
-            <div className="flex-1 flex min-h-0 overflow-hidden">
-              <div
-                ref={canvasContainerRef}
-                className="flex-1 overflow-auto relative bg-gray-100 dark:bg-gray-900"
-                onWheel={handleWheel}
-                style={{
-                  minHeight: "100%",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "flex-start",
-                  paddingTop: "2rem",
-                  paddingBottom: "2rem",
-                }}
-              >
-                {/* Grid background - positioned behind the canvas */}
-                <div
-                  className="absolute opacity-20 dark:opacity-10 pointer-events-none"
-                  style={{
-                    left: "50%",
-                    top: "2rem",
-                    width: `${
-                      (currentPage?.canvasWidth || 1200) * canvasTransform.scale
-                    }px`,
-                    height: `${
-                      (currentPage?.canvasHeight || 800) * canvasTransform.scale
-                    }px`,
-                    transform: `translateX(-50%) translate(${canvasTransform.x}px, ${canvasTransform.y}px)`,
-                    backgroundImage: `
-                      linear-gradient(rgba(0,0,0,0.1) 1px, transparent 1px),
-                      linear-gradient(90deg, rgba(0,0,0,0.1) 1px, transparent 1px)
-                    `,
-                    backgroundSize: `${20 * canvasTransform.scale}px ${
-                      20 * canvasTransform.scale
-                    }px`,
-                  }}
-                />
-
-                {/* Canvas */}
-                <div
-                  ref={canvasRef}
-                  className="relative mx-auto"
-                  style={{
-                    width: `${currentPage?.canvasWidth || 1200}px`,
-                    height: `${currentPage?.canvasHeight || 800}px`,
-                    transform: `translate(${canvasTransform.x}px, ${canvasTransform.y}px) scale(${canvasTransform.scale})`,
-                    transformOrigin: "0 0",
-                    cursor: isPanning
-                      ? "grabbing"
-                      : canvasMode === "pan"
-                      ? "grab"
-                      : canvasMode === "text"
-                      ? "text"
-                      : "default",
-                    border: isDragOverCanvas
-                      ? "2px dashed #3b82f6"
-                      : "1px solid #e5e7eb",
-                    boxShadow: isDragOverCanvas
-                      ? "0 0 0 3px rgba(59, 130, 246, 0.1), 0 4px 6px -1px rgba(0, 0, 0, 0.1)"
-                      : "0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)",
-                    backgroundColor: isDragOverCanvas
-                      ? "rgba(59, 130, 246, 0.02)"
-                      : undefined,
-                    transition: "all 0.2s ease",
-                    ...getCanvasBackgroundStyle(),
-                  }}
-                  onDrop={handleDrop}
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    e.dataTransfer.dropEffect = "copy";
-                    setIsDragOverCanvas(true);
-                  }}
-                  onDragLeave={() => setIsDragOverCanvas(false)}
-                  onMouseDown={handleCanvasMouseDown}
-                  onMouseMove={handleCanvasMouseMove}
-                  onMouseUp={handleCanvasMouseUp}
-                  onClick={handleCanvasClick}
-                >
-                  {canvasElements
-                    .sort((a, b) => a.zIndex - b.zIndex)
-                    .map((element) => {
-                      const elementComponent = renderElement(element);
-                      // Add selection indicator for multi-selection
-                      if (
-                        selectedElements.length > 1 &&
-                        selectedElements.includes(element)
-                      ) {
-                        return (
-                          <div key={element.id} className="relative">
-                            {elementComponent}
-                            {/* Multi-selection indicator */}
-                            <div className="absolute inset-0 border-2 border-blue-400 bg-blue-100 bg-opacity-20 pointer-events-none rounded" />
-                          </div>
-                        );
-                      }
-                      return elementComponent;
-                    })}
-
-                  {selectionBox && (
-                    <div
-                      className="absolute border-2 border-blue-400 bg-blue-100 bg-opacity-20 pointer-events-none"
-                      style={{
-                        left: selectionBox.x,
-                        top: selectionBox.y,
-                        width: selectionBox.width,
-                        height: selectionBox.height,
-                      }}
-                    />
-                  )}
-
-                  {/* Floating Group Buttons */}
-                  {selectedElements.length > 1 && (
-                    <div
-                      className="absolute pointer-events-auto z-50 flex gap-2"
-                      style={{
-                        left:
-                          Math.min(...selectedElements.map((el) => el.x)) +
-                          (Math.max(
-                            ...selectedElements.map((el) => el.x + el.width)
-                          ) -
-                            Math.min(...selectedElements.map((el) => el.x))) /
-                            2 -
-                          80,
-                        top:
-                          Math.min(...selectedElements.map((el) => el.y)) - 60,
-                      }}
+          <div className="flex-1 flex flex-col min-w-0 overflow-hidden ">
+            {/* VIEW SWITCHER - placed inside canvas column so it doesn't steal horizontal space */}
+            <header className="sticky top-0 z-40 w-full border-b border-gray-200/70 bg-gradient-to-r from-gray-50 to-gray-100 backdrop-blur supports-[backdrop-filter]:bg-white/70 dark:border-gray-800 dark:from-gray-900 dark:to-gray-950">
+              <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-3 sm:px-4">
+                {/* Left: Brand + Segmented Switch */}
+                <div className="flex min-w-0 items-center gap-3">
+                  {/* Segmented control (Canvas / Database) */}
+                  <div className="hidden sm:flex items-center rounded-lg border border-gray-200 bg-white p-1 shadow-sm dark:border-gray-800 dark:bg-gray-800">
+                    <button
+                      onClick={() => setCurrentView("canvas")}
+                      className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-xs font-medium transition ${
+                        currentView === "canvas"
+                          ? "bg-blue-50 text-blue-700 shadow-xs dark:bg-blue-950/50 dark:text-blue-300"
+                          : "text-gray-600 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-gray-700/60"
+                      }`}
+                      aria-pressed={currentView === "canvas"}
                     >
-                      <Button
-                        onClick={createGroup}
-                        className="bg-[var(--brand-blue)] hover:bg-[var(--brand-blue)]/90 text-white dark:text-white shadow-xl rounded-full w-24 h-10 flex items-center justify-center gap-2 text-sm font-medium border-2 border-[var(--brand-blue)] transition-all duration-200 hover:scale-105"
-                        title="Group selected elements (Ctrl+G)"
-                      >
-                        <Layers className="w-4 h-4" />
-                        Group
-                      </Button>
-
-                      {/* Create Form Button - only show if selection includes form elements (NOT buttons) */}
-                      {(() => {
-                        const hasFormElements = selectedElements.some((el) =>
-                          [
-                            // Lowercase variants
-                            "textfield",
-                            "textarea",
-                            "checkbox",
-                            "radiobutton",
-                            "dropdown",
-                            "toggle",
-                            "phone",
-                            "password",
-                            "calendar",
-                            "upload",
-                            "addfile",
-                            // Uppercase variants
-                            "TEXT_FIELD",
-                            "TEXT_AREA",
-                            "CHECKBOX",
-                            "RADIO_BUTTON",
-                            "DROPDOWN",
-                            "TOGGLE",
-                            "PHONE_FIELD",
-                            "PASSWORD_FIELD",
-                            "DATE_PICKER",
-                            "DATE_FIELD",
-                            "FILE_UPLOAD",
-                            "UPLOAD",
-                            "ADDFILE",
-                          ].includes(el.type)
-                        );
-                        console.log("🔍 Form button check:", {
-                          selectedElements: selectedElements.map((el) => ({
-                            id: el.id,
-                            type: el.type,
-                            name: el.name,
-                          })),
-                          hasFormElements,
-                        });
-                        return hasFormElements;
-                      })() && (
-                        <Button
-                          onClick={createFormGroup}
-                          className="bg-blue-600 hover:bg-blue-700 text-white dark:text-white shadow-xl rounded-full w-28 h-10 flex items-center justify-center gap-2 text-sm font-medium border-2 border-blue-600 transition-all duration-200 hover:scale-105"
-                          title="Create form group from selected elements"
-                        >
-                          📝 Form
-                        </Button>
+                      <LayoutGrid className="h-3.5 w-3.5" />
+                      <span>Canvas</span>
+                    </button>
+                    <button
+                      onClick={() => setCurrentView("database")}
+                      className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-xs font-medium transition ${
+                        currentView === "database"
+                          ? "bg-blue-50 text-blue-700 shadow-xs dark:bg-blue-950/50 dark:text-blue-300"
+                          : "text-gray-600 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-gray-700/60"
+                      }`}
+                      aria-pressed={currentView === "database"}
+                    >
+                      <Database className="h-3.5 w-3.5" />
+                      <span>Database</span>
+                    </button>
+                  </div>
+                  {/* Auto-save status */}
+                  {autoSaveStatus !== "idle" && (
+                    <div className="ml-1 hidden items-center gap-1 text-xs md:flex">
+                      {autoSaveStatus === "saving" && (
+                        <>
+                          <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+                          <span className="text-blue-600 dark:text-blue-400">
+                            Saving…
+                          </span>
+                        </>
+                      )}
+                      {autoSaveStatus === "saved" && (
+                        <>
+                          <span className="inline-block h-3 w-3 rounded-full bg-green-500" />
+                          <span className="text-green-600 dark:text-green-400">
+                            Saved
+                          </span>
+                        </>
+                      )}
+                      {autoSaveStatus === "error" && (
+                        <>
+                          <span className="inline-block h-3 w-3 rounded-full bg-red-500" />
+                          <span
+                            className="text-red-600 dark:text-red-400"
+                            title={autoSaveError || "Auto-save failed"}
+                          >
+                            Save failed
+                          </span>
+                        </>
                       )}
                     </div>
                   )}
-
-                  {/* Floating Ungroup Button */}
-                  {selectedGroup && (
-                    <div
-                      className="absolute pointer-events-auto z-50"
-                      style={{
-                        left:
-                          Math.min(
-                            ...canvasElements
-                              .filter((el) => el.groupId === selectedGroup.id)
-                              .map((el) => el.x)
-                          ) +
-                          (Math.max(
-                            ...canvasElements
-                              .filter((el) => el.groupId === selectedGroup.id)
-                              .map((el) => el.x + el.width)
-                          ) -
-                            Math.min(
-                              ...canvasElements
-                                .filter((el) => el.groupId === selectedGroup.id)
-                                .map((el) => el.x)
-                            )) /
-                            2 -
-                          60,
-                        top:
-                          Math.min(
-                            ...canvasElements
-                              .filter((el) => el.groupId === selectedGroup.id)
-                              .map((el) => el.y)
-                          ) - 60,
-                      }}
-                    >
-                      <Button
-                        onClick={() => ungroupElements(selectedGroup.id)}
-                        className="bg-orange-500 hover:bg-orange-600 text-white dark:text-white shadow-xl rounded-full w-28 h-10 flex items-center justify-center gap-2 text-sm font-medium border-2 border-orange-500 transition-all duration-200 hover:scale-105"
-                        title="Ungroup elements (Ctrl+Shift+G)"
-                      >
-                        <Layers className="w-4 h-4" />
-                        Ungroup
-                      </Button>
-                    </div>
-                  )}
                 </div>
 
-                {/* Floating Cube-Style Toolbar */}
-                <div
-                  className={`${
-                    isSplitScreenMode
-                      ? "fixed bottom-6 left-1/4 transform -translate-x-1/2 z-[60]"
-                      : "absolute bottom-6 left-1/2 transform -translate-x-1/2 z-50"
-                  } pointer-events-auto`}
-                >
-                  <div className="flex items-center space-x-1 bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm rounded-xl p-2 shadow-2xl border border-gray-200/50 dark:border-gray-700/50">
-                    {/* Canvas tools */}
-                    <div className="flex items-center space-x-1 bg-gray-100 dark:bg-gray-700 rounded-lg p-1">
-                      <Button
-                        size="sm"
-                        variant={canvasMode === "select" ? "default" : "ghost"}
-                        onClick={() => setCanvasMode("select")}
-                        className="h-8 px-3"
-                        title="Select Tool"
-                      >
-                        <MousePointer className="w-3 h-3 mr-1" />
-                        Select
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant={canvasMode === "pan" ? "default" : "ghost"}
-                        onClick={() => setCanvasMode("pan")}
-                        className="h-8 px-3"
-                        title="Pan Tool"
-                      >
-                        <Hand className="w-3 h-3 mr-1" />
-                        Pan
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant={canvasMode === "text" ? "default" : "ghost"}
-                        onClick={() => setCanvasMode("text")}
-                        className="h-8 px-3"
-                        title="Text Tool"
-                      >
-                        <Type className="w-3 h-3 mr-1" />
-                        Text
-                      </Button>
-                    </div>
+                {/* Right: Actions + Status */}
+                <div className="flex items-center gap-2">
+                  {/* Preview toggle */}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={togglePreviewMode}
+                    className="hidden md:inline-flex"
+                  >
+                    <Eye className="mr-1 h-3.5 w-3.5" />
+                    {isPreviewMode ? "Exit Preview" : "Preview"}
+                  </Button>
 
-                    <div className="h-6 w-px bg-gray-300 dark:bg-gray-600" />
+                  {/* Save */}
+                  <Button
+                    size="sm"
+                    onClick={saveApp}
+                    data-save-button
+                    className="bg-[var(--brand-blue)] hover:bg-[var(--brand-blue)]/90 text-white dark:text-white"
+                  >
+                    <Save className="mr-1 h-3.5 w-3.5" />
+                    Save
+                  </Button>
 
-                    <div className="flex items-center space-x-1">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={undo}
-                        disabled={historyIndex <= 0}
-                        title="Undo (Ctrl+Z)"
-                      >
-                        <svg
-                          className="w-3 h-3"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"
-                          />
-                        </svg>
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={redo}
-                        disabled={historyIndex >= history.length - 1}
-                        title="Redo (Ctrl+Y)"
-                      >
-                        <svg
-                          className="w-3 h-3"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M21 10h-10a8 8 0 00-8 8v2m18-10l-6 6m6-6l-6-6"
-                          />
-                        </svg>
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={deleteSelectedElements}
-                        disabled={selectedElements.length === 0}
-                        title="Delete Selected (Del)"
-                        className="text-[var(--brand-pink)] hover:text-[var(--brand-pink)] hover:bg-[var(--brand-pink)]/10 dark:text-[var(--brand-pink)] dark:hover:bg-[var(--brand-pink)]/20"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </Button>
-                    </div>
-
-                    <div className="h-6 w-px bg-gray-300 dark:bg-gray-600" />
-
-                    {/* Zoom controls */}
-                    <div className="flex items-center space-x-1">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={zoomOut}
-                        title="Zoom Out"
-                      >
-                        <ZoomOut className="w-3 h-3" />
-                      </Button>
-                      <span className="text-sm text-gray-600 dark:text-gray-300 min-w-[3rem] text-center">
-                        {Math.round(canvasTransform.scale * 100)}%
-                      </span>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={zoomIn}
-                        title="Zoom In"
-                      >
-                        <ZoomIn className="w-3 h-3" />
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={resetCanvasView}
-                        title="Reset View"
-                      >
-                        <RotateCcw className="w-3 h-3" />
-                      </Button>
-                    </div>
-
-                    <div className="h-6 w-px bg-gray-300 dark:bg-gray-600" />
-
-                    {/* Action buttons */}
+                  {/* View Options */}
+                  <div className="flex items-center space-x-1">
                     <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={addNewPage}
-                      title="Add Page"
-                    >
-                      <Plus className="w-3 h-3 mr-1" />
-                      Page
-                    </Button>
-
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() =>
-                        setShowCanvasProperties(!showCanvasProperties)
-                      }
+                      disabled={isSplitScreenMode}
                       className={
-                        showCanvasProperties
-                          ? "bg-[var(--brand-blue)]/10 border-[var(--brand-blue)] text-[var(--brand-blue)] dark:bg-[var(--brand-blue)]/20 dark:border-[var(--brand-blue)] dark:text-[var(--brand-blue)]"
-                          : ""
+                        isSplitScreenMode ? "cursor-not-allowed opacity-50" : ""
                       }
-                      title="Canvas Settings"
+                      size="sm"
+                      variant={isLeftPanelHidden ? "default" : "outline"}
+                      title="Hide Elements Panel"
+                      onClick={() => setIsLeftPanelHidden(!isLeftPanelHidden)}
                     >
-                      <Settings className="w-3 h-3 mr-1" />
-                      Canvas
+                      <Eye
+                        className={`w-3 h-3 ${
+                          isLeftPanelHidden ? "hidden" : ""
+                        }`}
+                      />
+                      <EyeOff
+                        className={`w-3 h-3 ${
+                          isLeftPanelHidden ? "" : "hidden"
+                        }`}
+                      />
+                    </Button>
+                    <Button
+                      disabled={isSplitScreenMode}
+                      className={
+                        isSplitScreenMode ? "cursor-not-allowed opacity-50" : ""
+                      }
+                      size="sm"
+                      variant={isRightPanelHidden ? "default" : "outline"}
+                      title="Hide Properties Panel"
+                      onClick={() => setIsRightPanelHidden(!isRightPanelHidden)}
+                    >
+                      <Eye
+                        className={`w-3 h-3 ${
+                          isRightPanelHidden ? "hidden" : ""
+                        }`}
+                      />
+                      <EyeOff
+                        className={`w-3 h-3 ${
+                          isRightPanelHidden ? "" : "hidden"
+                        }`}
+                      />
                     </Button>
                   </div>
                 </div>
+              </div>
 
-                {/* Text Formatting Toolbar - appears when text element is selected */}
-                {selectedElement &&
-                  (selectedElement.type === "TEXT_FIELD" ||
-                    selectedElement.type === "text" ||
-                    (selectedElement.type === "SHAPE" &&
-                      selectedElement.properties.text !== undefined)) && (
+              {/* Mobile segmented control */}
+              <div className="sm:hidden border-t border-gray-200/70 bg-white/70 px-3 py-2 backdrop-blur dark:border-gray-800 dark:bg-gray-900/70">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setCurrentView("canvas")}
+                    className={`flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition ${
+                      currentView === "canvas"
+                        ? "bg-blue-50 text-blue-700 shadow-xs dark:bg-blue-950/50 dark:text-blue-300"
+                        : "text-gray-600 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-gray-800/70"
+                    }`}
+                    aria-pressed={currentView === "canvas"}
+                  >
+                    <LayoutGrid className="h-4 w-4" />
+                    <span>Canvas</span>
+                  </button>
+                  <button
+                    onClick={() => setCurrentView("database")}
+                    className={`flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition ${
+                      currentView === "database"
+                        ? "bg-blue-50 text-blue-700 shadow-xs dark:bg-blue-950/50 dark:text-blue-300"
+                        : "text-gray-600 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-gray-800/70"
+                    }`}
+                    aria-pressed={currentView === "database"}
+                  >
+                    <Database className="h-4 w-4" />
+                    <span>Database</span>
+                  </button>
+                </div>
+              </div>
+            </header>
+            {currentView === "database" ? (
+              <div className="flex-1 overflow-hidden">
+                <DatabaseTab />
+              </div>
+            ) : null}
+            {currentView === "canvas" && (
+              <>
+                {/* Page tabs */}
+                <div className="flex items-center px-4 py-2 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
+                  <div className="flex items-center space-x-2 overflow-x-auto ">
+                    {pages.map((page, index) => (
+                      <div
+                        key={page.id}
+                        className="flex items-center space-x-1 group"
+                      >
+                        <div className="relative">
+                          <Button
+                            size="sm"
+                            variant={
+                              currentPageId === page.id ? "default" : "ghost"
+                            }
+                            onClick={() => switchToPage(page.id)}
+                            onDoubleClick={() =>
+                              startPageRename(page.id, page.name)
+                            }
+                            className={`flex items-center gap-2 h-8 pr-8 ${
+                              currentPageId === page.id
+                                ? "bg-[var(--brand-blue)] text-white dark:text-white"
+                                : "text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
+                            }`}
+                          >
+                            <span className="text-xs">{index + 1}</span>
+                            {editingPageId === page.id ? (
+                              <input
+                                type="text"
+                                value={editingPageName}
+                                onChange={(e) =>
+                                  setEditingPageName(e.target.value)
+                                }
+                                onBlur={finishPageRename}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") finishPageRename();
+                                  if (e.key === "Escape") cancelPageRename();
+                                }}
+                                className="text-xs bg-transparent border-none outline-none w-20 text-gray-900 dark:text-white"
+                                autoFocus
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                            ) : (
+                              <span className="text-xs">{page.name}</span>
+                            )}
+                            {!page.visible && <EyeOff className="w-3 h-3" />}
+                          </Button>
+
+                          <div className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity ">
+                            <div className="flex items-center space-x-1">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  startPageRename(page.id, page.name);
+                                }}
+                                className="w-4 h-4 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 flex items-center justify-center"
+                                title="Rename page"
+                              >
+                                <svg
+                                  className="w-3 h-3"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={2}
+                                    d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                                  />
+                                </svg>
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  duplicatePage(page.id);
+                                }}
+                                className="w-4 h-4 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 flex items-center justify-center"
+                                title="Duplicate page"
+                              >
+                                <svg
+                                  className="w-3 h-3"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={2}
+                                    d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                                  />
+                                </svg>
+                              </button>
+                              {pages.length > 1 && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (
+                                      confirm(
+                                        `Are you sure you want to delete "${page.name}"?`
+                                      )
+                                    ) {
+                                      deletePage(page.id);
+                                    }
+                                  }}
+                                  className="w-4 h-4 text-gray-400 dark:text-gray-500 hover:text-[var(--brand-pink)] dark:hover:text-[var(--brand-pink)] flex items-center justify-center"
+                                  title="Delete page"
+                                >
+                                  <svg
+                                    className="w-3 h-3"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                  >
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      strokeWidth={2}
+                                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                                    />
+                                  </svg>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        {index < pages.length - 1 && (
+                          <div className="w-px h-4 bg-gray-300 dark:bg-gray-600" />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Canvas */}
+                <div className="flex-1 flex min-h-0 overflow-hidden  relative custom-scrollbar">
+                  <div
+                    ref={canvasContainerRef}
+                    className="flex-1 overflow-auto relative bg-gray-100 dark:bg-gray-900"
+                    onWheel={handleWheel}
+                    style={{
+                      minHeight: "100%",
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      justifyContent: "flex-start",
+                      paddingTop: "2rem",
+                      paddingBottom: "2rem",
+                    }}
+                  >
+                    {/* Grid background - positioned behind the canvas */}
                     <div
-                      className={`${
-                        isSplitScreenMode
-                          ? "fixed bottom-20 left-1/4 transform -translate-x-1/2 z-[60]"
-                          : "absolute bottom-20 left-1/2 transform -translate-x-1/2 z-50"
-                      } pointer-events-auto`}
+                      className="absolute opacity-20 dark:opacity-10 pointer-events-none"
+                      style={{
+                        left: "50%",
+                        top: "2rem",
+                        width: `${
+                          (currentPage?.canvasWidth || 1200) *
+                          canvasTransform.scale
+                        }px`,
+                        height: `${
+                          (currentPage?.canvasHeight || 800) *
+                          canvasTransform.scale
+                        }px`,
+                        transform: `translateX(-50%) translate(${canvasTransform.x}px, ${canvasTransform.y}px)`,
+                        backgroundImage: `
+                      linear-gradient(rgba(0,0,0,0.1) 1px, transparent 1px),
+                      linear-gradient(90deg, rgba(0,0,0,0.1) 1px, transparent 1px)
+                    `,
+                        backgroundSize: `${20 * canvasTransform.scale}px ${
+                          20 * canvasTransform.scale
+                        }px`,
+                      }}
+                    />
+
+                    {/* Canvas */}
+                    <div
+                      ref={canvasRef}
+                      className="relative mx-auto"
+                      style={{
+                        width: `${currentPage?.canvasWidth || 1200}px`,
+                        height: `${currentPage?.canvasHeight || 800}px`,
+                        transform: `translate(${canvasTransform.x}px, ${canvasTransform.y}px) scale(${canvasTransform.scale})`,
+                        transformOrigin: "0 0",
+                        cursor: isPanning
+                          ? "grabbing"
+                          : canvasMode === "pan"
+                          ? "grab"
+                          : canvasMode === "text"
+                          ? "text"
+                          : "default",
+                        border: isDragOverCanvas
+                          ? "2px dashed #3b82f6"
+                          : "1px solid #e5e7eb",
+                        boxShadow: isDragOverCanvas
+                          ? "0 0 0 3px rgba(59, 130, 246, 0.1), 0 4px 6px -1px rgba(0, 0, 0, 0.1)"
+                          : "0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)",
+                        backgroundColor: isDragOverCanvas
+                          ? "rgba(59, 130, 246, 0.02)"
+                          : undefined,
+                        transition: "all 0.2s ease",
+                        ...getCanvasBackgroundStyle(),
+                      }}
+                      onDrop={handleDrop}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = "copy";
+                        setIsDragOverCanvas(true);
+                      }}
+                      onDragLeave={() => setIsDragOverCanvas(false)}
+                      onMouseDown={handleCanvasMouseDown}
+                      onMouseMove={handleCanvasMouseMove}
+                      onMouseUp={handleCanvasMouseUp}
+                      onClick={handleCanvasClick}
                     >
-                      <div className="flex items-center space-x-2 bg-white/95 dark:bg-gray-800/95 backdrop-blur-sm rounded-xl p-3 shadow-2xl border border-gray-200/50 dark:border-gray-700/50">
-                        {/* Font Size Control */}
-                        <div className="flex items-center space-x-1">
-                          <label className="text-xs text-gray-600 dark:text-gray-300 font-medium">
-                            Size:
-                          </label>
-                          <input
-                            type="number"
-                            value={selectedElement.properties.fontSize || 16}
-                            onChange={(e) =>
-                              updateElementProperty(
-                                "fontSize",
-                                Number.parseInt(e.target.value) || 16
-                              )
-                            }
-                            className="w-16 h-8 px-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                            min={8}
-                            max={72}
-                          />
-                        </div>
+                      {canvasElements
+                        .sort((a, b) => a.zIndex - b.zIndex)
+                        .map((element) => {
+                          const elementComponent = renderElement(element);
+                          // Add selection indicator for multi-selection
+                          if (
+                            selectedElements.length > 1 &&
+                            selectedElements.includes(element)
+                          ) {
+                            return (
+                              <div key={element.id} className="relative">
+                                {elementComponent}
+                                {/* Multi-selection indicator */}
+                                <div className="absolute inset-0 border-2 border-blue-400 bg-blue-100 bg-opacity-20 pointer-events-none rounded" />
+                              </div>
+                            );
+                          }
+                          return elementComponent;
+                        })}
 
-                        <div className="h-6 w-px bg-gray-300 dark:bg-gray-600" />
+                      {selectionBox && (
+                        <div
+                          className="absolute border-2 border-blue-400 bg-blue-100 bg-opacity-20 pointer-events-none"
+                          style={{
+                            left: selectionBox.x,
+                            top: selectionBox.y,
+                            width: selectionBox.width,
+                            height: selectionBox.height,
+                          }}
+                        />
+                      )}
 
-                        {/* Font Weight Controls */}
-                        <div className="flex items-center space-x-1">
+                      {/* Floating Group Buttons */}
+                      {selectedElements.length > 1 && (
+                        <div
+                          className="absolute pointer-events-auto z-50 flex gap-2"
+                          style={{
+                            left:
+                              Math.min(...selectedElements.map((el) => el.x)) +
+                              (Math.max(
+                                ...selectedElements.map((el) => el.x + el.width)
+                              ) -
+                                Math.min(
+                                  ...selectedElements.map((el) => el.x)
+                                )) /
+                                2 -
+                              80,
+                            top:
+                              Math.min(...selectedElements.map((el) => el.y)) -
+                              60,
+                          }}
+                        >
                           <Button
-                            size="sm"
-                            variant={
-                              selectedElement.properties.fontWeight === "bold"
-                                ? "default"
-                                : "outline"
-                            }
-                            onClick={() =>
-                              updateElementProperty(
-                                "fontWeight",
+                            onClick={createGroup}
+                            className="bg-[var(--brand-blue)] hover:bg-[var(--brand-blue)]/90 text-white dark:text-white shadow-xl rounded-full w-24 h-10 flex items-center justify-center gap-2 text-sm font-medium border-2 border-[var(--brand-blue)] transition-all duration-200 hover:scale-105"
+                            title="Group selected elements (Ctrl+G)"
+                          >
+                            <Layers className="w-4 h-4" />
+                            Group
+                          </Button>
+
+                          {/* Create Form Button - only show if selection includes form elements (NOT buttons) */}
+                          {(() => {
+                            const hasFormElements = selectedElements.some(
+                              (el) =>
+                                [
+                                  // Lowercase variants
+                                  "textfield",
+                                  "textarea",
+                                  "checkbox",
+                                  "radiobutton",
+                                  "dropdown",
+                                  "toggle",
+                                  "phone",
+                                  "password",
+                                  "calendar",
+                                  "upload",
+                                  "addfile",
+                                  // Uppercase variants
+                                  "TEXT_FIELD",
+                                  "TEXT_AREA",
+                                  "CHECKBOX",
+                                  "RADIO_BUTTON",
+                                  "DROPDOWN",
+                                  "TOGGLE",
+                                  "PHONE_FIELD",
+                                  "PASSWORD_FIELD",
+                                  "DATE_PICKER",
+                                  "DATE_FIELD",
+                                  "FILE_UPLOAD",
+                                  "UPLOAD",
+                                  "ADDFILE",
+                                ].includes(el.type)
+                            );
+                            console.log("🔍 Form button check:", {
+                              selectedElements: selectedElements.map((el) => ({
+                                id: el.id,
+                                type: el.type,
+                                name: el.name,
+                              })),
+                              hasFormElements,
+                            });
+                            return hasFormElements;
+                          })() && (
+                            <Button
+                              onClick={createFormGroup}
+                              className="bg-blue-600 hover:bg-blue-700 text-white dark:text-white shadow-xl rounded-full w-28 h-10 flex items-center justify-center gap-2 text-sm font-medium border-2 border-blue-600 transition-all duration-200 hover:scale-105"
+                              title="Create form group from selected elements"
+                            >
+                              📝 Form
+                            </Button>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Floating Ungroup Button */}
+                      {selectedGroup && (
+                        <div
+                          className="absolute pointer-events-auto z-50"
+                          style={{
+                            left:
+                              Math.min(
+                                ...canvasElements
+                                  .filter(
+                                    (el) => el.groupId === selectedGroup.id
+                                  )
+                                  .map((el) => el.x)
+                              ) +
+                              (Math.max(
+                                ...canvasElements
+                                  .filter(
+                                    (el) => el.groupId === selectedGroup.id
+                                  )
+                                  .map((el) => el.x + el.width)
+                              ) -
+                                Math.min(
+                                  ...canvasElements
+                                    .filter(
+                                      (el) => el.groupId === selectedGroup.id
+                                    )
+                                    .map((el) => el.x)
+                                )) /
+                                2 -
+                              60,
+                            top:
+                              Math.min(
+                                ...canvasElements
+                                  .filter(
+                                    (el) => el.groupId === selectedGroup.id
+                                  )
+                                  .map((el) => el.y)
+                              ) - 60,
+                          }}
+                        >
+                          <Button
+                            onClick={() => ungroupElements(selectedGroup.id)}
+                            className="bg-orange-500 hover:bg-orange-600 text-white dark:text-white shadow-xl rounded-full w-28 h-10 flex items-center justify-center gap-2 text-sm font-medium border-2 border-orange-500 transition-all duration-200 hover:scale-105"
+                            title="Ungroup elements (Ctrl+Shift+G)"
+                          >
+                            <Layers className="w-4 h-4" />
+                            Ungroup
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="absolute max-w-280 flex items-center justify-center bottom-6 left-4 right-4 z-50 pointer-events-none">
+                    <div className="flex items-center w-fit overflow-x-auto no-scrollbar space-x-1 bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm rounded-xl p-2 shadow-2xl border border-gray-200/50 dark:border-gray-700/50 pointer-events-auto">
+                      {/* Canvas tools */}
+                      <div className="flex items-center flex-nowrap space-x-1 bg-gray-100 dark:bg-gray-700 rounded-lg p-1">
+                        <Button
+                          size="sm"
+                          variant={
+                            canvasMode === "select" ? "default" : "ghost"
+                          }
+                          onClick={() => setCanvasMode("select")}
+                          className="h-8 px-3"
+                          title="Select Tool"
+                        >
+                          <MousePointer className="w-3 h-3 mr-1" />
+                          Select
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant={canvasMode === "pan" ? "default" : "ghost"}
+                          onClick={() => setCanvasMode("pan")}
+                          className="h-8 px-3"
+                          title="Pan Tool"
+                        >
+                          <Hand className="w-3 h-3 mr-1" />
+                          Pan
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant={canvasMode === "text" ? "default" : "ghost"}
+                          onClick={() => setCanvasMode("text")}
+                          className="h-8 px-3"
+                          title="Text Tool"
+                        >
+                          <Type className="w-3 h-3 mr-1" />
+                          Text
+                        </Button>
+                      </div>
+
+                      <div className="h-6 w-px bg-gray-300 dark:bg-gray-600" />
+
+                      <div className="flex items-center space-x-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={undo}
+                          disabled={historyIndex <= 0}
+                          title="Undo (Ctrl+Z)"
+                        >
+                          <svg
+                            className="w-3 h-3"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"
+                            />
+                          </svg>
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={redo}
+                          disabled={historyIndex >= history.length - 1}
+                          title="Redo (Ctrl+Y)"
+                        >
+                          <svg
+                            className="w-3 h-3"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M21 10h-10a8 8 0 00-8 8v2m18-10l-6 6m6-6l-6-6"
+                            />
+                          </svg>
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={deleteSelectedElements}
+                          disabled={selectedElements.length === 0}
+                          title="Delete Selected (Del)"
+                          className="text-[var(--brand-pink)] hover:text-[var(--brand-pink)] hover:bg-[var(--brand-pink)]/10 dark:text-[var(--brand-pink)] dark:hover:bg-[var(--brand-pink)]/20"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </Button>
+                      </div>
+
+                      <div className="h-6 w-px bg-gray-300 dark:bg-gray-600" />
+
+                      {/* Zoom controls */}
+                      <div className="flex items-center space-x-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={zoomOut}
+                          title="Zoom Out"
+                        >
+                          <ZoomOut className="w-3 h-3" />
+                        </Button>
+                        <span className="text-sm text-gray-600 dark:text-gray-300 min-w-[3rem] text-center">
+                          {Math.round(canvasTransform.scale * 100)}%
+                        </span>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={zoomIn}
+                          title="Zoom In"
+                        >
+                          <ZoomIn className="w-3 h-3" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={resetCanvasView}
+                          title="Reset View"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                        </Button>
+                      </div>
+
+                      <div className="h-6 w-px bg-gray-300 dark:bg-gray-600" />
+
+                      {/* Action buttons */}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={addNewPage}
+                        title="Add Page"
+                      >
+                        <Plus className="w-3 h-3 mr-1" />
+                        Page
+                      </Button>
+
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          setShowCanvasProperties(!showCanvasProperties)
+                        }
+                        className={
+                          showCanvasProperties
+                            ? "bg-[var(--brand-blue)]/10 border-[var(--brand-blue)] text-[var(--brand-blue)] dark:bg-[var(--brand-blue)]/20 dark:border-[var(--brand-blue)] dark:text-[var(--brand-blue)]"
+                            : ""
+                        }
+                        title="Canvas Settings"
+                      >
+                        <Settings className="w-3 h-3 mr-1" />
+                        Canvas
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Text Formatting Toolbar - Fixed to canvas container */}
+                  {selectedElement &&
+                    (selectedElement.type === "TEXT_FIELD" ||
+                      selectedElement.type === "text" ||
+                      (selectedElement.type === "SHAPE" &&
+                        selectedElement.properties.text !== undefined)) && (
+                      <div className="absolute bottom-20 left-1/2 transform -translate-x-1/2 z-50 pointer-events-none">
+                        <div className="flex items-center space-x-2 bg-white/95 dark:bg-gray-800/95 backdrop-blur-sm rounded-xl p-3 shadow-2xl border border-gray-200/50 dark:border-gray-700/50 pointer-events-auto">
+                          {/* Font Size Control */}
+                          <div className="flex items-center space-x-1">
+                            <label className="text-xs text-gray-600 dark:text-gray-300 font-medium">
+                              Size:
+                            </label>
+                            <input
+                              type="number"
+                              value={selectedElement.properties.fontSize || 16}
+                              onChange={(e) =>
+                                updateElementProperty(
+                                  "fontSize",
+                                  Number.parseInt(e.target.value) || 16
+                                )
+                              }
+                              className="w-16 h-8 px-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                              min={8}
+                              max={72}
+                            />
+                          </div>
+
+                          <div className="h-6 w-px bg-gray-300 dark:bg-gray-600" />
+
+                          {/* Font Weight Controls */}
+                          <div className="flex items-center space-x-1">
+                            <Button
+                              size="sm"
+                              variant={
                                 selectedElement.properties.fontWeight === "bold"
-                                  ? "normal"
-                                  : "bold"
-                              )
-                            }
-                            className="h-8 px-2"
-                            title="Bold"
-                          >
-                            <strong className="text-sm">B</strong>
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant={
-                              selectedElement.properties.fontStyle === "italic"
-                                ? "default"
-                                : "outline"
-                            }
-                            onClick={() =>
-                              updateElementProperty(
-                                "fontStyle",
+                                  ? "default"
+                                  : "outline"
+                              }
+                              onClick={() =>
+                                updateElementProperty(
+                                  "fontWeight",
+                                  selectedElement.properties.fontWeight ===
+                                    "bold"
+                                    ? "normal"
+                                    : "bold"
+                                )
+                              }
+                              className="h-8 px-2"
+                              title="Bold"
+                            >
+                              <strong className="text-sm">B</strong>
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant={
                                 selectedElement.properties.fontStyle ===
-                                  "italic"
-                                  ? "normal"
-                                  : "italic"
-                              )
-                            }
-                            className="h-8 px-2"
-                            title="Italic"
-                          >
-                            <em className="text-sm">I</em>
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant={
-                              selectedElement.properties.textDecoration ===
-                              "underline"
-                                ? "default"
-                                : "outline"
-                            }
-                            onClick={() =>
-                              updateElementProperty(
-                                "textDecoration",
+                                "italic"
+                                  ? "default"
+                                  : "outline"
+                              }
+                              onClick={() =>
+                                updateElementProperty(
+                                  "fontStyle",
+                                  selectedElement.properties.fontStyle ===
+                                    "italic"
+                                    ? "normal"
+                                    : "italic"
+                                )
+                              }
+                              className="h-8 px-2"
+                              title="Italic"
+                            >
+                              <em className="text-sm">I</em>
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant={
                                 selectedElement.properties.textDecoration ===
-                                  "underline"
-                                  ? "none"
-                                  : "underline"
-                              )
-                            }
-                            className="h-8 px-2"
-                            title="Underline"
-                          >
-                            <span className="text-sm underline">U</span>
-                          </Button>
-                        </div>
-
-                        <div className="h-6 w-px bg-gray-300 dark:bg-gray-600" />
-
-                        {/* Text Alignment Controls */}
-                        <div className="flex items-center space-x-1">
-                          <Button
-                            size="sm"
-                            variant={
-                              selectedElement.properties.textAlign === "left"
-                                ? "default"
-                                : "outline"
-                            }
-                            onClick={() =>
-                              updateElementProperty("textAlign", "left")
-                            }
-                            className="h-8 px-2"
-                            title="Align Left"
-                          >
-                            <svg
-                              className="w-3 h-3"
-                              fill="currentColor"
-                              viewBox="0 0 20 20"
+                                "underline"
+                                  ? "default"
+                                  : "outline"
+                              }
+                              onClick={() =>
+                                updateElementProperty(
+                                  "textDecoration",
+                                  selectedElement.properties.textDecoration ===
+                                    "underline"
+                                    ? "none"
+                                    : "underline"
+                                )
+                              }
+                              className="h-8 px-2"
+                              title="Underline"
                             >
-                              <path
-                                fillRule="evenodd"
-                                d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h6a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h6a1 1 0 110 2H4a1 1 0 01-1-1z"
-                                clipRule="evenodd"
-                              />
-                            </svg>
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant={
-                              selectedElement.properties.textAlign === "center"
-                                ? "default"
-                                : "outline"
-                            }
-                            onClick={() =>
-                              updateElementProperty("textAlign", "center")
-                            }
-                            className="h-8 px-2"
-                            title="Align Center"
-                          >
-                            <svg
-                              className="w-3 h-3"
-                              fill="currentColor"
-                              viewBox="0 0 20 20"
-                            >
-                              <path
-                                fillRule="evenodd"
-                                d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm2 4a1 1 0 011-1h8a1 1 0 110 2H6a1 1 0 01-1-1zm-2 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm2 4a1 1 0 011-1h8a1 1 0 110 2H6a1 1 0 01-1-1z"
-                                clipRule="evenodd"
-                              />
-                            </svg>
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant={
-                              selectedElement.properties.textAlign === "right"
-                                ? "default"
-                                : "outline"
-                            }
-                            onClick={() =>
-                              updateElementProperty("textAlign", "right")
-                            }
-                            className="h-8 px-2"
-                            title="Align Right"
-                          >
-                            <svg
-                              className="w-3 h-3"
-                              fill="currentColor"
-                              viewBox="0 0 20 20"
-                            >
-                              <path
-                                fillRule="evenodd"
-                                d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm6 4a1 1 0 011-1h6a1 1 0 110 2h-6a1 1 0 01-1-1zm-6 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm6 4a1 1 0 011-1h6a1 1 0 110 2h-6a1 1 0 01-1-1z"
-                                clipRule="evenodd"
-                              />
-                            </svg>
-                          </Button>
-                        </div>
+                              <span className="text-sm underline">U</span>
+                            </Button>
+                          </div>
 
-                        <div className="h-6 w-px bg-gray-300 dark:bg-gray-600" />
+                          <div className="h-6 w-px bg-gray-300 dark:bg-gray-600" />
 
-                        {/* Text Color Control */}
-                        <div className="flex items-center space-x-1">
-                          <label className="text-xs text-gray-600 dark:text-gray-300 font-medium">
-                            Color:
-                          </label>
-                          <input
-                            type="color"
-                            value={
-                              selectedElement.properties.color || "#000000"
-                            }
-                            onChange={(e) =>
-                              updateElementProperty("color", e.target.value)
-                            }
-                            className="w-8 h-8 border border-gray-300 dark:border-gray-600 rounded cursor-pointer"
-                            title="Text Color"
-                          />
+                          {/* Text Alignment Controls */}
+                          <div className="flex items-center space-x-1">
+                            <Button
+                              size="sm"
+                              variant={
+                                selectedElement.properties.textAlign === "left"
+                                  ? "default"
+                                  : "outline"
+                              }
+                              onClick={() =>
+                                updateElementProperty("textAlign", "left")
+                              }
+                              className="h-8 px-2"
+                              title="Align Left"
+                            >
+                              <svg
+                                className="w-3 h-3"
+                                fill="currentColor"
+                                viewBox="0 0 20 20"
+                              >
+                                <path
+                                  fillRule="evenodd"
+                                  d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h6a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h6a1 1 0 110 2H4a1 1 0 01-1-1z"
+                                  clipRule="evenodd"
+                                />
+                              </svg>
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant={
+                                selectedElement.properties.textAlign ===
+                                "center"
+                                  ? "default"
+                                  : "outline"
+                              }
+                              onClick={() =>
+                                updateElementProperty("textAlign", "center")
+                              }
+                              className="h-8 px-2"
+                              title="Align Center"
+                            >
+                              <svg
+                                className="w-3 h-3"
+                                fill="currentColor"
+                                viewBox="0 0 20 20"
+                              >
+                                <path
+                                  fillRule="evenodd"
+                                  d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm2 4a1 1 0 011-1h8a1 1 0 110 2H6a1 1 0 01-1-1zm-2 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm2 4a1 1 0 011-1h8a1 1 0 110 2H6a1 1 0 01-1-1z"
+                                  clipRule="evenodd"
+                                />
+                              </svg>
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant={
+                                selectedElement.properties.textAlign === "right"
+                                  ? "default"
+                                  : "outline"
+                              }
+                              onClick={() =>
+                                updateElementProperty("textAlign", "right")
+                              }
+                              className="h-8 px-2"
+                              title="Align Right"
+                            >
+                              <svg
+                                className="w-3 h-3"
+                                fill="currentColor"
+                                viewBox="0 0 20 20"
+                              >
+                                <path
+                                  fillRule="evenodd"
+                                  d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm6 4a1 1 0 011-1h6a1 1 0 110 2h-6a1 1 0 01-1-1zm-6 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm6 4a1 1 0 011-1h6a1 1 0 110 2h-6a1 1 0 01-1-1z"
+                                  clipRule="evenodd"
+                                />
+                              </svg>
+                            </Button>
+                          </div>
+
+                          <div className="h-6 w-px bg-gray-300 dark:bg-gray-600" />
+
+                          {/* Text Color Control */}
+                          <div className="flex items-center space-x-1">
+                            <label className="text-xs text-gray-600 dark:text-gray-300 font-medium">
+                              Color:
+                            </label>
+                            <input
+                              type="color"
+                              value={
+                                selectedElement.properties.color || "#000000"
+                              }
+                              onChange={(e) =>
+                                updateElementProperty("color", e.target.value)
+                              }
+                              className="w-8 h-8 border border-gray-300 dark:border-gray-600 rounded cursor-pointer"
+                              title="Text Color"
+                            />
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  )}
-              </div>
-            </div>
+                    )}
+                </div>
+              </>
+            )}
           </div>
 
           {/* Properties panel */}
-          {!isRightPanelHidden && (
+          {currentView === "canvas" && !isRightPanelHidden && (
             <PropertiesPanel
               selectedElement={selectedElement}
               currentPage={currentPage || null}

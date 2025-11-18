@@ -32,6 +32,10 @@ import {
   Eye,
   Unlock,
   FileText,
+  BarChart3,
+  LineChart,
+  PieChart,
+  Donut,
   // Icon category icons
   Minimize2,
   Maximize2,
@@ -48,6 +52,11 @@ import {
   Home,
   ArrowLeft,
   ArrowRight as Forward,
+  Activity,
+  TrendingUp,
+  Target,
+  Table,
+  Grid3x3,
 } from "lucide-react";
 
 interface ElementType {
@@ -294,6 +303,62 @@ export function ElementToolbar({
       description: "Section divider",
     },
 
+    // Dashboard Elements
+    {
+      type: "chart-bar",
+      icon: BarChart3,
+      label: "Bar Chart",
+      category: "dashboard",
+      description: "Compare categories with bars",
+    },
+    {
+      type: "chart-line",
+      icon: LineChart,
+      label: "Line Chart",
+      category: "dashboard",
+      description: "Trend line across time",
+    },
+    {
+      type: "chart-pie",
+      icon: PieChart,
+      label: "Pie Chart",
+      category: "dashboard",
+      description: "Show proportion breakdown",
+    },
+    {
+      type: "chart-donut",
+      icon: Donut,
+      label: "Donut Chart",
+      category: "dashboard",
+      description: "Ring-style share chart",
+    },
+    // NEW: KPI Card
+    {
+      type: "kpi-card",
+      icon: Activity,
+      label: "KPI Card",
+      category: "dashboard",
+      description: "Key performance indicator card",
+    },
+
+    // NEW: Table
+    {
+      type: "table",
+      icon: Table,
+      label: "Table",
+      category: "dashboard",
+      description: "Data table with rows and columns",
+    },
+
+    // NEW: Matrix Chart
+    {
+      type: "matrix-chart",
+      icon: Grid3x3,
+      label: "Matrix Chart",
+      category: "dashboard",
+      description: "Cross-tabulation matrix visualization",
+    },
+
     // Icon Elements - Window Controls
     {
       type: "icon-minimize",
@@ -458,6 +523,7 @@ export function ElementToolbar({
       label: "Dashboard",
       icon: Settings,
       description: "Data display and dashboard components",
+      description: "Chart widgets and analytics",
     },
   ];
 

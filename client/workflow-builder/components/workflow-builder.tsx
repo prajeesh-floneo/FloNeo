@@ -1,14 +1,15 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Settings,
   Play,
   AlertTriangle,
-  CheckCircle,
   ArrowLeft,
   Save,
+  ArrowRightIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -21,8 +22,6 @@ import {
   useCanvasWorkflow,
   CanvasWorkflowProvider,
 } from "@/lib/canvas-workflow-context";
-import dynamic from "next/dynamic";
-import { useEffect } from "react";
 import { toast } from "@/components/ui/use-toast";
 import { ThemeToggle } from "@/components/theme-toggle";
 
@@ -35,10 +34,118 @@ import {
 } from "@/components/ui/dialog";
 
 
-// Dynamically import Canvas component to avoid circular dependencies
-const CanvasPage = dynamic(() => import("../../app/canvas/page"), {
+
+// Lazy canvas page for split view
+const CanvasPage = dynamic(() => import("../../app/(app)/canvas/page"), {
   ssr: false,
 });
+
+// util
+const cx = (...cls: (string | false | null | undefined)[]) =>
+  cls.filter(Boolean).join(" ");
+
+function RightPanel({
+  isOpen,
+  onToggle,
+  mode,
+  rightPanelTab,
+  setRightPanelTab,
+  filters,
+  setFilters,
+}: {
+  isOpen: boolean;
+  onToggle: () => void;
+  mode: "sidebar" | "horizontal" | "vertical";
+  rightPanelTab: "blocks" | "templates";
+  setRightPanelTab: (t: "blocks" | "templates") => void;
+  filters: any;
+  setFilters: (f: any) => void;
+}) {
+  const isHorizontal = mode === "horizontal";
+
+  // When collapsed, show a thin rail
+  if (!isOpen) {
+    return (
+      <div
+        className={cx(
+          "flex items-center justify-center bg-muted/40 hover:bg-muted/60 transition-colors border-l border-border",
+          isHorizontal ? "h-8 w-full" : "w-12 h-full"
+        )}
+      >
+        <button
+          onClick={onToggle}
+          className="group inline-flex items-center justify-center rounded-md p-1.5 text-muted-foreground hover:text-foreground"
+          aria-label="Expand panel"
+        >
+          <ArrowRightIcon
+            className={cx(
+              "h-4 w-4 transition-transform",
+              !isHorizontal && "rotate-180 group-hover:translate-x-0.5"
+            )}
+          />
+        </button>
+      </div>
+    );
+  }
+
+  // When open, show full panel
+  return (
+    <div className="w-96 flex flex-col bg-card/30">
+      {/* Header with tabs and close button */}
+      <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/30 px-3 py-2">
+        <div className="flex rounded-md bg-muted p-1">
+          <button
+            onClick={() => setRightPanelTab("blocks")}
+            className={cx(
+              "px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
+              rightPanelTab === "blocks"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            Blocks
+          </button>
+          <button
+            onClick={() => setRightPanelTab("templates")}
+            className={cx(
+              "px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
+              rightPanelTab === "templates"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            Templates
+          </button>
+        </div>
+
+        <button
+          onClick={onToggle}
+          className="inline-flex items-center rounded-md border border-border bg-background px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50"
+          aria-label="Collapse panel"
+        >
+          <ArrowRightIcon className="h-4 w-4 rotate-180" />
+        </button>
+      </div>
+
+      {/* Filters - only show for blocks tab */}
+      {rightPanelTab === "blocks" && (
+        <div className="p-4 border-b border-border">
+          <FilterPanel filters={filters} onFiltersChange={setFilters} />
+        </div>
+      )}
+
+      {/* Content area - takes remaining height and scrolls */}
+      <div className="flex-1 overflow-hidden">
+        {rightPanelTab === "blocks" ? (
+          <BlockLibrary filters={filters} />
+        ) : (
+          <TemplateLibrary />
+        )}
+      </div>
+    </div>
+  );
+}
+
 
 function WorkflowBuilderContent() {
   // ============================================================
@@ -303,22 +410,12 @@ function WorkflowBuilderContent() {
   const { selectedElementId, setPages, pages, setCurrentAppId } =
     useCanvasWorkflow();
 
-  // Ref to store the save handler from WorkflowCanvas
   const saveHandlerRef = useRef<(() => Promise<void>) | null>(null);
+  const appId = searchParams.get("appId") || "3";
 
-  // Get appId from URL parameters and set it in context
-  const appId = searchParams.get("appId") || "3"; // Default to app 3 for testing
-
-  // Handler for Save button click - Enhanced for JSON Blueprint Serialization
   const handleSaveWorkflow = async () => {
-    console.log("🔵 Save Workflow button clicked in workflow builder");
-    console.log("🔍 Selected Element ID:", selectedElementId);
-    console.log("🔍 App ID:", appId);
-
     try {
-      // Validate element is selected
       if (!selectedElementId) {
-        console.error("❌ No element selected");
         toast({
           title: "No Element Selected",
           description: "Please select an element before saving the workflow.",
@@ -326,16 +423,10 @@ function WorkflowBuilderContent() {
         });
         return;
       }
-
-      // Call the save handler from WorkflowCanvas via ref
       if (saveHandlerRef.current) {
-        console.log(
-          "✅ Calling workflow save handler for element:",
-          selectedElementId
-        );
         await saveHandlerRef.current();
+        toast({ title: "Workflow saved", description: "All changes stored." });
       } else {
-        console.error("❌ Workflow save handler not available");
         toast({
           title: "Save Handler Not Ready",
           description: "Please wait a moment and try again.",
@@ -343,7 +434,6 @@ function WorkflowBuilderContent() {
         });
       }
     } catch (error) {
-      console.error("❌ Error saving workflow:", error);
       toast({
         title: "Save Failed",
         description:
@@ -355,76 +445,49 @@ function WorkflowBuilderContent() {
     }
   };
 
-  // Debug: Track selectedElementId changes from canvas-workflow-context
   useEffect(() => {
-    console.log(
-      "🔍 WORKFLOW BUILDER: selectedElementId changed:",
-      selectedElementId
-    );
-    console.log("🔍 WORKFLOW BUILDER: Current appId:", appId);
-
-    // When element selection changes, the WorkflowCanvas will automatically load the workflow
-    // via its own useEffect that watches selectedElementId
-    if (selectedElementId) {
-      console.log(
-        "✅ WORKFLOW BUILDER: Element selected, WorkflowCanvas will load workflow for:",
-        selectedElementId
-      );
-    } else {
-      console.log("ℹ️ WORKFLOW BUILDER: No element selected");
+    if (appId) setCurrentAppId(appId);
+    if (pages.length === 0) {
+      const mockPages = [
+        {
+          id: "page-1",
+          name: "Page 1",
+          elements: [],
+          groups: [],
+          canvasWidth: 1200,
+          canvasHeight: 800,
+        },
+        {
+          id: "page-1759124711668",
+          name: "login",
+          elements: [],
+          groups: [],
+          canvasWidth: 1200,
+          canvasHeight: 800,
+        },
+        {
+          id: "page-3",
+          name: "Page 3",
+          elements: [],
+          groups: [],
+          canvasWidth: 1200,
+          canvasHeight: 800,
+        },
+      ];
+      setPages(mockPages);
     }
-  }, [selectedElementId, appId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appId]);
 
-  // Set the current app ID in context so Canvas can use it
-  useEffect(() => {
-    if (appId) {
-      setCurrentAppId(appId);
-      console.log("🔄 WORKFLOW BUILDER: Set current app ID in context:", appId);
-
-      // If no pages are available yet, provide mock data for testing
-      if (pages.length === 0) {
-        console.log(
-          "⚠️ WORKFLOW BUILDER: No pages available, providing mock data for app",
-          appId
-        );
-        const mockPages = [
-          {
-            id: "page-1",
-            name: "Page 1",
-            elements: [],
-            groups: [],
-            canvasWidth: 1200,
-            canvasHeight: 800,
-          },
-          {
-            id: "page-1759124711668",
-            name: "login",
-            elements: [],
-            groups: [],
-            canvasWidth: 1200,
-            canvasHeight: 800,
-          },
-          {
-            id: "page-3",
-            name: "Page 3",
-            elements: [],
-            groups: [],
-            canvasWidth: 1200,
-            canvasHeight: 800,
-          },
-        ];
-        setPages(mockPages);
-        console.log(
-          "✅ WORKFLOW BUILDER: Set mock pages for testing:",
-          mockPages.map((p) => p.name)
-        );
-      }
-    }
-  }, [appId, setCurrentAppId, pages.length, setPages]);
-  const [activeTab, setActiveTab] = useState("canvas");
-  const [rightPanelTab, setRightPanelTab] = useState("blocks");
-  const [splitScreenMode, setSplitScreenMode] = useState("sidebar"); // "sidebar", "horizontal", "vertical"
+  const [activeTab, setActiveTab] = useState<"canvas" | "data">("canvas");
+  const [rightPanelTab, setRightPanelTab] = useState<"blocks" | "templates">(
+    "blocks"
+  );
+  const [splitScreenMode, setSplitScreenMode] =
+    useState<"sidebar" | "horizontal" | "vertical">("sidebar");
   const [isCanvasWorkflowSplit, setIsCanvasWorkflowSplit] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+
   const [filters, setFilters] = useState({
     searchQuery: "",
     detailedFilters: {
@@ -441,176 +504,127 @@ function WorkflowBuilderContent() {
     },
   });
 
-  const toggleSplitScreen = () => {
-    setIsCanvasWorkflowSplit(!isCanvasWorkflowSplit);
-  };
+  const toggleSplitScreen = () =>
+    setIsCanvasWorkflowSplit((prev) => !prev);
+  const handleSideBar = () => setIsSidebarOpen((v) => !v);
 
-  // Debug: Log pages from Canvas context
-  useEffect(() => {
-    console.log(
-      "🔄 WORKFLOW BUILDER: Pages from Canvas context:",
-      pages.length,
-      "pages:",
-      pages.map((p) => ({ id: p.id, name: p.name }))
-    );
-    if (pages.length > 0) {
-      console.log(
-        "✅ WORKFLOW BUILDER: Canvas pages are available for page.redirect dropdown!"
-      );
-    } else {
-      console.log(
-        "⚠️ WORKFLOW BUILDER: No Canvas pages available yet - waiting for Canvas sync..."
-      );
-    }
-  }, [pages]);
 
-  const getSplitScreenIcon = () => {
-    return (
-      <div className="w-4 h-4 mr-2 flex">
-        <div className="w-2 h-4 border border-r-0 rounded-l"></div>
-        <div className="w-2 h-4 border rounded-r"></div>
+  // Status Bar --->
+  const statusBar = (
+    <div className="flex items-center justify-between gap-4 border-b border-border bg-muted/30 px-4 py-3">
+      <div className="flex items-center gap-2">
+        <Badge variant="destructive" className="gap-1">
+          <AlertTriangle className="h-3.5 w-3.5" />
+          Alerts: 1
+        </Badge>
+        <Badge variant="secondary" className="gap-1">
+          <AlertTriangle className="h-3.5 w-3.5" />
+          Warnings: 0
+        </Badge>
       </div>
-    );
-  };
+
+      <div className="flex items-center gap-2">
+
+        {/* Always-visible sidebar toggle */}
+        <Button variant="outline" size="sm" onClick={handleSideBar}>
+          <ArrowRightIcon
+            className={cx(
+              "h-4 w-4 transition-transform",
+              isSidebarOpen ? "rotate-180" : ""
+            )}
+          />
+          <span className="ml-1 text-xs">
+            {isSidebarOpen ? "Hide Panel" : "Show Panel"}
+          </span>
+        </Button>
+
+        <Button
+          size="sm"
+          className="bg-blue-600 text-white hover:bg-blue-700"
+          onClick={handleSaveWorkflow}
+        >
+          <Save className="mr-1 h-3.5 w-3.5" />
+          Save
+        </Button>
+      </div>
+    </div>
+  );
+
+  // Canvas Section --->
+  const canvasSection = (
+    <div className="flex flex-1 flex-col">
+      {statusBar}
+      {selectedElementId && (
+        <div className="bg-blue-50 px-4 py-2 border-b border-blue-200">
+          <div className="flex items-center gap-2">
+            <div className="h-2 w-2 rounded-full bg-blue-500" />
+            <span className="text-sm font-medium text-blue-700">
+              Workflow for Element:{" "}
+              <code className="bg-blue-100 px-1.5 py-0.5 rounded text-xs">
+                {selectedElementId}
+              </code>
+            </span>
+          </div>
+        </div>
+      )}
+      <div className="flex-1 p-4">
+        <WorkflowCanvas
+          selectedElementId={selectedElementId}
+          onSaveRequest={handleSaveWorkflow}
+          saveHandlerRef={saveHandlerRef}
+        />
+      </div>
+    </div>
+  );
+
+
+  // Right Panel --->
+  const panel = (
+    <RightPanel
+      isOpen={isSidebarOpen}
+      onToggle={handleSideBar}
+      mode={splitScreenMode}
+      rightPanelTab={rightPanelTab}
+      setRightPanelTab={setRightPanelTab}
+      filters={filters}
+      setFilters={setFilters}
+    />
+  );
 
   const renderLayout = () => {
-    const statusBar = (
-      <div className="flex items-center justify-between gap-4 p-4 bg-muted/30 border-b border-border min-h-[60px] font-poppins">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2 px-3 py-2 bg-red-50 text-red-700 rounded-md border border-red-200 text-sm font-medium">
-            <AlertTriangle className="w-4 h-4" />
-            <span>Alerts: 1</span>
-          </div>
-          <div className="flex items-center gap-2 px-3 py-2 bg-yellow-50 text-yellow-700 rounded-md border border-yellow-200 text-sm font-medium">
-            <AlertTriangle className="w-4 h-4" />
-            <span>Warnings: 0</span>
-          </div>
-        </div>
-
-        {/* Workflow Actions */}
-        <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            variant="default"
-            className="text-xs bg-blue-600 hover:bg-blue-700"
-            onClick={handleSaveWorkflow}
-          >
-            <Save className="w-3 h-3 mr-1" />
-            Save Workflow
-          </Button>
-        </div>
-      </div>
-    );
-
-    const canvasSection = (
-      <div className="flex-1 flex flex-col">
-        {statusBar}
-        {/* Canvas-Workflow Integration Header */}
-        {selectedElementId && (
-          <div className="bg-blue-50 border-b border-blue-200 px-4 py-2">
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
-              <span className="text-sm font-medium text-blue-700">
-                Workflow for Element:{" "}
-                <code className="bg-blue-100 px-2 py-1 rounded text-xs">
-                  {selectedElementId}
-                </code>
-              </span>
-            </div>
-          </div>
-        )}
-        <div className="flex-1 p-6">
-          <WorkflowCanvas
-            selectedElementId={selectedElementId}
-            onSaveRequest={handleSaveWorkflow}
-            saveHandlerRef={saveHandlerRef}
-          />
-        </div>
-      </div>
-    );
-
-    const rightPanel = (
-      <div
-        className={`${
-          splitScreenMode === "sidebar" ? "w-96" : "flex-1"
-        } flex flex-col bg-card/30 ${
-          splitScreenMode !== "sidebar" ? "border-l border-border" : ""
-        }`}
-      >
-        {rightPanelTab === "blocks" && (
-          <div className="p-4 border-b border-border">
-            <FilterPanel filters={filters} onFiltersChange={setFilters} />
-          </div>
-        )}
-
-        <div className="border-b border-border">
-          <div className="flex">
-            <button
-              onClick={() => setRightPanelTab("blocks")}
-              className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
-                rightPanelTab === "blocks"
-                  ? "bg-muted text-foreground border-b-2 border-primary"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-              }`}
-            >
-              Block Library
-            </button>
-            <button
-              onClick={() => setRightPanelTab("templates")}
-              className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
-                rightPanelTab === "templates"
-                  ? "bg-muted text-foreground border-b-2 border-primary"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-              }`}
-            >
-              Templates
-            </button>
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-hidden">
-          {rightPanelTab === "blocks" ? (
-            <BlockLibrary filters={filters} />
-          ) : (
-            <TemplateLibrary />
-          )}
-        </div>
-      </div>
-    );
-
     switch (splitScreenMode) {
       case "sidebar":
         return (
           <div className="flex h-full">
-            <div className="flex-1 flex flex-col border-r border-border">
+            <div className="flex flex-1 flex-col border-r border-border">
               {canvasSection}
             </div>
-            {rightPanel}
+            {panel}
           </div>
         );
       case "horizontal":
         return (
-          <div className="flex flex-col h-full">
+          <div className="flex h-full flex-col">
             <div className="flex-1 border-b border-border">{canvasSection}</div>
-            <div className="h-80">{rightPanel}</div>
+            {panel}
           </div>
         );
       case "vertical":
         return (
           <div className="flex h-full">
-            <div className="w-2/3 flex flex-col border-r border-border">
+            <div className="flex w-2/3 flex-col border-r border-border">
               {canvasSection}
             </div>
-            <div className="w-1/3">{rightPanel}</div>
+            <div className="w-1/3">{panel}</div>
           </div>
         );
       default:
         return (
           <div className="flex h-full">
-            <div className="flex-1 flex flex-col border-r border-border">
+            <div className="flex flex-1 flex-col border-r border-border">
               {canvasSection}
             </div>
-            {rightPanel}
+            {panel}
           </div>
         );
     }
@@ -619,10 +633,9 @@ function WorkflowBuilderContent() {
   const renderMainContent = () => {
     if (isCanvasWorkflowSplit && activeTab === "canvas") {
       return (
-        <div className="flex h-full">
+        <div className="flex h-full w-screen">
           <div className="w-1/2 border-r border-border">
-            {/* Pass appId to Canvas component via URL context */}
-            <div style={{ width: "100%", height: "100%" }}>
+            <div className="h-full w-full">
               <CanvasPage />
             </div>
           </div>
@@ -642,77 +655,8 @@ function WorkflowBuilderContent() {
   };
 
   return (
-    <div className="flex h-screen bg-background text-foreground">
-      <div className="flex-1 flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-border">
-          <div className="flex items-center gap-3">
-            <h1 className="text-xl font-semibold">Workflow Builder</h1>
-            <Badge variant="secondary" className="text-xs">
-              Beta
-            </Badge>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1 mr-4">
-              <Button
-                variant={activeTab === "canvas" ? "default" : "ghost"}
-                size="sm"
-                onClick={() => setActiveTab("canvas")}
-              >
-                Workflow
-              </Button>
-              <Button
-                variant={activeTab === "data" ? "default" : "ghost"}
-                size="sm"
-                onClick={() => setActiveTab("data")}
-              >
-                Data
-              </Button>
-            </div>
-            <ThemeToggle />
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                const appId = searchParams.get("appId");
-                router.push(`/canvas${appId ? `?appId=${appId}` : ""}`);
-              }}
-            >
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to Canvas
-            </Button>
-            {activeTab === "canvas" && (
-              <Button variant="outline" size="sm" onClick={toggleSplitScreen}>
-                {getSplitScreenIcon()}
-                Split Screen
-              </Button>
-            )}
-            <Button variant="outline" size="sm">
-              <Settings className="w-4 h-4 mr-2" />
-              Settings
-            </Button>
-
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setOpenRolesModal(true)}
-            >
-              Manage Roles
-            </Button>
-
-            <Button
-              size="sm"
-              onClick={() => {
-                const appId = searchParams.get("appId") || "2";
-                window.open(`/run?appId=${appId}`, "_blank"); // New tab
-              }}
-            >
-              <Play className="w-4 h-4 mr-2" />
-              Run App
-            </Button>
-          </div>
-        </div>
-
+    <div className="flex h-full bg-background text-foreground">
+      <div className="flex flex-1 flex-col">
         <div className="flex-1 overflow-hidden">{renderMainContent()}</div>
       </div>
       <ManageRolesModal
@@ -728,8 +672,8 @@ function WorkflowBuilderContent() {
 
 export function WorkflowBuilder() {
   return (
-    <CanvasWorkflowProvider>
+    // <CanvasWorkflowProvider>
       <WorkflowBuilderContent />
-    </CanvasWorkflowProvider>
+    // </CanvasWorkflowProvider>
   );
 }

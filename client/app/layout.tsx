@@ -5,6 +5,7 @@ import { Suspense } from "react";
 import { CanvasWorkflowProvider } from "../lib/canvas-workflow-context";
 import "./globals.css";
 import "../styles/design-system.css";
+import { WorkflowHeader } from "@/components/Header";
 
 // Use a CSS variable fallback for the font to prevent remote fetch during build
 // The actual Poppins font can be provided via local assets or the hosting environment if desired.
@@ -50,6 +51,7 @@ export default function RootLayout({
         }}
       >
         <CanvasWorkflowProvider>
+          {/* <WorkflowHeader/> */}
           <Suspense fallback={<div>Loading...</div>}>{children}</Suspense>
         </CanvasWorkflowProvider>
       </body>

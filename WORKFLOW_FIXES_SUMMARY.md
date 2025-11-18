@@ -169,3 +169,4 @@ This creates the necessary tables:
 3. `server/routes/appUsers.js`:
    - Already has login endpoint (`POST /api/app-users/:appId/login`)
 
+

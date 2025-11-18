@@ -45,6 +45,24 @@ function normalizeElementType(type: string): string {
     addfile: "FILE_UPLOAD",
     rectangle: "SHAPE",
     text: "TEXT_FIELD",
+    // Icon mappings
+    "icon-minimize": "ICON_MINIMIZE",
+    "icon-maximize": "ICON_MAXIMIZE",
+    "icon-close": "ICON_CLOSE",
+    "icon-settings": "ICON_SETTINGS",
+    "icon-refresh": "ICON_REFRESH",
+    "icon-info": "ICON_INFO",
+    "icon-help": "ICON_HELP",
+    "icon-search": "ICON_SEARCH",
+     // Chart mappings
+    "chart-bar": "CHART_BAR",
+    "chart-line": "CHART_LINE",
+    "chart-pie": "CHART_PIE",
+    "chart-donut": "CHART_DONUT",
+    "kpi-card": "KPI_CARD",
+    "table": "TABLE",
+    "matrix-chart": "MATRIX_CHART",
+
   };
 
   return typeMap[type.toLowerCase()] || type.toUpperCase();
