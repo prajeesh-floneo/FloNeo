@@ -29,12 +29,16 @@ const sanitizeIdentifier = (identifier) => {
 
   // Remove special characters, keep only alphanumeric and underscore
   let sanitized = identifier.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
-  console.log(`🔧 [SANITIZE] Input: "${identifier}" -> After replace: "${sanitized}"`);
+  console.log(
+    `🔧 [SANITIZE] Input: "${identifier}" -> After replace: "${sanitized}"`
+  );
 
   // Handle leading underscores (e.g., _success -> meta_success)
   if (sanitized.startsWith("_")) {
     sanitized = "meta" + sanitized;
-    console.log(`🔧 [SANITIZE] Had leading underscore, converted to: "${sanitized}"`);
+    console.log(
+      `🔧 [SANITIZE] Had leading underscore, converted to: "${sanitized}"`
+    );
   }
 
   // Ensure it doesn't start with a number
@@ -42,19 +46,21 @@ const sanitizeIdentifier = (identifier) => {
     sanitized = `field_${sanitized}`;
     console.log(`🔧 [SANITIZE] Started with number, prefixed: "${sanitized}"`);
   }
-  
+
   // Ensure the result is not empty and starts with a letter
   if (!sanitized || sanitized.trim() === "") {
     sanitized = "field_" + Math.random().toString(36).substring(2, 9);
     console.log(`🔧 [SANITIZE] Was empty, generated: "${sanitized}"`);
   }
-  
+
   // Final check: ensure it starts with a letter (for validation)
   if (!/^[a-zA-Z]/.test(sanitized)) {
     sanitized = "field_" + sanitized;
-    console.log(`🔧 [SANITIZE] Didn't start with letter, prefixed: "${sanitized}"`);
+    console.log(
+      `🔧 [SANITIZE] Didn't start with letter, prefixed: "${sanitized}"`
+    );
   }
-  
+
   console.log(`✅ [SANITIZE] Final result: "${identifier}" -> "${sanitized}"`);
 
   // Check against SQL reserved words
@@ -409,7 +415,6 @@ const executeIsFilled = async (node, context, appId) => {
   }
 };
 
-
 //onClick Handler
 const executeOnClick = async (node, context, appId) => {
   try {
@@ -518,7 +523,8 @@ const executeOnWebhook = async (node, context, appId, userId) => {
     console.log("🔗 [ON-WEBHOOK] Processing webhook trigger for app:", appId);
 
     // Webhook data should be in context (passed from webhook endpoint)
-    const webhookPayload = context.webhookPayload || context.payload || context.data || {};
+    const webhookPayload =
+      context.webhookPayload || context.payload || context.data || {};
     const webhookHeaders = context.webhookHeaders || {};
 
     console.log("🔗 [ON-WEBHOOK] Webhook payload received:", {
@@ -683,19 +689,31 @@ const executeDbCreate = async (node, context, appId, userId) => {
     // Support both old format (simple object) and new format (object with value/type)
     const insertDataRaw = node.data.insertData || {};
     const hasManualInsertData = Object.keys(insertDataRaw).length > 0;
-    
+
     // Normalize insertData to check if it has actual values
     let hasValidInsertData = false;
     if (hasManualInsertData) {
       for (const [key, fieldData] of Object.entries(insertDataRaw)) {
-        if (key && key.trim() !== '') {
+        if (key && key.trim() !== "") {
           // Check if it's new format (object) or old format (string)
-          if (typeof fieldData === 'object' && fieldData !== null && 'value' in fieldData) {
-            if (fieldData.value !== undefined && fieldData.value !== null && fieldData.value !== '') {
+          if (
+            typeof fieldData === "object" &&
+            fieldData !== null &&
+            "value" in fieldData
+          ) {
+            if (
+              fieldData.value !== undefined &&
+              fieldData.value !== null &&
+              fieldData.value !== ""
+            ) {
               hasValidInsertData = true;
               break;
             }
-          } else if (fieldData !== undefined && fieldData !== null && fieldData !== '') {
+          } else if (
+            fieldData !== undefined &&
+            fieldData !== null &&
+            fieldData !== ""
+          ) {
             hasValidInsertData = true;
             break;
           }
@@ -705,70 +723,106 @@ const executeDbCreate = async (node, context, appId, userId) => {
 
     // ========== COLLECT DATA FROM ALL SOURCES ==========
     // Priority: manual insertData > httpResponse.data > formData > context data > appUser data
-    
+
     let dataToInsert = {};
     let dataSource = "none";
     let recordsToInsert = []; // Array to store multiple records from data array
-    
+
     // 1. Check manual insertData (highest priority)
     if (hasValidInsertData) {
       // Extract values from insertData (support both old and new format)
       dataToInsert = {};
       for (const [fieldName, fieldData] of Object.entries(insertDataRaw)) {
         // Skip empty field names
-        if (!fieldName || fieldName.trim() === '') continue;
-        
+        if (!fieldName || fieldName.trim() === "") continue;
+
         // Extract the actual value from the field data
         let extractedValue;
-        if (typeof fieldData === 'object' && fieldData !== null && 'value' in fieldData) {
+        if (
+          typeof fieldData === "object" &&
+          fieldData !== null &&
+          "value" in fieldData
+        ) {
           // New format: { value: "...", type: "TEXT" }
           extractedValue = fieldData.value;
         } else {
           // Old format: just the value
           extractedValue = fieldData;
         }
-        
+
         // Only add if we have a valid value (not undefined, but null is OK)
         if (extractedValue !== undefined) {
           dataToInsert[fieldName] = extractedValue;
         }
       }
       dataSource = "manual";
-      console.log("📋 [DB-CREATE] Using manual insertData from workflow configuration");
-      console.log("📋 [DB-CREATE] Extracted dataToInsert keys:", Object.keys(dataToInsert));
-      console.log("📋 [DB-CREATE] Sample values with types:", Object.keys(dataToInsert).slice(0, 5).reduce((acc, key) => {
-        const val = dataToInsert[key];
-        if (typeof val === 'object' && val !== null) {
-          if ('value' in val) {
-            acc[key] = `[OBJECT with value: ${typeof val.value}]`;
-          } else {
-            acc[key] = `[OBJECT: ${JSON.stringify(val).substring(0, 50)}]`;
-          }
-        } else {
-          acc[key] = `${typeof val}: ${String(val).substring(0, 20)}`;
-        }
-        return acc;
-      }, {}));
+      console.log(
+        "📋 [DB-CREATE] Using manual insertData from workflow configuration"
+      );
+      console.log(
+        "📋 [DB-CREATE] Extracted dataToInsert keys:",
+        Object.keys(dataToInsert)
+      );
+      console.log(
+        "📋 [DB-CREATE] Sample values with types:",
+        Object.keys(dataToInsert)
+          .slice(0, 5)
+          .reduce((acc, key) => {
+            const val = dataToInsert[key];
+            if (typeof val === "object" && val !== null) {
+              if ("value" in val) {
+                acc[key] = `[OBJECT with value: ${typeof val.value}]`;
+              } else {
+                acc[key] = `[OBJECT: ${JSON.stringify(val).substring(0, 50)}]`;
+              }
+            } else {
+              acc[key] = `${typeof val}: ${String(val).substring(0, 20)}`;
+            }
+            return acc;
+          }, {})
+      );
     }
     // 2. Check http.request response data
     else if (context.httpResponse?.data) {
       const httpData = context.httpResponse.data;
-      
-      console.log("📋 [DB-CREATE] ========== HTTP RESPONSE DATA EXTRACTION ==========");
-      console.log("📋 [DB-CREATE] Raw httpResponse.data type:", typeof httpData);
-      console.log("📋 [DB-CREATE] Raw httpResponse.data isArray:", Array.isArray(httpData));
-      
+
+      console.log(
+        "📋 [DB-CREATE] ========== HTTP RESPONSE DATA EXTRACTION =========="
+      );
+      console.log(
+        "📋 [DB-CREATE] Raw httpResponse.data type:",
+        typeof httpData
+      );
+      console.log(
+        "📋 [DB-CREATE] Raw httpResponse.data isArray:",
+        Array.isArray(httpData)
+      );
+
       // Helper function to extract data from nested structures
       const extractDataFromResponse = (data) => {
-        console.log("📋 [DB-CREATE] [EXTRACT] Input data type:", typeof data, "isArray:", Array.isArray(data));
-        
+        console.log(
+          "📋 [DB-CREATE] [EXTRACT] Input data type:",
+          typeof data,
+          "isArray:",
+          Array.isArray(data)
+        );
+
         // PRIORITY 1: If data has a 'data' field that is an array, extract from it (common API pattern)
-        if (typeof data === 'object' && data !== null && !Array.isArray(data)) {
-          if ('data' in data) {
-            console.log("📋 [DB-CREATE] [EXTRACT] Found 'data' field, type:", typeof data.data, "isArray:", Array.isArray(data.data));
-            
+        if (typeof data === "object" && data !== null && !Array.isArray(data)) {
+          if ("data" in data) {
+            console.log(
+              "📋 [DB-CREATE] [EXTRACT] Found 'data' field, type:",
+              typeof data.data,
+              "isArray:",
+              Array.isArray(data.data)
+            );
+
             if (Array.isArray(data.data) && data.data.length > 0) {
-              console.log("📋 [DB-CREATE] ✅ [EXTRACT] Found nested 'data' array with", data.data.length, "items");
+              console.log(
+                "📋 [DB-CREATE] ✅ [EXTRACT] Found nested 'data' array with",
+                data.data.length,
+                "items"
+              );
               // Return a special marker object to indicate we have multiple records
               return {
                 __hasMultipleRecords: true,
@@ -776,90 +830,149 @@ const executeDbCreate = async (node, context, appId, userId) => {
                 __metadata: {
                   success: data.success,
                   tableName: data.tableName,
-                  count: data.count
-                }
+                  count: data.count,
+                },
               };
             } else if (!Array.isArray(data.data)) {
-              console.log("📋 [DB-CREATE] [EXTRACT] 'data' field exists but is not an array, type:", typeof data.data);
+              console.log(
+                "📋 [DB-CREATE] [EXTRACT] 'data' field exists but is not an array, type:",
+                typeof data.data
+              );
             } else {
               console.log("📋 [DB-CREATE] [EXTRACT] 'data' array is empty");
             }
           }
-          
+
           // If we reach here, the object doesn't have a nested 'data' array, so use it directly
-          console.log("📋 [DB-CREATE] [EXTRACT] Using entire object directly with keys:", Object.keys(data));
+          console.log(
+            "📋 [DB-CREATE] [EXTRACT] Using entire object directly with keys:",
+            Object.keys(data)
+          );
           return { ...data };
         }
-        
+
         // If it's an array, take first element
         if (Array.isArray(data) && data.length > 0) {
-          console.log("📋 [DB-CREATE] [EXTRACT] Response is an array, extracting first element");
-          return typeof data[0] === 'object' ? { ...data[0] } : { data: JSON.stringify(data) };
+          console.log(
+            "📋 [DB-CREATE] [EXTRACT] Response is an array, extracting first element"
+          );
+          return typeof data[0] === "object"
+            ? { ...data[0] }
+            : { data: JSON.stringify(data) };
         }
-        
+
         // If it's a string, try to parse
-        if (typeof data === 'string') {
-          console.log("📋 [DB-CREATE] [EXTRACT] Response is a string, attempting to parse JSON");
+        if (typeof data === "string") {
+          console.log(
+            "📋 [DB-CREATE] [EXTRACT] Response is a string, attempting to parse JSON"
+          );
           try {
             const parsed = JSON.parse(data);
             return extractDataFromResponse(parsed); // Recursively process parsed data
           } catch (e) {
-            console.warn("⚠️ [DB-CREATE] [EXTRACT] Failed to parse string as JSON:", e.message);
+            console.warn(
+              "⚠️ [DB-CREATE] [EXTRACT] Failed to parse string as JSON:",
+              e.message
+            );
             return { data: data };
           }
         }
-        
-        console.warn("⚠️ [DB-CREATE] [EXTRACT] Unknown data type, storing as JSON string");
+
+        console.warn(
+          "⚠️ [DB-CREATE] [EXTRACT] Unknown data type, storing as JSON string"
+        );
         return { data: JSON.stringify(data) };
       };
-      
-      if (typeof httpData === 'object' && httpData !== null) {
-        console.log("📋 [DB-CREATE] Raw httpResponse.data keys:", Object.keys(httpData));
-        if ('data' in httpData) {
-          console.log("📋 [DB-CREATE] Raw httpResponse.data.data type:", typeof httpData.data);
-          console.log("📋 [DB-CREATE] Raw httpResponse.data.data isArray:", Array.isArray(httpData.data));
+
+      if (typeof httpData === "object" && httpData !== null) {
+        console.log(
+          "📋 [DB-CREATE] Raw httpResponse.data keys:",
+          Object.keys(httpData)
+        );
+        if ("data" in httpData) {
+          console.log(
+            "📋 [DB-CREATE] Raw httpResponse.data.data type:",
+            typeof httpData.data
+          );
+          console.log(
+            "📋 [DB-CREATE] Raw httpResponse.data.data isArray:",
+            Array.isArray(httpData.data)
+          );
           if (Array.isArray(httpData.data)) {
-            console.log("📋 [DB-CREATE] Raw httpResponse.data.data length:", httpData.data.length);
+            console.log(
+              "📋 [DB-CREATE] Raw httpResponse.data.data length:",
+              httpData.data.length
+            );
             if (httpData.data.length > 0) {
-              console.log("📋 [DB-CREATE] Raw httpResponse.data.data[0] keys:", Object.keys(httpData.data[0] || {}));
+              console.log(
+                "📋 [DB-CREATE] Raw httpResponse.data.data[0] keys:",
+                Object.keys(httpData.data[0] || {})
+              );
             }
           }
         }
       }
-      
+
       const extractedData = extractDataFromResponse(httpData);
-      
+
       // Check if we have multiple records to insert
       console.log("📋 [DB-CREATE] 🔍 Checking extractedData:", {
         hasExtractedData: !!extractedData,
         hasMultipleRecordsFlag: extractedData?.__hasMultipleRecords,
         recordsArrayLength: extractedData?.__recordsArray?.length,
         extractedDataType: typeof extractedData,
-        extractedDataKeys: extractedData ? Object.keys(extractedData) : []
+        extractedDataKeys: extractedData ? Object.keys(extractedData) : [],
       });
-      
-      if (extractedData && extractedData.__hasMultipleRecords && Array.isArray(extractedData.__recordsArray)) {
-        console.log("📋 [DB-CREATE] ✅ Detected multiple records in 'data' array:", extractedData.__recordsArray.length);
+
+      if (
+        extractedData &&
+        extractedData.__hasMultipleRecords &&
+        Array.isArray(extractedData.__recordsArray)
+      ) {
+        console.log(
+          "📋 [DB-CREATE] ✅ Detected multiple records in 'data' array:",
+          extractedData.__recordsArray.length
+        );
         // Process all records from the array
-        recordsToInsert = extractedData.__recordsArray.map((item, index) => {
-          if (typeof item === 'object' && item !== null) {
-            const flattened = { ...item };
-            // Add metadata fields with prefixes
-            if (extractedData.__metadata?.success !== undefined) flattened._success = extractedData.__metadata.success;
-            if (extractedData.__metadata?.tableName) flattened._tableName = extractedData.__metadata.tableName;
-            if (extractedData.__metadata?.count !== undefined) flattened._count = extractedData.__metadata.count;
-            console.log(`📋 [DB-CREATE] ✅ [EXTRACT] Processed record ${index + 1}/${extractedData.__recordsArray.length} with`, Object.keys(flattened).length, "keys");
-            return flattened;
-          } else {
-            console.warn(`⚠️ [DB-CREATE] [EXTRACT] Record ${index + 1} is not an object:`, typeof item);
-            return null;
-          }
-        }).filter(record => record !== null); // Remove null entries
-        
+        recordsToInsert = extractedData.__recordsArray
+          .map((item, index) => {
+            if (typeof item === "object" && item !== null) {
+              const flattened = { ...item };
+              // Add metadata fields with prefixes
+              if (extractedData.__metadata?.success !== undefined)
+                flattened._success = extractedData.__metadata.success;
+              if (extractedData.__metadata?.tableName)
+                flattened._tableName = extractedData.__metadata.tableName;
+              if (extractedData.__metadata?.count !== undefined)
+                flattened._count = extractedData.__metadata.count;
+              console.log(
+                `📋 [DB-CREATE] ✅ [EXTRACT] Processed record ${index + 1}/${
+                  extractedData.__recordsArray.length
+                } with`,
+                Object.keys(flattened).length,
+                "keys"
+              );
+              return flattened;
+            } else {
+              console.warn(
+                `⚠️ [DB-CREATE] [EXTRACT] Record ${
+                  index + 1
+                } is not an object:`,
+                typeof item
+              );
+              return null;
+            }
+          })
+          .filter((record) => record !== null); // Remove null entries
+
         // Use first record for table schema creation
         if (recordsToInsert.length > 0) {
           dataToInsert = recordsToInsert[0];
-          console.log("📋 [DB-CREATE] ✅ Using first record for table schema, will insert", recordsToInsert.length, "records total");
+          console.log(
+            "📋 [DB-CREATE] ✅ Using first record for table schema, will insert",
+            recordsToInsert.length,
+            "records total"
+          );
         } else {
           throw new Error("No valid records found in 'data' array");
         }
@@ -868,52 +981,86 @@ const executeDbCreate = async (node, context, appId, userId) => {
         dataToInsert = extractedData;
         recordsToInsert = [dataToInsert]; // Single record in array for consistent processing
       }
-      
+
       dataSource = "httpResponse";
       console.log("📋 [DB-CREATE] ✅ Using data from http.request response");
-      console.log("📋 [DB-CREATE] ✅ Records to insert:", recordsToInsert.length);
-      console.log("📋 [DB-CREATE] ✅ Final extracted fields:", Object.keys(dataToInsert));
-      console.log("📋 [DB-CREATE] ✅ Sample values:", Object.keys(dataToInsert).slice(0, 10).reduce((acc, key) => {
-        const val = dataToInsert[key];
-        if (typeof val === 'object' && val !== null && !Array.isArray(val) && !(val instanceof Date)) {
-          acc[key] = `[OBJECT: ${JSON.stringify(val).substring(0, 50)}]`;
-        } else if (Array.isArray(val)) {
-          acc[key] = `[ARRAY: ${val.length} items]`;
-        } else {
-          acc[key] = `${typeof val}: ${String(val).substring(0, 30)}`;
-        }
-        return acc;
-      }, {}));
-      console.log("📋 [DB-CREATE] ========== END HTTP RESPONSE DATA EXTRACTION ==========");
+      console.log(
+        "📋 [DB-CREATE] ✅ Records to insert:",
+        recordsToInsert.length
+      );
+      console.log(
+        "📋 [DB-CREATE] ✅ Final extracted fields:",
+        Object.keys(dataToInsert)
+      );
+      console.log(
+        "📋 [DB-CREATE] ✅ Sample values:",
+        Object.keys(dataToInsert)
+          .slice(0, 10)
+          .reduce((acc, key) => {
+            const val = dataToInsert[key];
+            if (
+              typeof val === "object" &&
+              val !== null &&
+              !Array.isArray(val) &&
+              !(val instanceof Date)
+            ) {
+              acc[key] = `[OBJECT: ${JSON.stringify(val).substring(0, 50)}]`;
+            } else if (Array.isArray(val)) {
+              acc[key] = `[ARRAY: ${val.length} items]`;
+            } else {
+              acc[key] = `${typeof val}: ${String(val).substring(0, 30)}`;
+            }
+            return acc;
+          }, {})
+      );
+      console.log(
+        "📋 [DB-CREATE] ========== END HTTP RESPONSE DATA EXTRACTION =========="
+      );
     }
     // 3. Check for other http response keys (custom saveResponseTo)
     else {
       // Check all context keys that might contain http response
       for (const [key, value] of Object.entries(context)) {
-        if (value && typeof value === 'object' && 'data' in value && 'statusCode' in value) {
+        if (
+          value &&
+          typeof value === "object" &&
+          "data" in value &&
+          "statusCode" in value
+        ) {
           const httpData = value.data;
-          if (typeof httpData === 'object' && httpData !== null && !Array.isArray(httpData)) {
+          if (
+            typeof httpData === "object" &&
+            httpData !== null &&
+            !Array.isArray(httpData)
+          ) {
             dataToInsert = { ...httpData };
             dataSource = `httpResponse_${key}`;
-            console.log(`📋 [DB-CREATE] Using data from http.request response (${key})`);
+            console.log(
+              `📋 [DB-CREATE] Using data from http.request response (${key})`
+            );
             break;
           } else if (Array.isArray(httpData) && httpData.length > 0) {
-            dataToInsert = typeof httpData[0] === 'object' ? { ...httpData[0] } : { data: JSON.stringify(httpData) };
+            dataToInsert =
+              typeof httpData[0] === "object"
+                ? { ...httpData[0] }
+                : { data: JSON.stringify(httpData) };
             dataSource = `httpResponse_${key}`;
-            console.log(`📋 [DB-CREATE] Using data from http.request response (${key}, array)`);
+            console.log(
+              `📋 [DB-CREATE] Using data from http.request response (${key}, array)`
+            );
             break;
           }
         }
       }
     }
-    
+
     // 4. Check formData
     if (Object.keys(dataToInsert).length === 0 && context.formData) {
       dataToInsert = { ...context.formData };
       dataSource = "formData";
       console.log("📋 [DB-CREATE] Using formData from context");
     }
-    
+
     // 5. Check appUser data from roleIs block
     if (context.appUser) {
       dataToInsert = {
@@ -925,7 +1072,7 @@ const executeDbCreate = async (node, context, appId, userId) => {
       if (dataSource === "none") dataSource = "appUser";
       console.log("📋 [DB-CREATE] Merged appUser data from roleIs block");
     }
-    
+
     // 6. Check other context data (userEmail, customRole, etc.)
     if (context.userEmail && !dataToInsert.email) {
       dataToInsert.email = context.userEmail;
@@ -936,68 +1083,128 @@ const executeDbCreate = async (node, context, appId, userId) => {
     if (context.createdAppUserId && !dataToInsert.appUserId) {
       dataToInsert.appUserId = context.createdAppUserId;
     }
-    
+
     // 7. CRITICAL: Re-check for nested 'data' array if we still have it (fallback extraction)
     // This ensures we extract even if the initial extraction didn't work
-    if (dataSource.includes('httpResponse') && Object.keys(dataToInsert).length > 0) {
-      console.log("📋 [DB-CREATE] 🔍 FALLBACK CHECK: Checking for nested 'data' array...");
-      console.log("📋 [DB-CREATE] 🔍 FALLBACK CHECK: dataToInsert keys:", Object.keys(dataToInsert));
-      console.log("📋 [DB-CREATE] 🔍 FALLBACK CHECK: Has 'data' key?", 'data' in dataToInsert);
-      
+    if (
+      dataSource.includes("httpResponse") &&
+      Object.keys(dataToInsert).length > 0
+    ) {
+      console.log(
+        "📋 [DB-CREATE] 🔍 FALLBACK CHECK: Checking for nested 'data' array..."
+      );
+      console.log(
+        "📋 [DB-CREATE] 🔍 FALLBACK CHECK: dataToInsert keys:",
+        Object.keys(dataToInsert)
+      );
+      console.log(
+        "📋 [DB-CREATE] 🔍 FALLBACK CHECK: Has 'data' key?",
+        "data" in dataToInsert
+      );
+
       // Check if we still have a 'data' field that is an array (extraction might have failed)
-      if ('data' in dataToInsert) {
-        console.log("📋 [DB-CREATE] 🔍 FALLBACK CHECK: 'data' field type:", typeof dataToInsert.data, "isArray:", Array.isArray(dataToInsert.data));
-        
+      if ("data" in dataToInsert) {
+        console.log(
+          "📋 [DB-CREATE] 🔍 FALLBACK CHECK: 'data' field type:",
+          typeof dataToInsert.data,
+          "isArray:",
+          Array.isArray(dataToInsert.data)
+        );
+
         if (Array.isArray(dataToInsert.data) && dataToInsert.data.length > 0) {
-          console.log("📋 [DB-CREATE] ⚠️ FALLBACK: Still found nested 'data' array with", dataToInsert.data.length, "items, extracting now!");
+          console.log(
+            "📋 [DB-CREATE] ⚠️ FALLBACK: Still found nested 'data' array with",
+            dataToInsert.data.length,
+            "items, extracting now!"
+          );
           const firstItem = dataToInsert.data[0];
-          console.log("📋 [DB-CREATE] 🔍 FALLBACK: First item type:", typeof firstItem, "keys:", typeof firstItem === 'object' && firstItem !== null ? Object.keys(firstItem) : 'N/A');
-          
-          if (typeof firstItem === 'object' && firstItem !== null) {
+          console.log(
+            "📋 [DB-CREATE] 🔍 FALLBACK: First item type:",
+            typeof firstItem,
+            "keys:",
+            typeof firstItem === "object" && firstItem !== null
+              ? Object.keys(firstItem)
+              : "N/A"
+          );
+
+          if (typeof firstItem === "object" && firstItem !== null) {
             // Extract fields from the nested array
             const extracted = { ...firstItem };
             // Keep metadata fields with prefixes
-            if (dataToInsert.success !== undefined) extracted._success = dataToInsert.success;
-            if (dataToInsert.tableName) extracted._tableName = dataToInsert.tableName;
-            if (dataToInsert.count !== undefined) extracted._count = dataToInsert.count;
+            if (dataToInsert.success !== undefined)
+              extracted._success = dataToInsert.success;
+            if (dataToInsert.tableName)
+              extracted._tableName = dataToInsert.tableName;
+            if (dataToInsert.count !== undefined)
+              extracted._count = dataToInsert.count;
             dataToInsert = extracted;
-            console.log("📋 [DB-CREATE] ✅ FALLBACK: Extracted", Object.keys(dataToInsert).length, "fields from nested data array");
-            console.log("📋 [DB-CREATE] ✅ FALLBACK: Extracted field names:", Object.keys(dataToInsert));
+            console.log(
+              "📋 [DB-CREATE] ✅ FALLBACK: Extracted",
+              Object.keys(dataToInsert).length,
+              "fields from nested data array"
+            );
+            console.log(
+              "📋 [DB-CREATE] ✅ FALLBACK: Extracted field names:",
+              Object.keys(dataToInsert)
+            );
           } else {
-            console.warn("⚠️ [DB-CREATE] FALLBACK: First item is not an object, cannot extract");
+            console.warn(
+              "⚠️ [DB-CREATE] FALLBACK: First item is not an object, cannot extract"
+            );
           }
-        } else if (typeof dataToInsert.data === 'string') {
+        } else if (typeof dataToInsert.data === "string") {
           // Try to parse if it's a JSON string
-          console.log("📋 [DB-CREATE] 🔍 FALLBACK: 'data' is a string, attempting to parse...");
+          console.log(
+            "📋 [DB-CREATE] 🔍 FALLBACK: 'data' is a string, attempting to parse..."
+          );
           try {
             const parsed = JSON.parse(dataToInsert.data);
             if (Array.isArray(parsed) && parsed.length > 0) {
-              console.log("📋 [DB-CREATE] ⚠️ FALLBACK: Parsed string contains array, extracting...");
+              console.log(
+                "📋 [DB-CREATE] ⚠️ FALLBACK: Parsed string contains array, extracting..."
+              );
               const firstItem = parsed[0];
-              if (typeof firstItem === 'object' && firstItem !== null) {
+              if (typeof firstItem === "object" && firstItem !== null) {
                 const extracted = { ...firstItem };
-                if (dataToInsert.success !== undefined) extracted._success = dataToInsert.success;
-                if (dataToInsert.tableName) extracted._tableName = dataToInsert.tableName;
-                if (dataToInsert.count !== undefined) extracted._count = dataToInsert.count;
+                if (dataToInsert.success !== undefined)
+                  extracted._success = dataToInsert.success;
+                if (dataToInsert.tableName)
+                  extracted._tableName = dataToInsert.tableName;
+                if (dataToInsert.count !== undefined)
+                  extracted._count = dataToInsert.count;
                 dataToInsert = extracted;
-                console.log("📋 [DB-CREATE] ✅ FALLBACK: Extracted", Object.keys(dataToInsert).length, "fields from parsed JSON string");
+                console.log(
+                  "📋 [DB-CREATE] ✅ FALLBACK: Extracted",
+                  Object.keys(dataToInsert).length,
+                  "fields from parsed JSON string"
+                );
               }
             }
           } catch (e) {
-            console.warn("⚠️ [DB-CREATE] FALLBACK: Failed to parse 'data' string as JSON:", e.message);
+            console.warn(
+              "⚠️ [DB-CREATE] FALLBACK: Failed to parse 'data' string as JSON:",
+              e.message
+            );
           }
         }
       } else {
-        console.log("📋 [DB-CREATE] 🔍 FALLBACK CHECK: No 'data' key found in dataToInsert");
+        console.log(
+          "📋 [DB-CREATE] 🔍 FALLBACK CHECK: No 'data' key found in dataToInsert"
+        );
       }
     }
-    
+
     // 8. Flatten nested objects (for API responses with nested data)
-    const flattenObject = (obj, prefix = '') => {
+    const flattenObject = (obj, prefix = "") => {
       const flattened = {};
       for (const [key, value] of Object.entries(obj)) {
         const newKey = prefix ? `${prefix}_${key}` : key;
-        if (value && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
+        if (
+          value &&
+          typeof value === "object" &&
+          !Array.isArray(value) &&
+          !(value instanceof Date)
+        ) {
           Object.assign(flattened, flattenObject(value, newKey));
         } else {
           flattened[newKey] = value;
@@ -1005,18 +1212,28 @@ const executeDbCreate = async (node, context, appId, userId) => {
       }
       return flattened;
     };
-    
+
     // Flatten if data came from http response and has nested objects (but skip if we just extracted from 'data' array)
-    if (dataSource.includes('httpResponse') && Object.keys(dataToInsert).length > 0) {
+    if (
+      dataSource.includes("httpResponse") &&
+      Object.keys(dataToInsert).length > 0
+    ) {
       // Only flatten if we don't have a 'data' array field (we already extracted from it)
-      const hasDataArray = 'data' in dataToInsert && Array.isArray(dataToInsert.data);
+      const hasDataArray =
+        "data" in dataToInsert && Array.isArray(dataToInsert.data);
       if (!hasDataArray) {
         const hasNestedObjects = Object.values(dataToInsert).some(
-          v => v && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Date)
+          (v) =>
+            v &&
+            typeof v === "object" &&
+            !Array.isArray(v) &&
+            !(v instanceof Date)
         );
         if (hasNestedObjects) {
           dataToInsert = flattenObject(dataToInsert);
-          console.log("📋 [DB-CREATE] Flattened nested objects from http response");
+          console.log(
+            "📋 [DB-CREATE] Flattened nested objects from http response"
+          );
         }
       }
     }
@@ -1028,31 +1245,76 @@ const executeDbCreate = async (node, context, appId, userId) => {
       hasHttpResponse: !!context.httpResponse,
       hasAppUser: !!context.appUser,
       dataKeys: Object.keys(dataToInsert),
-      dataSample: Object.keys(dataToInsert).slice(0, 5).reduce((acc, key) => {
-        acc[key] = typeof dataToInsert[key];
-        return acc;
-      }, {}),
+      dataSample: Object.keys(dataToInsert)
+        .slice(0, 5)
+        .reduce((acc, key) => {
+          acc[key] = typeof dataToInsert[key];
+          return acc;
+        }, {}),
     });
 
     // Extract all saveable elements from canvas (for form-based workflows)
     const formElements = allElements.filter((element) => {
       const saveableTypes = [
-        "textfield", "textarea", "input", "TEXT_FIELD", "TEXT_AREA", "INPUT",
-        "select", "dropdown", "radio", "SELECT", "DROPDOWN", "RADIO",
-        "checkbox", "toggle", "CHECKBOX", "TOGGLE",
-        "date", "time", "datetime", "DATE", "TIME", "DATETIME",
-        "file", "addfile", "upload", "file_upload", "FILE", "ADDFILE", "UPLOAD", "FILE_UPLOAD",
-        "image", "video", "audio", "media", "IMAGE", "VIDEO", "AUDIO", "MEDIA",
-        "button", "BUTTON", "slider", "range", "number", "SLIDER", "RANGE", "NUMBER",
+        "textfield",
+        "textarea",
+        "input",
+        "TEXT_FIELD",
+        "TEXT_AREA",
+        "INPUT",
+        "select",
+        "dropdown",
+        "radio",
+        "SELECT",
+        "DROPDOWN",
+        "RADIO",
+        "checkbox",
+        "toggle",
+        "CHECKBOX",
+        "TOGGLE",
+        "date",
+        "time",
+        "datetime",
+        "DATE",
+        "TIME",
+        "DATETIME",
+        "file",
+        "addfile",
+        "upload",
+        "file_upload",
+        "FILE",
+        "ADDFILE",
+        "UPLOAD",
+        "FILE_UPLOAD",
+        "image",
+        "video",
+        "audio",
+        "media",
+        "IMAGE",
+        "VIDEO",
+        "AUDIO",
+        "MEDIA",
+        "button",
+        "BUTTON",
+        "slider",
+        "range",
+        "number",
+        "SLIDER",
+        "RANGE",
+        "NUMBER",
       ];
       return saveableTypes.includes(element.type);
     });
 
     console.log("📋 [DB-CREATE] Found saveable elements:", formElements.length);
-    
+
     // If we have data from context but no form elements, we can still proceed
     // We'll create table columns from the data itself
-    if (formElements.length === 0 && Object.keys(dataToInsert).length === 0 && !hasManualInsertData) {
+    if (
+      formElements.length === 0 &&
+      Object.keys(dataToInsert).length === 0 &&
+      !hasManualInsertData
+    ) {
       throw new Error(
         "No data found from any source (formData, httpResponse, context, or manual insertData)"
       );
@@ -1063,12 +1325,12 @@ const executeDbCreate = async (node, context, appId, userId) => {
       if (value === null || value === undefined) {
         return "TEXT"; // Default for null/undefined
       }
-      
+
       const valueType = typeof value;
-      
-      if (valueType === 'boolean') {
+
+      if (valueType === "boolean") {
         return "BOOLEAN";
-      } else if (valueType === 'number') {
+      } else if (valueType === "number") {
         // Check if it's an integer or decimal
         if (Number.isInteger(value)) {
           return "INTEGER";
@@ -1077,7 +1339,7 @@ const executeDbCreate = async (node, context, appId, userId) => {
         }
       } else if (value instanceof Date) {
         return "TIMESTAMP";
-      } else if (valueType === 'string') {
+      } else if (valueType === "string") {
         // Try to detect time strings (HH:MM or HH:MM:SS format)
         if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(value)) {
           return "TIME";
@@ -1087,7 +1349,10 @@ const executeDbCreate = async (node, context, appId, userId) => {
           return "DATE";
         }
         // Try to detect timestamp strings (YYYY-MM-DD HH:MM:SS or ISO format)
-        if (/^\d{4}-\d{2}-\d{2}T/.test(value) || /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(value)) {
+        if (
+          /^\d{4}-\d{2}-\d{2}T/.test(value) ||
+          /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(value)
+        ) {
           return "TIMESTAMP";
         }
         // Check length for VARCHAR vs TEXT
@@ -1097,21 +1362,21 @@ const executeDbCreate = async (node, context, appId, userId) => {
         return "TEXT";
       } else if (Array.isArray(value)) {
         return "TEXT"; // Store as JSON string
-      } else if (valueType === 'object') {
+      } else if (valueType === "object") {
         return "TEXT"; // Store as JSON string
       }
-      
+
       return "TEXT"; // Default fallback
     };
 
     // Generate secure table name (use node configuration or default)
     const baseName = node.data.tableName || "form_data";
     const tableName = `app_${appId}_${baseName}`;
-    
+
     console.log("🗄️ [DB-CREATE] Table name configuration:", {
       baseName,
       fullTableName: tableName,
-      nodeTableName: node.data.tableName
+      nodeTableName: node.data.tableName,
     });
 
     // Validate table name for security
@@ -1131,66 +1396,92 @@ const executeDbCreate = async (node, context, appId, userId) => {
 
       // Determine data source for column creation
       const hasDataForColumns = Object.keys(dataToInsert).length > 0;
-      
+
       // If we have manual insertData, create columns from it
       if (hasValidInsertData) {
         console.log("🔧 [DB-CREATE] Creating table from manual insertData");
 
         Object.keys(insertDataRaw).forEach((fieldName) => {
           // Skip empty field names
-          if (!fieldName || fieldName.trim() === '') return;
-          
+          if (!fieldName || fieldName.trim() === "") return;
+
           const columnName = sanitizeIdentifier(fieldName);
           securityValidator.validateColumnName(columnName);
 
           const fieldData = insertDataRaw[fieldName];
-          
+
           // Support both old format (string value) and new format (object with value and type)
           let value, sqlType;
-          if (typeof fieldData === 'object' && fieldData !== null && 'value' in fieldData) {
+          if (
+            typeof fieldData === "object" &&
+            fieldData !== null &&
+            "value" in fieldData
+          ) {
             // New format: { value: "...", type: "TEXT" }
             value = fieldData.value;
             // CRITICAL: Use user-selected type if provided, otherwise infer from value
-            if (fieldData.type && fieldData.type.trim() !== '') {
+            if (fieldData.type && fieldData.type.trim() !== "") {
               sqlType = fieldData.type.toUpperCase().trim();
-              console.log(`✅ [DB-CREATE] Using user-selected type "${sqlType}" for field "${fieldName}"`);
+              console.log(
+                `✅ [DB-CREATE] Using user-selected type "${sqlType}" for field "${fieldName}"`
+              );
             } else {
               sqlType = inferSQLType(value);
-              console.log(`🔍 [DB-CREATE] Inferred type "${sqlType}" for field "${fieldName}" from value`);
+              console.log(
+                `🔍 [DB-CREATE] Inferred type "${sqlType}" for field "${fieldName}" from value`
+              );
             }
           } else {
             // Old format: just the value string
             value = fieldData;
             sqlType = inferSQLType(value);
-            console.log(`🔍 [DB-CREATE] Inferred type "${sqlType}" for field "${fieldName}" from value (old format)`);
+            console.log(
+              `🔍 [DB-CREATE] Inferred type "${sqlType}" for field "${fieldName}" from value (old format)`
+            );
           }
 
           // Normalize SQL type (handle variations like VARCHAR vs VARCHAR(255))
           const normalizeSQLType = (type) => {
             const upperType = type.toUpperCase().trim();
-            if (upperType === 'VARCHAR' || (upperType.startsWith('VARCHAR') && !upperType.includes('('))) {
-              return 'VARCHAR(255)';
+            if (
+              upperType === "VARCHAR" ||
+              (upperType.startsWith("VARCHAR") && !upperType.includes("("))
+            ) {
+              return "VARCHAR(255)";
             }
-            if (upperType === 'INTEGER' || upperType === 'INT') {
-              return 'INTEGER';
+            if (upperType === "INTEGER" || upperType === "INT") {
+              return "INTEGER";
             }
-            if (upperType === 'BOOLEAN' || upperType === 'BOOL') {
-              return 'BOOLEAN';
+            if (upperType === "BOOLEAN" || upperType === "BOOL") {
+              return "BOOLEAN";
             }
-            if (upperType === 'DECIMAL' && !upperType.includes('(')) {
-              return 'DECIMAL(10,2)';
+            if (upperType === "DECIMAL" && !upperType.includes("(")) {
+              return "DECIMAL(10,2)";
             }
             return type; // Return as-is for valid types
           };
-          
+
           sqlType = normalizeSQLType(sqlType);
 
           // Validate SQL type
-          const validTypes = ['TEXT', 'VARCHAR(255)', 'INTEGER', 'DECIMAL(10,2)', 'BOOLEAN', 'TIMESTAMP', 'DATE', 'TIME'];
-          const isValidType = validTypes.some(t => sqlType.toUpperCase().includes(t.split('(')[0]));
+          const validTypes = [
+            "TEXT",
+            "VARCHAR(255)",
+            "INTEGER",
+            "DECIMAL(10,2)",
+            "BOOLEAN",
+            "TIMESTAMP",
+            "DATE",
+            "TIME",
+          ];
+          const isValidType = validTypes.some((t) =>
+            sqlType.toUpperCase().includes(t.split("(")[0])
+          );
           if (!isValidType) {
-            console.warn(`⚠️ [DB-CREATE] Invalid SQL type "${sqlType}" for field "${fieldName}", defaulting to TEXT`);
-            sqlType = 'TEXT';
+            console.warn(
+              `⚠️ [DB-CREATE] Invalid SQL type "${sqlType}" for field "${fieldName}", defaulting to TEXT`
+            );
+            sqlType = "TEXT";
           }
 
           let finalColumnName = columnName;
@@ -1209,50 +1500,87 @@ const executeDbCreate = async (node, context, appId, userId) => {
 
           columns.push(`"${finalColumnName}" ${sqlType}`);
         });
-      } 
+      }
       // If we have data from context (http.request, roleIs, etc.), create columns from it
       else if (hasDataForColumns) {
         // FINAL CHECK: If we have a 'data' array field, extract from it NOW before creating table
         // Note: This is a fallback check. If recordsToInsert is already populated, skip this.
-        if (recordsToInsert.length === 0 && dataSource.includes('httpResponse') && 'data' in dataToInsert) {
-          if (Array.isArray(dataToInsert.data) && dataToInsert.data.length > 0) {
-            console.log("📋 [DB-CREATE] 🚨 FINAL CHECK: Found 'data' array before table creation, extracting all records NOW!");
-            recordsToInsert = dataToInsert.data.map((item, index) => {
-              if (typeof item === 'object' && item !== null) {
-                const extracted = { ...item };
-                if (dataToInsert.success !== undefined) extracted._success = dataToInsert.success;
-                if (dataToInsert.tableName) extracted._tableName = dataToInsert.tableName;
-                if (dataToInsert.count !== undefined) extracted._count = dataToInsert.count;
-                console.log(`📋 [DB-CREATE] ✅ FINAL CHECK: Extracted record ${index + 1}/${dataToInsert.data.length}`);
-                return extracted;
-              }
-              return null;
-            }).filter(record => record !== null);
-            
+        if (
+          recordsToInsert.length === 0 &&
+          dataSource.includes("httpResponse") &&
+          "data" in dataToInsert
+        ) {
+          if (
+            Array.isArray(dataToInsert.data) &&
+            dataToInsert.data.length > 0
+          ) {
+            console.log(
+              "📋 [DB-CREATE] 🚨 FINAL CHECK: Found 'data' array before table creation, extracting all records NOW!"
+            );
+            recordsToInsert = dataToInsert.data
+              .map((item, index) => {
+                if (typeof item === "object" && item !== null) {
+                  const extracted = { ...item };
+                  if (dataToInsert.success !== undefined)
+                    extracted._success = dataToInsert.success;
+                  if (dataToInsert.tableName)
+                    extracted._tableName = dataToInsert.tableName;
+                  if (dataToInsert.count !== undefined)
+                    extracted._count = dataToInsert.count;
+                  console.log(
+                    `📋 [DB-CREATE] ✅ FINAL CHECK: Extracted record ${
+                      index + 1
+                    }/${dataToInsert.data.length}`
+                  );
+                  return extracted;
+                }
+                return null;
+              })
+              .filter((record) => record !== null);
+
             if (recordsToInsert.length > 0) {
               dataToInsert = recordsToInsert[0];
-              console.log("📋 [DB-CREATE] ✅ FINAL CHECK: Extracted", recordsToInsert.length, "records, using first for schema");
+              console.log(
+                "📋 [DB-CREATE] ✅ FINAL CHECK: Extracted",
+                recordsToInsert.length,
+                "records, using first for schema"
+              );
             }
-          } else if (typeof dataToInsert.data === 'string') {
+          } else if (typeof dataToInsert.data === "string") {
             try {
               const parsed = JSON.parse(dataToInsert.data);
               if (Array.isArray(parsed) && parsed.length > 0) {
-                console.log("📋 [DB-CREATE] 🚨 FINAL CHECK: Parsed 'data' string contains array, extracting all records NOW!");
-                recordsToInsert = parsed.map((item, index) => {
-                  if (typeof item === 'object' && item !== null) {
-                    const extracted = { ...item };
-                    if (dataToInsert.success !== undefined) extracted._success = dataToInsert.success;
-                    if (dataToInsert.tableName) extracted._tableName = dataToInsert.tableName;
-                    if (dataToInsert.count !== undefined) extracted._count = dataToInsert.count;
-                    console.log(`📋 [DB-CREATE] ✅ FINAL CHECK: Extracted record ${index + 1}/${parsed.length} from parsed string`);
-                    return extracted;
-                  }
-                  return null;
-                }).filter(record => record !== null);
-                
+                console.log(
+                  "📋 [DB-CREATE] 🚨 FINAL CHECK: Parsed 'data' string contains array, extracting all records NOW!"
+                );
+                recordsToInsert = parsed
+                  .map((item, index) => {
+                    if (typeof item === "object" && item !== null) {
+                      const extracted = { ...item };
+                      if (dataToInsert.success !== undefined)
+                        extracted._success = dataToInsert.success;
+                      if (dataToInsert.tableName)
+                        extracted._tableName = dataToInsert.tableName;
+                      if (dataToInsert.count !== undefined)
+                        extracted._count = dataToInsert.count;
+                      console.log(
+                        `📋 [DB-CREATE] ✅ FINAL CHECK: Extracted record ${
+                          index + 1
+                        }/${parsed.length} from parsed string`
+                      );
+                      return extracted;
+                    }
+                    return null;
+                  })
+                  .filter((record) => record !== null);
+
                 if (recordsToInsert.length > 0) {
                   dataToInsert = recordsToInsert[0];
-                  console.log("📋 [DB-CREATE] ✅ FINAL CHECK: Extracted", recordsToInsert.length, "records from parsed string");
+                  console.log(
+                    "📋 [DB-CREATE] ✅ FINAL CHECK: Extracted",
+                    recordsToInsert.length,
+                    "records from parsed string"
+                  );
                 }
               }
             } catch (e) {
@@ -1260,57 +1588,90 @@ const executeDbCreate = async (node, context, appId, userId) => {
             }
           }
         }
-        
+
         // If we still don't have recordsToInsert, use dataToInsert as single record
         if (recordsToInsert.length === 0) {
           recordsToInsert = [dataToInsert];
         }
-        
-        console.log("🔧 [DB-CREATE] Creating table from context data (http.request/roleIs/etc.)");
-        console.log("🔧 [DB-CREATE] Total fields to process:", Object.keys(dataToInsert).length);
+
+        console.log(
+          "🔧 [DB-CREATE] Creating table from context data (http.request/roleIs/etc.)"
+        );
+        console.log(
+          "🔧 [DB-CREATE] Total fields to process:",
+          Object.keys(dataToInsert).length
+        );
         console.log("🔧 [DB-CREATE] Field names:", Object.keys(dataToInsert));
 
         const fieldNames = Object.keys(dataToInsert);
         for (let index = 0; index < fieldNames.length; index++) {
           const fieldName = fieldNames[index];
-          console.log(`📋 [DB-CREATE] Processing field ${index + 1}/${Object.keys(dataToInsert).length}: "${fieldName}"`);
-          
+          console.log(
+            `📋 [DB-CREATE] Processing field ${index + 1}/${
+              Object.keys(dataToInsert).length
+            }: "${fieldName}"`
+          );
+
           let columnName;
           try {
             columnName = sanitizeIdentifier(fieldName);
-            console.log(`✅ [DB-CREATE] Sanitized "${fieldName}" -> "${columnName}"`);
+            console.log(
+              `✅ [DB-CREATE] Sanitized "${fieldName}" -> "${columnName}"`
+            );
           } catch (sanitizeError) {
-            console.error(`❌ [DB-CREATE] Failed to sanitize field name "${fieldName}":`, sanitizeError.message);
-            throw new Error(`Invalid field name "${fieldName}": ${sanitizeError.message}`);
+            console.error(
+              `❌ [DB-CREATE] Failed to sanitize field name "${fieldName}":`,
+              sanitizeError.message
+            );
+            throw new Error(
+              `Invalid field name "${fieldName}": ${sanitizeError.message}`
+            );
           }
-          
+
           // Double-check the sanitized name is valid before validation
-          if (!columnName || typeof columnName !== 'string' || columnName.trim() === '') {
-            console.error(`❌ [DB-CREATE] Sanitized column name is empty for field "${fieldName}"`);
+          if (
+            !columnName ||
+            typeof columnName !== "string" ||
+            columnName.trim() === ""
+          ) {
+            console.error(
+              `❌ [DB-CREATE] Sanitized column name is empty for field "${fieldName}"`
+            );
             columnName = `field_${Math.random().toString(36).substring(2, 9)}`;
-            console.log(`🔧 [DB-CREATE] Generated fallback column name: "${columnName}"`);
+            console.log(
+              `🔧 [DB-CREATE] Generated fallback column name: "${columnName}"`
+            );
           }
-          
+
           // Ensure it starts with a letter (final safety check)
           if (!/^[a-zA-Z]/.test(columnName)) {
-            console.warn(`⚠️ [DB-CREATE] Sanitized name "${columnName}" doesn't start with letter, fixing...`);
+            console.warn(
+              `⚠️ [DB-CREATE] Sanitized name "${columnName}" doesn't start with letter, fixing...`
+            );
             columnName = "field_" + columnName;
             console.log(`🔧 [DB-CREATE] Fixed column name: "${columnName}"`);
           }
-          
+
           try {
             securityValidator.validateColumnName(columnName);
-            console.log(`✅ [DB-CREATE] Validation passed for "${fieldName}" -> "${columnName}"`);
+            console.log(
+              `✅ [DB-CREATE] Validation passed for "${fieldName}" -> "${columnName}"`
+            );
           } catch (validateError) {
-            console.error(`❌ [DB-CREATE] Column name validation failed for "${fieldName}" (sanitized: "${columnName}"):`, validateError.message);
+            console.error(
+              `❌ [DB-CREATE] Column name validation failed for "${fieldName}" (sanitized: "${columnName}"):`,
+              validateError.message
+            );
             console.error(`❌ [DB-CREATE] Column name details:`, {
               original: fieldName,
               sanitized: columnName,
               length: columnName.length,
               startsWithLetter: /^[a-zA-Z]/.test(columnName),
-              matchesPattern: /^[a-zA-Z][a-zA-Z0-9_]*$/.test(columnName)
+              matchesPattern: /^[a-zA-Z][a-zA-Z0-9_]*$/.test(columnName),
             });
-            throw new Error(`Column name validation failed for "${fieldName}" (sanitized: "${columnName}"): ${validateError.message}`);
+            throw new Error(
+              `Column name validation failed for "${fieldName}" (sanitized: "${columnName}"): ${validateError.message}`
+            );
           }
 
           const value = dataToInsert[fieldName];
@@ -1367,7 +1728,9 @@ const executeDbCreate = async (node, context, appId, userId) => {
           columns.push(`"${finalColumnName}" ${sqlType}${notNull}`);
         });
       } else {
-        throw new Error("Cannot create table: No data or form elements available");
+        throw new Error(
+          "Cannot create table: No data or form elements available"
+        );
       }
 
       // Add metadata columns
@@ -1414,63 +1777,93 @@ const executeDbCreate = async (node, context, appId, userId) => {
     // INSERT DATA INTO TABLE
     console.log("💾 [DB-CREATE] Inserting data into table:", tableName);
     console.log("💾 [DB-CREATE] Data source:", dataSource);
-    console.log("💾 [DB-CREATE] Total records to insert:", recordsToInsert.length);
-    console.log("💾 [DB-CREATE] Data to insert keys:", Object.keys(dataToInsert));
+    // Ensure recordsToInsert is populated (fallback for non-httpResponse sources)
+    // This must happen BEFORE the check to handle manual data insertion
+    if (recordsToInsert.length === 0 && Object.keys(dataToInsert).length > 0) {
+      console.log("📋 [DB-CREATE] Populating recordsToInsert from dataToInsert (manual data)");
+      recordsToInsert = [dataToInsert];
+    }
+
+    console.log(
+      "💾 [DB-CREATE] Total records to insert:",
+      recordsToInsert.length
+    );
+    console.log(
+      "💾 [DB-CREATE] Data to insert keys:",
+      Object.keys(dataToInsert)
+    );
 
     if (recordsToInsert.length === 0) {
       throw new Error("No data provided for database insertion");
     }
-    
-    // Ensure recordsToInsert is populated (fallback for non-httpResponse sources)
-    if (recordsToInsert.length === 0 && Object.keys(dataToInsert).length > 0) {
-      recordsToInsert = [dataToInsert];
-    }
-    
+
     // Helper function to convert complex types to strings for storage (shared by multiple functions)
     const prepareValueForInsert = (value) => {
       if (value === null || value === undefined) {
         return null;
       }
-      
+
       // If it's the new format object { value: "...", type: "..." }, extract just the value
-      if (typeof value === 'object' && value !== null && 'value' in value && !(value instanceof Date)) {
+      if (
+        typeof value === "object" &&
+        value !== null &&
+        "value" in value &&
+        !(value instanceof Date)
+      ) {
         // This is the new format - extract the actual value
         return prepareValueForInsert(value.value);
       }
-      
-      if (typeof value === 'object' && !(value instanceof Date)) {
+
+      if (typeof value === "object" && !(value instanceof Date)) {
         // Convert objects and arrays to JSON strings
         return JSON.stringify(value);
       }
       return value;
     };
-    
+
     // Helper function to prepare a single record for insertion (defined early for use in schema discovery)
     const prepareRecordForInsert = (recordData) => {
-      
       // Prepare data values - ensure we extract values from objects
       const preparedData = {};
       for (const [key, value] of Object.entries(recordData)) {
         // Triple-check: if value is still an object with 'value' property, extract it
         let finalValue = value;
-        
+
         // Check if it's the new format object
-        if (typeof value === 'object' && value !== null && 'value' in value && !(value instanceof Date) && !Array.isArray(value)) {
-          console.warn(`⚠️ [DB-CREATE] Found object format in recordData for key "${key}", extracting value`);
+        if (
+          typeof value === "object" &&
+          value !== null &&
+          "value" in value &&
+          !(value instanceof Date) &&
+          !Array.isArray(value)
+        ) {
+          console.warn(
+            `⚠️ [DB-CREATE] Found object format in recordData for key "${key}", extracting value`
+          );
           finalValue = value.value;
         }
-        
+
         // Prepare the value (this will handle any remaining objects by JSON.stringify)
         preparedData[key] = prepareValueForInsert(finalValue);
       }
-      
+
       // Final validation: ensure no objects remain
       for (const [key, value] of Object.entries(preparedData)) {
-        if (typeof value === 'object' && value !== null && !(value instanceof Date) && !Array.isArray(value)) {
-          console.error(`❌ [DB-CREATE] CRITICAL: Object still present in preparedData for key "${key}":`, value);
+        if (
+          typeof value === "object" &&
+          value !== null &&
+          !(value instanceof Date) &&
+          !Array.isArray(value)
+        ) {
+          console.error(
+            `❌ [DB-CREATE] CRITICAL: Object still present in preparedData for key "${key}":`,
+            value
+          );
           // Try to extract value if it's the new format
-          if ('value' in value) {
-            console.warn(`⚠️ [DB-CREATE] Extracting value from object for key "${key}"`);
+          if ("value" in value) {
+            console.warn(
+              `⚠️ [DB-CREATE] Extracting value from object for key "${key}"`
+            );
             preparedData[key] = prepareValueForInsert(value.value);
           } else {
             // Force convert to JSON string as last resort
@@ -1478,7 +1871,7 @@ const executeDbCreate = async (node, context, appId, userId) => {
           }
         }
       }
-      
+
       return preparedData;
     };
 
@@ -1508,105 +1901,142 @@ const executeDbCreate = async (node, context, appId, userId) => {
           originalName: col.originalName,
         });
       });
-      
+
       // Check if we have new fields in data that don't exist in table
       // Use first record to check for new fields
       const firstRecordPrepared = prepareRecordForInsert(recordsToInsert[0]);
       const existingColumnNames = new Set(tableSchema.keys());
       const newFields = Object.keys(firstRecordPrepared).filter(
-        key => !existingColumnNames.has(key) && 
-                !['id', 'created_at', 'updated_at', 'app_id'].includes(key)
+        (key) =>
+          !existingColumnNames.has(key) &&
+          !["id", "created_at", "updated_at", "app_id"].includes(key)
       );
-      
+
       // PRODUCTION-LEVEL: Automatically add new columns to existing table
       if (newFields.length > 0) {
-        console.log(`🔧 [DB-CREATE] Detected ${newFields.length} new field(s) that don't exist in table. Adding columns automatically...`);
-        
+        console.log(
+          `🔧 [DB-CREATE] Detected ${newFields.length} new field(s) that don't exist in table. Adding columns automatically...`
+        );
+
         for (const fieldName of newFields) {
           const columnName = sanitizeIdentifier(fieldName);
           securityValidator.validateColumnName(columnName);
-          
+
           // Get the value to infer type from first record
           const fieldValue = firstRecordPrepared[fieldName];
-          
+
           // Try to get type from insertDataRaw if available (user-selected type)
-          let sqlType = 'TEXT'; // Default
+          let sqlType = "TEXT"; // Default
           if (hasValidInsertData && insertDataRaw[fieldName]) {
             const fieldData = insertDataRaw[fieldName];
-            if (typeof fieldData === 'object' && fieldData !== null && 'value' in fieldData && fieldData.type) {
+            if (
+              typeof fieldData === "object" &&
+              fieldData !== null &&
+              "value" in fieldData &&
+              fieldData.type
+            ) {
               sqlType = fieldData.type.toUpperCase().trim();
-              console.log(`✅ [DB-CREATE] Using user-selected type "${sqlType}" for new column "${columnName}"`);
+              console.log(
+                `✅ [DB-CREATE] Using user-selected type "${sqlType}" for new column "${columnName}"`
+              );
             } else {
               sqlType = inferSQLType(fieldValue);
-              console.log(`🔍 [DB-CREATE] Inferred type "${sqlType}" for new column "${columnName}" from value`);
+              console.log(
+                `🔍 [DB-CREATE] Inferred type "${sqlType}" for new column "${columnName}" from value`
+              );
             }
           } else {
             sqlType = inferSQLType(fieldValue);
-            console.log(`🔍 [DB-CREATE] Inferred type "${sqlType}" for new column "${columnName}" from value`);
+            console.log(
+              `🔍 [DB-CREATE] Inferred type "${sqlType}" for new column "${columnName}" from value`
+            );
           }
-          
+
           // Normalize SQL type
           const normalizeSQLType = (type) => {
             const upperType = type.toUpperCase().trim();
-            if (upperType === 'VARCHAR' || (upperType.startsWith('VARCHAR') && !upperType.includes('('))) {
-              return 'VARCHAR(255)';
+            if (
+              upperType === "VARCHAR" ||
+              (upperType.startsWith("VARCHAR") && !upperType.includes("("))
+            ) {
+              return "VARCHAR(255)";
             }
-            if (upperType === 'INTEGER' || upperType === 'INT') {
-              return 'INTEGER';
+            if (upperType === "INTEGER" || upperType === "INT") {
+              return "INTEGER";
             }
-            if (upperType === 'BOOLEAN' || upperType === 'BOOL') {
-              return 'BOOLEAN';
+            if (upperType === "BOOLEAN" || upperType === "BOOL") {
+              return "BOOLEAN";
             }
-            if (upperType === 'DECIMAL' && !upperType.includes('(')) {
-              return 'DECIMAL(10,2)';
+            if (upperType === "DECIMAL" && !upperType.includes("(")) {
+              return "DECIMAL(10,2)";
             }
             return type;
           };
-          
+
           sqlType = normalizeSQLType(sqlType);
-          
+
           // Validate SQL type
-          const validTypes = ['TEXT', 'VARCHAR(255)', 'INTEGER', 'DECIMAL(10,2)', 'BOOLEAN', 'TIME'];
-          const isValidType = validTypes.some(t => sqlType.toUpperCase().includes(t.split('(')[0]));
+          const validTypes = [
+            "TEXT",
+            "VARCHAR(255)",
+            "INTEGER",
+            "DECIMAL(10,2)",
+            "BOOLEAN",
+            "TIME",
+          ];
+          const isValidType = validTypes.some((t) =>
+            sqlType.toUpperCase().includes(t.split("(")[0])
+          );
           if (!isValidType) {
-            console.warn(`⚠️ [DB-CREATE] Invalid SQL type "${sqlType}" for new column "${columnName}", defaulting to TEXT`);
-            sqlType = 'TEXT';
+            console.warn(
+              `⚠️ [DB-CREATE] Invalid SQL type "${sqlType}" for new column "${columnName}", defaulting to TEXT`
+            );
+            sqlType = "TEXT";
           }
-          
+
           // Add column to table using ALTER TABLE
           try {
             const alterSQL = `ALTER TABLE "${tableName}" ADD COLUMN "${columnName}" ${sqlType}`;
             console.log(`🔨 [DB-CREATE] Adding new column: ${alterSQL}`);
             await prisma.$executeRawUnsafe(alterSQL);
-            
+
             // Add to tableSchema map so it can be used in INSERT
             tableSchema.set(columnName, {
               elementId: fieldName,
               type: sqlType,
               originalName: fieldName,
             });
-            
+
             // Update the UserTable registry
-            const updatedColumns = Array.from(tableSchema.entries()).map(([name, info]) => ({
-              name,
-              type: info.type,
-              elementId: info.elementId,
-              originalName: info.originalName,
-            }));
-            
+            const updatedColumns = Array.from(tableSchema.entries()).map(
+              ([name, info]) => ({
+                name,
+                type: info.type,
+                elementId: info.elementId,
+                originalName: info.originalName,
+              })
+            );
+
             await prisma.userTable.update({
               where: { id: existingTable.id },
               data: { columns: JSON.stringify(updatedColumns) },
             });
-            
-            console.log(`✅ [DB-CREATE] Successfully added new column "${columnName}" (${sqlType}) to table "${tableName}"`);
+
+            console.log(
+              `✅ [DB-CREATE] Successfully added new column "${columnName}" (${sqlType}) to table "${tableName}"`
+            );
           } catch (alterError) {
-            console.error(`❌ [DB-CREATE] Failed to add column "${columnName}" to table "${tableName}":`, alterError.message);
+            console.error(
+              `❌ [DB-CREATE] Failed to add column "${columnName}" to table "${tableName}":`,
+              alterError.message
+            );
             // Continue with other fields even if one fails
           }
         }
-        
-        console.log(`✅ [DB-CREATE] Finished adding ${newFields.length} new column(s) to existing table`);
+
+        console.log(
+          `✅ [DB-CREATE] Finished adding ${newFields.length} new column(s) to existing table`
+        );
       }
     }
 
@@ -1617,215 +2047,385 @@ const executeDbCreate = async (node, context, appId, userId) => {
 
       // Map data to table columns
       for (const [columnName, columnInfo] of tableSchema) {
-      // Skip auto-generated columns
-      if (
-        columnName === "id" ||
-        columnName === "created_at" ||
-        columnName === "updated_at" ||
-        columnName === "app_id"
-      ) {
-        continue;
-      }
-
-      // Find data for this column
-      let dataValue = null;
-
-      // Try multiple matching strategies
-      const possibleKeys = [
-        columnName,
-        columnInfo.originalName,
-        columnInfo.elementId,
-      ];
-      
-      // Also try with different case variations
-      for (const key of possibleKeys) {
-        if (preparedData[key] !== undefined) {
-          dataValue = preparedData[key];
-          console.log(`✅ [DB-CREATE] Found data for column "${columnName}" using exact key "${key}"`);
-          break;
+        // Skip auto-generated columns
+        if (
+          columnName === "id" ||
+          columnName === "created_at" ||
+          columnName === "updated_at" ||
+          columnName === "app_id"
+        ) {
+          continue;
         }
-        // Try case-insensitive match
-        const lowerKey = key.toLowerCase();
-        for (const dataKey of Object.keys(preparedData)) {
-          if (dataKey.toLowerCase() === lowerKey) {
-            dataValue = preparedData[dataKey];
-            console.log(`✅ [DB-CREATE] Found data for column "${columnName}" using case-insensitive match: "${dataKey}"`);
-            break;
-          }
-        }
-        if (dataValue !== null) break;
-      }
-      
-      // If still not found and we have manual insertData, check there with case-insensitive matching
-      if (dataValue === null && hasValidInsertData) {
-        // First try exact keys
+
+        // Find data for this column
+        let dataValue = null;
+
+        // Try multiple matching strategies
+        const possibleKeys = [
+          columnName,
+          columnInfo.originalName,
+          columnInfo.elementId,
+        ];
+
+        // Also try with different case variations
         for (const key of possibleKeys) {
-          const fieldData = insertDataRaw[key];
-          if (fieldData !== undefined) {
-            // Support both old format (string) and new format (object with value)
-            if (typeof fieldData === 'object' && fieldData !== null && 'value' in fieldData) {
-              dataValue = fieldData.value; // Extract value directly
-            } else {
-              dataValue = fieldData; // Use as-is if it's already a primitive
-            }
-            console.log(`✅ [DB-CREATE] Found data for column "${columnName}" from insertDataRaw using key "${key}"`);
+          if (preparedData[key] !== undefined) {
+            dataValue = preparedData[key];
+            console.log(
+              `✅ [DB-CREATE] Found data for column "${columnName}" using exact key "${key}"`
+            );
             break;
           }
-        }
-        
-        // If still not found, try case-insensitive match in insertDataRaw
-        if (dataValue === null) {
-          for (const key of possibleKeys) {
-            const lowerKey = key.toLowerCase();
-            for (const dataKey of Object.keys(insertDataRaw)) {
-              if (dataKey.toLowerCase() === lowerKey) {
-                const fieldData = insertDataRaw[dataKey];
-                if (typeof fieldData === 'object' && fieldData !== null && 'value' in fieldData) {
-                  dataValue = fieldData.value;
-                } else {
-                  dataValue = fieldData;
-                }
-                console.log(`✅ [DB-CREATE] Found data for column "${columnName}" from insertDataRaw using case-insensitive match: "${dataKey}"`);
-                break;
-              }
+          // Try case-insensitive match
+          const lowerKey = key.toLowerCase();
+          for (const dataKey of Object.keys(preparedData)) {
+            if (dataKey.toLowerCase() === lowerKey) {
+              dataValue = preparedData[dataKey];
+              console.log(
+                `✅ [DB-CREATE] Found data for column "${columnName}" using case-insensitive match: "${dataKey}"`
+              );
+              break;
             }
-            if (dataValue !== null) break;
           }
+          if (dataValue !== null) break;
         }
-      }
-      
-      // Log if we found data
-      if (dataValue !== null) {
-        const dataType = typeof dataValue;
-        const preview = dataType === 'object' && dataValue !== null ? (dataValue instanceof Date ? dataValue.toISOString() : '[OBJECT]') : String(dataValue).substring(0, 50);
-        console.log(`📊 [DB-CREATE] DataValue for column "${columnName}": ${dataType} = ${preview}`);
-      } else {
-        console.warn(`⚠️ [DB-CREATE] No data found for column "${columnName}". Available keys in preparedData:`, Object.keys(preparedData));
-        console.warn(`⚠️ [DB-CREATE] Available keys in insertDataRaw:`, Object.keys(insertDataRaw));
-      }
-      
-      // CRITICAL: Final check - if dataValue is still an object, extract or convert
-      if (dataValue !== null && typeof dataValue === 'object' && !(dataValue instanceof Date) && !Array.isArray(dataValue)) {
-        if ('value' in dataValue) {
-          console.warn(`⚠️ [DB-CREATE] Found object in dataValue for column "${columnName}", extracting value property`);
-          dataValue = dataValue.value;
-        } else {
-          console.error(`❌ [DB-CREATE] CRITICAL: Object without 'value' property found for column "${columnName}":`, dataValue);
-          // Convert to JSON string as last resort
-          dataValue = JSON.stringify(dataValue);
-        }
-      }
-      
-      // Prepare the value for insertion (handles dates, arrays, etc.)
-      dataValue = prepareValueForInsert(dataValue);
 
-      insertColumns.push(`"${columnName}"`);
-      
-      // CRITICAL: Final validation before SQL escaping
-      // If dataValue is still an object at this point, something went wrong
-      if (dataValue !== null && dataValue !== undefined && typeof dataValue === 'object' && !(dataValue instanceof Date) && !Array.isArray(dataValue)) {
-        console.error(`❌ [DB-CREATE] CRITICAL ERROR: Object found in dataValue for column "${columnName}" right before SQL escaping!`, dataValue);
-        // Last resort: try to extract value or stringify
-        if ('value' in dataValue) {
-          dataValue = dataValue.value;
-        } else {
-          dataValue = JSON.stringify(dataValue);
-        }
-      }
-      
-      // Escape value properly for PostgreSQL
-      if (dataValue === null || dataValue === undefined) {
-        escapedValues.push('NULL');
-      } else if (typeof dataValue === 'boolean') {
-        escapedValues.push(dataValue ? 'TRUE' : 'FALSE');
-      } else if (dataValue instanceof Date) {
-        escapedValues.push(`'${dataValue.toISOString()}'::timestamp`);
-      } else if (typeof dataValue === 'number') {
-        escapedValues.push(String(dataValue));
-      } else if (typeof dataValue === 'string') {
-        // Check column type to handle TIME values correctly
-        const columnType = columnInfo.type?.toUpperCase() || '';
-        if (columnType === 'TIME') {
-          // For TIME type, ensure the value is in HH:MM:SS format
-          // If it's just HH:MM, add :00 for seconds
-          let timeValue = dataValue.trim();
-          if (/^\d{1,2}:\d{2}$/.test(timeValue)) {
-            timeValue = timeValue + ':00';
+        // If still not found and we have manual insertData, check there with case-insensitive matching
+        if (dataValue === null && hasValidInsertData) {
+          // First try exact keys
+          for (const key of possibleKeys) {
+            const fieldData = insertDataRaw[key];
+            if (fieldData !== undefined) {
+              // Support both old format (string) and new format (object with value)
+              if (
+                typeof fieldData === "object" &&
+                fieldData !== null &&
+                "value" in fieldData
+              ) {
+                dataValue = fieldData.value; // Extract value directly
+              } else {
+                dataValue = fieldData; // Use as-is if it's already a primitive
+              }
+              console.log(
+                `✅ [DB-CREATE] Found data for column "${columnName}" from insertDataRaw using key "${key}"`
+              );
+              break;
+            }
           }
-          escapedValues.push(`'${timeValue.replace(/'/g, "''")}'::time`);
-        } else if (columnType === 'DATE') {
-          // For DATE type, ensure it's a valid date format
-          escapedValues.push(`'${dataValue.replace(/'/g, "''")}'::date`);
-        } else if (columnType === 'TIMESTAMP') {
-          // For TIMESTAMP, try to parse and format correctly
-          // If it's just a time (HH:MM), it's invalid for timestamp
-          if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(dataValue)) {
-            console.error(`❌ [DB-CREATE] Invalid timestamp value "${dataValue}" for column "${columnName}" (looks like TIME, not TIMESTAMP)`);
-            // Try to use current date with the time
-            const today = new Date().toISOString().split('T')[0];
-            escapedValues.push(`'${today} ${dataValue}:00'::timestamp`);
+
+          // If still not found, try case-insensitive match in insertDataRaw
+          if (dataValue === null) {
+            for (const key of possibleKeys) {
+              const lowerKey = key.toLowerCase();
+              for (const dataKey of Object.keys(insertDataRaw)) {
+                if (dataKey.toLowerCase() === lowerKey) {
+                  const fieldData = insertDataRaw[dataKey];
+                  if (
+                    typeof fieldData === "object" &&
+                    fieldData !== null &&
+                    "value" in fieldData
+                  ) {
+                    dataValue = fieldData.value;
+                  } else {
+                    dataValue = fieldData;
+                  }
+                  console.log(
+                    `✅ [DB-CREATE] Found data for column "${columnName}" from insertDataRaw using case-insensitive match: "${dataKey}"`
+                  );
+                  break;
+                }
+              }
+              if (dataValue !== null) break;
+            }
+          }
+        }
+
+        // Log if we found data
+        if (dataValue !== null) {
+          const dataType = typeof dataValue;
+          const preview =
+            dataType === "object" && dataValue !== null
+              ? dataValue instanceof Date
+                ? dataValue.toISOString()
+                : "[OBJECT]"
+              : String(dataValue).substring(0, 50);
+          console.log(
+            `📊 [DB-CREATE] DataValue for column "${columnName}": ${dataType} = ${preview}`
+          );
+        } else {
+          console.warn(
+            `⚠️ [DB-CREATE] No data found for column "${columnName}". Available keys in preparedData:`,
+            Object.keys(preparedData)
+          );
+          console.warn(
+            `⚠️ [DB-CREATE] Available keys in insertDataRaw:`,
+            Object.keys(insertDataRaw)
+          );
+        }
+
+        // CRITICAL: Final check - if dataValue is still an object, extract or convert
+        if (
+          dataValue !== null &&
+          typeof dataValue === "object" &&
+          !(dataValue instanceof Date) &&
+          !Array.isArray(dataValue)
+        ) {
+          if ("value" in dataValue) {
+            console.warn(
+              `⚠️ [DB-CREATE] Found object in dataValue for column "${columnName}", extracting value property`
+            );
+            dataValue = dataValue.value;
           } else {
-            escapedValues.push(`'${dataValue.replace(/'/g, "''")}'::timestamp`);
+            console.error(
+              `❌ [DB-CREATE] CRITICAL: Object without 'value' property found for column "${columnName}":`,
+              dataValue
+            );
+            // Convert to JSON string as last resort
+            dataValue = JSON.stringify(dataValue);
           }
-        } else {
-          // For other string types, escape normally
-          escapedValues.push(`'${dataValue.replace(/'/g, "''")}'`);
         }
-      } else if (Array.isArray(dataValue)) {
-        // Convert arrays to JSON strings
-        escapedValues.push(`'${JSON.stringify(dataValue).replace(/'/g, "''")}'`);
-      } else {
-        // This should NEVER happen after our checks, but just in case
-        console.error(`❌ [DB-CREATE] UNEXPECTED TYPE for column "${columnName}":`, typeof dataValue, dataValue);
-        const stringValue = JSON.stringify(dataValue);
-        escapedValues.push(`'${stringValue.replace(/'/g, "''")}'`);
+
+        // Prepare the value for insertion (handles dates, arrays, etc.)
+        dataValue = prepareValueForInsert(dataValue);
+
+        insertColumns.push(`"${columnName}"`);
+
+        // CRITICAL: Final validation before SQL escaping
+        // If dataValue is still an object at this point, something went wrong
+        if (
+          dataValue !== null &&
+          dataValue !== undefined &&
+          typeof dataValue === "object" &&
+          !(dataValue instanceof Date) &&
+          !Array.isArray(dataValue)
+        ) {
+          console.error(
+            `❌ [DB-CREATE] CRITICAL ERROR: Object found in dataValue for column "${columnName}" right before SQL escaping!`,
+            dataValue
+          );
+          // Last resort: try to extract value or stringify
+          if ("value" in dataValue) {
+            dataValue = dataValue.value;
+          } else {
+            dataValue = JSON.stringify(dataValue);
+          }
+        }
+
+        // Escape value properly for PostgreSQL
+        if (dataValue === null || dataValue === undefined) {
+          escapedValues.push("NULL");
+        } else if (typeof dataValue === "boolean") {
+          escapedValues.push(dataValue ? "TRUE" : "FALSE");
+        } else if (dataValue instanceof Date) {
+          escapedValues.push(`'${dataValue.toISOString()}'::timestamp`);
+        } else if (typeof dataValue === "number") {
+          escapedValues.push(String(dataValue));
+        } else if (typeof dataValue === "string") {
+          // Check column type to handle TIME values correctly
+          const columnType = columnInfo.type?.toUpperCase() || "";
+          if (columnType === "TIME") {
+            // For TIME type, ensure the value is in HH:MM:SS format
+            // If it's just HH:MM, add :00 for seconds
+            let timeValue = dataValue.trim();
+            if (/^\d{1,2}:\d{2}$/.test(timeValue)) {
+              timeValue = timeValue + ":00";
+            }
+            escapedValues.push(`'${timeValue.replace(/'/g, "''")}'::time`);
+          } else if (columnType === "DATE") {
+            // For DATE type, ensure it's a valid date format
+            escapedValues.push(`'${dataValue.replace(/'/g, "''")}'::date`);
+          } else if (columnType === "TIMESTAMP") {
+            // For TIMESTAMP, try to parse and format correctly
+            // If it's just a time (HH:MM), it's invalid for timestamp
+            if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(dataValue)) {
+              console.error(
+                `❌ [DB-CREATE] Invalid timestamp value "${dataValue}" for column "${columnName}" (looks like TIME, not TIMESTAMP)`
+              );
+              // Try to use current date with the time
+              const today = new Date().toISOString().split("T")[0];
+              escapedValues.push(`'${today} ${dataValue}:00'::timestamp`);
+            } else {
+              escapedValues.push(
+                `'${dataValue.replace(/'/g, "''")}'::timestamp`
+              );
+            }
+          } else {
+            // For other string types, escape normally
+            escapedValues.push(`'${dataValue.replace(/'/g, "''")}'`);
+          }
+        } else if (Array.isArray(dataValue)) {
+          // Convert arrays to JSON strings
+          escapedValues.push(
+            `'${JSON.stringify(dataValue).replace(/'/g, "''")}'`
+          );
+        } else {
+          // This should NEVER happen after our checks, but just in case
+          console.error(
+            `❌ [DB-CREATE] UNEXPECTED TYPE for column "${columnName}":`,
+            typeof dataValue,
+            dataValue
+          );
+          const stringValue = JSON.stringify(dataValue);
+          escapedValues.push(`'${stringValue.replace(/'/g, "''")}'`);
+        }
       }
-    }
 
-        // Add app_id
-        insertColumns.push('"app_id"');
-        escapedValues.push(String(parseInt(appId)));
+      // Add app_id
+      insertColumns.push('"app_id"');
+      escapedValues.push(String(parseInt(appId)));
 
-        return {
-          columns: insertColumns,
-          values: escapedValues
-        };
+      return {
+        columns: insertColumns,
+        values: escapedValues,
       };
-    
-    // Insert all records
+    };
+
+    // Insert all records with duplicate prevention
     const insertedIds = [];
-    console.log(`💾 [DB-CREATE] Starting batch insert of ${recordsToInsert.length} record(s)`);
-    
-    for (let recordIndex = 0; recordIndex < recordsToInsert.length; recordIndex++) {
+    const skippedRecords = [];
+    console.log(
+      `💾 [DB-CREATE] Starting batch insert of ${recordsToInsert.length} record(s)`
+    );
+
+    // Helper function to check for duplicate records
+    const checkForDuplicate = async (preparedData, tableSchema) => {
+      // Try to find a unique identifier field (common patterns: applicationId, id, email, etc.)
+      const possibleUniqueFields = [
+        "applicationid",
+        "application_id",
+        "email",
+        "phonenumber",
+        "phone_number",
+        "id",
+      ];
+
+      for (const uniqueField of possibleUniqueFields) {
+        // Check if this field exists in the table schema
+        const columnInfo = Array.from(tableSchema.entries()).find(
+          ([colName]) => colName.toLowerCase() === uniqueField.toLowerCase()
+        );
+
+        if (columnInfo) {
+          const [columnName] = columnInfo;
+          // Check if we have data for this field
+          const fieldValue = preparedData[columnName] || 
+                           preparedData[uniqueField] ||
+                           Object.keys(preparedData).find(key => 
+                             key.toLowerCase() === uniqueField.toLowerCase()
+                           ) ? preparedData[Object.keys(preparedData).find(key => 
+                             key.toLowerCase() === uniqueField.toLowerCase()
+                           )] : null;
+
+          if (fieldValue !== null && fieldValue !== undefined && fieldValue !== "") {
+            // Check if a record with this value already exists
+            const checkSQL = `SELECT id FROM "${tableName}" WHERE "${columnName}" = $1 LIMIT 1`;
+            const checkResult = await prisma.$queryRawUnsafe(
+              checkSQL,
+              fieldValue
+            );
+
+            if (Array.isArray(checkResult) && checkResult.length > 0) {
+              console.log(
+                `⚠️ [DB-CREATE] Duplicate record found: ${columnName} = ${fieldValue} (existing ID: ${checkResult[0].id})`
+              );
+              return {
+                isDuplicate: true,
+                existingId: checkResult[0].id,
+                duplicateField: columnName,
+                duplicateValue: fieldValue,
+              };
+            }
+          }
+        }
+      }
+
+      return { isDuplicate: false };
+    };
+
+    for (
+      let recordIndex = 0;
+      recordIndex < recordsToInsert.length;
+      recordIndex++
+    ) {
       const recordData = recordsToInsert[recordIndex];
-      console.log(`💾 [DB-CREATE] Processing record ${recordIndex + 1}/${recordsToInsert.length}`);
-      
+      console.log(
+        `💾 [DB-CREATE] Processing record ${recordIndex + 1}/${
+          recordsToInsert.length
+        }`
+      );
+
       // Prepare this record's data
       const preparedData = prepareRecordForInsert(recordData);
-      
+
+      // Check for duplicates before inserting
+      const duplicateCheck = await checkForDuplicate(preparedData, tableSchema);
+      if (duplicateCheck.isDuplicate) {
+        console.log(
+          `⏭️ [DB-CREATE] Skipping duplicate record ${recordIndex + 1} (${duplicateCheck.duplicateField} = ${duplicateCheck.duplicateValue})`
+        );
+        skippedRecords.push({
+          index: recordIndex + 1,
+          reason: "duplicate",
+          duplicateField: duplicateCheck.duplicateField,
+          duplicateValue: duplicateCheck.duplicateValue,
+          existingId: duplicateCheck.existingId,
+        });
+        continue; // Skip this record
+      }
+
       // Build INSERT statement for this record
-      const { columns: insertColumns, values: escapedValues } = buildInsertStatement(preparedData);
-      
+      const { columns: insertColumns, values: escapedValues } =
+        buildInsertStatement(preparedData);
+
       const insertSQL = `INSERT INTO "${tableName}" (${insertColumns.join(
         ", "
       )}) VALUES (${escapedValues.join(", ")}) RETURNING id`;
 
-      console.log(`💾 [DB-CREATE] Insert SQL for record ${recordIndex + 1}:`, insertSQL.substring(0, 200) + "...");
-
-      const insertResult = await prisma.$queryRawUnsafe(insertSQL);
-      const insertedId = insertResult[0]?.id;
-      insertedIds.push(insertedId);
-
       console.log(
-        `✅ [DB-CREATE] Record ${recordIndex + 1} inserted successfully, record ID:`,
-        insertedId
+        `💾 [DB-CREATE] Insert SQL for record ${recordIndex + 1}:`,
+        insertSQL.substring(0, 200) + "..."
       );
+
+      try {
+        const insertResult = await prisma.$queryRawUnsafe(insertSQL);
+        const insertedId = insertResult[0]?.id;
+        insertedIds.push(insertedId);
+
+        console.log(
+          `✅ [DB-CREATE] Record ${
+            recordIndex + 1
+          } inserted successfully, record ID:`,
+          insertedId
+        );
+      } catch (insertError) {
+        // Check if it's a unique constraint violation (PostgreSQL error code 23505)
+        if (insertError.code === "23505" || insertError.message?.includes("duplicate key")) {
+          console.log(
+            `⏭️ [DB-CREATE] Skipping record ${recordIndex + 1} due to unique constraint violation`
+          );
+          skippedRecords.push({
+            index: recordIndex + 1,
+            reason: "unique_constraint",
+            error: insertError.message,
+          });
+        } else {
+          // Re-throw if it's a different error
+          throw insertError;
+        }
+      }
     }
-    
+
     console.log(
-      `✅ [DB-CREATE] All ${insertedIds.length} record(s) inserted successfully. IDs:`,
+      `✅ [DB-CREATE] Insert complete: ${insertedIds.length} record(s) inserted, ${skippedRecords.length} record(s) skipped. IDs:`,
       insertedIds.join(", ")
     );
+
+    if (skippedRecords.length > 0) {
+      console.log(
+        `⚠️ [DB-CREATE] Skipped records:`,
+        skippedRecords.map((r) => `Record ${r.index} (${r.reason})`).join(", ")
+      );
+    }
 
     // Record performance metrics
     const executionTime = Date.now() - startTime;
@@ -1841,17 +2441,25 @@ const executeDbCreate = async (node, context, appId, userId) => {
 
     // Use first inserted ID for backward compatibility
     const firstInsertedId = insertedIds[0];
-    
+
+    const message = skippedRecords.length > 0
+      ? tableCreated
+        ? `Table '${tableName}' created. ${insertedIds.length} record(s) inserted, ${skippedRecords.length} duplicate(s) skipped.`
+        : `${insertedIds.length} record(s) inserted into '${tableName}', ${skippedRecords.length} duplicate(s) skipped.`
+      : tableCreated
+        ? `Table '${tableName}' created and ${insertedIds.length} record(s) inserted (IDs: ${insertedIds.join(", ")})`
+        : `${insertedIds.length} record(s) inserted into '${tableName}' (IDs: ${insertedIds.join(", ")})`;
+
     return {
       success: true,
       tableName,
       recordId: firstInsertedId,
       recordIds: insertedIds, // Array of all inserted IDs
       recordsInserted: insertedIds.length,
+      recordsSkipped: skippedRecords.length,
+      skippedRecords: skippedRecords, // Details about skipped records
       tableCreated,
-      message: tableCreated
-        ? `Table '${tableName}' created and ${insertedIds.length} record(s) inserted (IDs: ${insertedIds.join(", ")})`
-        : `${insertedIds.length} record(s) inserted into '${tableName}' (IDs: ${insertedIds.join(", ")})`,
+      message,
       executionTime,
       context: {
         ...context,
@@ -1863,6 +2471,8 @@ const executeDbCreate = async (node, context, appId, userId) => {
           recordId: firstInsertedId,
           recordIds: insertedIds,
           recordsInserted: insertedIds.length,
+          recordsSkipped: skippedRecords.length,
+          skippedRecords: skippedRecords,
           tableCreated,
           executionTime,
         },
@@ -2139,20 +2749,28 @@ const executeDbUpdate = async (node, context, appId, userId) => {
 
     // Process update data with context substitution
     // Filter out reserved columns (id, created_at, updated_at, app_id) from update data
-    const reservedColumns = ['id', 'created_at', 'updated_at', 'app_id'];
+    const reservedColumns = ["id", "created_at", "updated_at", "app_id"];
     const processedUpdateData = {};
-    console.log(`🔄 [DB-UPDATE] Original updateData keys:`, Object.keys(updateData));
+    console.log(
+      `🔄 [DB-UPDATE] Original updateData keys:`,
+      Object.keys(updateData)
+    );
     for (const [column, value] of Object.entries(updateData)) {
       // Skip reserved columns - they shouldn't be updated
       if (reservedColumns.includes(column.toLowerCase())) {
-        console.log(`⚠️ [DB-UPDATE] Skipping reserved column '${column}' from update data`);
+        console.log(
+          `⚠️ [DB-UPDATE] Skipping reserved column '${column}' from update data`
+        );
         continue;
       }
       // Substitute context variables in value
       const substitutedValue = substituteContextVariables(value, context);
       processedUpdateData[column] = substitutedValue;
     }
-    console.log(`🔄 [DB-UPDATE] Processed updateData keys:`, Object.keys(processedUpdateData));
+    console.log(
+      `🔄 [DB-UPDATE] Processed updateData keys:`,
+      Object.keys(processedUpdateData)
+    );
 
     // ✅ Step 6: Build Safe Query
     const queryBuilder = new SafeQueryBuilder();
@@ -2164,9 +2782,7 @@ const executeDbUpdate = async (node, context, appId, userId) => {
 
     // Automatically update updated_at timestamp if column exists
     // Check if table has updated_at column
-    const hasUpdatedAt = tableSchema.some(
-      (col) => col.name === "updated_at"
-    );
+    const hasUpdatedAt = tableSchema.some((col) => col.name === "updated_at");
     if (hasUpdatedAt && !processedUpdateData.updated_at) {
       // Add updated_at to update data if not already provided
       processedUpdateData.updated_at = new Date();
@@ -2302,18 +2918,22 @@ const executeDbUpsert = async (node, context, appId, userId) => {
 
     // Clean up uniqueFields - remove quotes and ensure they're strings
     if (Array.isArray(uniqueFields)) {
-      uniqueFields = uniqueFields.map((field) => {
-        if (typeof field === "string") {
-          // Remove surrounding quotes if present
-          let cleaned = field.trim();
-          if ((cleaned.startsWith('"') && cleaned.endsWith('"')) || 
-              (cleaned.startsWith("'") && cleaned.endsWith("'"))) {
-            cleaned = cleaned.slice(1, -1);
+      uniqueFields = uniqueFields
+        .map((field) => {
+          if (typeof field === "string") {
+            // Remove surrounding quotes if present
+            let cleaned = field.trim();
+            if (
+              (cleaned.startsWith('"') && cleaned.endsWith('"')) ||
+              (cleaned.startsWith("'") && cleaned.endsWith("'"))
+            ) {
+              cleaned = cleaned.slice(1, -1);
+            }
+            return cleaned;
           }
-          return cleaned;
-        }
-        return String(field).trim();
-      }).filter((f) => f.length > 0);
+          return String(field).trim();
+        })
+        .filter((f) => f.length > 0);
     }
 
     if (typeof updateData === "string") {
@@ -2333,12 +2953,21 @@ const executeDbUpsert = async (node, context, appId, userId) => {
         try {
           const parsed = JSON.parse(trimmed);
           // Ensure it's an object, not an array or primitive
-          if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-            throw new Error("insertData must be a JSON object, not an array or primitive");
+          if (
+            typeof parsed !== "object" ||
+            parsed === null ||
+            Array.isArray(parsed)
+          ) {
+            throw new Error(
+              "insertData must be a JSON object, not an array or primitive"
+            );
           }
           insertData = parsed;
         } catch (error) {
-          console.error("❌ [DB-UPSERT] Failed to parse insertData:", error.message);
+          console.error(
+            "❌ [DB-UPSERT] Failed to parse insertData:",
+            error.message
+          );
           console.error("❌ [DB-UPSERT] insertData value:", insertData);
           throw new Error(
             `Invalid JSON in insertData: ${error.message}. Please provide valid JSON object.`
@@ -2350,9 +2979,18 @@ const executeDbUpsert = async (node, context, appId, userId) => {
     }
 
     // Validate insertData is an object
-    if (insertData && (typeof insertData !== "object" || Array.isArray(insertData))) {
-      console.error("❌ [DB-UPSERT] insertData is not an object:", typeof insertData, insertData);
-      throw new Error("insertData must be an object, not an array or primitive");
+    if (
+      insertData &&
+      (typeof insertData !== "object" || Array.isArray(insertData))
+    ) {
+      console.error(
+        "❌ [DB-UPSERT] insertData is not an object:",
+        typeof insertData,
+        insertData
+      );
+      throw new Error(
+        "insertData must be an object, not an array or primitive"
+      );
     }
 
     // Ensure insertData is initialized
@@ -2367,12 +3005,21 @@ const executeDbUpsert = async (node, context, appId, userId) => {
         try {
           const parsed = JSON.parse(trimmed);
           // Ensure it's an object, not an array or primitive
-          if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-            throw new Error("updateData must be a JSON object, not an array or primitive");
+          if (
+            typeof parsed !== "object" ||
+            parsed === null ||
+            Array.isArray(parsed)
+          ) {
+            throw new Error(
+              "updateData must be a JSON object, not an array or primitive"
+            );
           }
           updateData = parsed;
         } catch (error) {
-          console.error("❌ [DB-UPSERT] Failed to parse updateData:", error.message);
+          console.error(
+            "❌ [DB-UPSERT] Failed to parse updateData:",
+            error.message
+          );
           throw new Error(
             `Invalid JSON in updateData: ${error.message}. Please provide valid JSON object.`
           );
@@ -2383,8 +3030,13 @@ const executeDbUpsert = async (node, context, appId, userId) => {
     }
 
     // Validate updateData is an object
-    if (updateData && (typeof updateData !== "object" || Array.isArray(updateData))) {
-      throw new Error("updateData must be an object, not an array or primitive");
+    if (
+      updateData &&
+      (typeof updateData !== "object" || Array.isArray(updateData))
+    ) {
+      throw new Error(
+        "updateData must be an object, not an array or primitive"
+      );
     }
 
     // Ensure updateData is initialized
@@ -2406,7 +3058,9 @@ const executeDbUpsert = async (node, context, appId, userId) => {
     );
     if (invalidFields.length > 0) {
       throw new Error(
-        `Invalid unique fields: ${invalidFields.join(", ")}. Unique fields must be column names or JSONB paths (e.g., "email" or "data->>'applicationId'"), not just numbers.`
+        `Invalid unique fields: ${invalidFields.join(
+          ", "
+        )}. Unique fields must be column names or JSONB paths (e.g., "email" or "data->>'applicationId'"), not just numbers.`
       );
     }
 
@@ -2443,7 +3097,7 @@ const executeDbUpsert = async (node, context, appId, userId) => {
     // Check if table exists - throw error if it doesn't (no auto-creation)
     const tableExists = await dbUtils.tableExists(tableName);
     console.log(`🔍 [DB-UPSERT] Table existence check: ${tableExists}`);
-    
+
     if (!tableExists) {
       // Verify with direct query to be sure
       try {
@@ -2451,7 +3105,7 @@ const executeDbUpsert = async (node, context, appId, userId) => {
         // If query succeeds, table exists
         console.log(`✅ [DB-UPSERT] Table ${tableName} verified to exist`);
       } catch (error) {
-        if (error.code === '42P01') {
+        if (error.code === "42P01") {
           // Table doesn't exist - throw error
           throw new Error(
             `Table "${tableName}" does not exist. Please create the table first before using db.upsert.`
@@ -2469,10 +3123,12 @@ const executeDbUpsert = async (node, context, appId, userId) => {
         await prisma.$queryRawUnsafe(`SELECT 1 FROM "${tableName}" LIMIT 1`);
         console.log(`✅ [DB-UPSERT] Table ${tableName} verified to exist`);
       } catch (error) {
-        console.error(`❌ [DB-UPSERT] Table check said exists but query failed: ${error.message}`);
+        console.error(
+          `❌ [DB-UPSERT] Table check said exists but query failed: ${error.message}`
+        );
         throw new Error(
           `Table "${tableName}" appears to exist but cannot be queried. Error: ${error.message}. ` +
-          `Please check: 1) Table name is correct, 2) Table is in 'public' schema, 3) Database connection has proper permissions.`
+            `Please check: 1) Table name is correct, 2) Table is in 'public' schema, 3) Database connection has proper permissions.`
         );
       }
     }
@@ -2481,95 +3137,133 @@ const executeDbUpsert = async (node, context, appId, userId) => {
     let tableSchema = [];
     try {
       tableSchema = await dbUtils.discoverTableSchema(tableName);
-      console.log(`🔍 [DB-UPSERT] Discovered table schema with ${tableSchema.length} columns`);
+      console.log(
+        `🔍 [DB-UPSERT] Discovered table schema with ${tableSchema.length} columns`
+      );
     } catch (error) {
-      console.log(`⚠️ [DB-UPSERT] Could not discover table schema: ${error.message}`);
+      console.log(
+        `⚠️ [DB-UPSERT] Could not discover table schema: ${error.message}`
+      );
     }
 
     // Build WHERE clause for checking existence using unique fields
     const queryBuilder = new SafeQueryBuilder();
-    console.log(`🔍 [DB-UPSERT] Building WHERE clause with uniqueFields:`, uniqueFields);
-    console.log(`🔍 [DB-UPSERT] processedInsertData keys:`, Object.keys(processedInsertData));
-    console.log(`🔍 [DB-UPSERT] processedUpdateData keys:`, Object.keys(processedUpdateData));
-    
+    console.log(
+      `🔍 [DB-UPSERT] Building WHERE clause with uniqueFields:`,
+      uniqueFields
+    );
+    console.log(
+      `🔍 [DB-UPSERT] processedInsertData keys:`,
+      Object.keys(processedInsertData)
+    );
+    console.log(
+      `🔍 [DB-UPSERT] processedUpdateData keys:`,
+      Object.keys(processedUpdateData)
+    );
+
     for (const field of uniqueFields) {
       // Clean the field name (remove any remaining quotes)
-      const cleanField = field.replace(/^["']|["']$/g, '');
-      let value = processedInsertData[cleanField] || processedUpdateData[cleanField];
-      
-      console.log(`🔍 [DB-UPSERT] Looking for field "${cleanField}" (original: "${field}"), value:`, value);
-      
+      const cleanField = field.replace(/^["']|["']$/g, "");
+      let value =
+        processedInsertData[cleanField] || processedUpdateData[cleanField];
+
+      console.log(
+        `🔍 [DB-UPSERT] Looking for field "${cleanField}" (original: "${field}"), value:`,
+        value
+      );
+
       if (value !== undefined && value !== null) {
         // Check if this is a JSONB field path (e.g., "data->>'applicationId'")
         if (field.includes("->>") || field.includes("->")) {
           // JSONB field path - use raw condition
           // Extract the value from nested data if needed
           let actualValue = value;
-          
+
           // If field is like "data->>'applicationId'" and value is in processedInsertData["data"]
           // we need to extract it from the nested object
           if (field.startsWith("data->>") || field.startsWith("data->")) {
             const jsonbKey = field.split("'")[1] || field.split('"')[1]; // Extract key from data->>'key'
-            if (processedInsertData.data && typeof processedInsertData.data === 'object') {
+            if (
+              processedInsertData.data &&
+              typeof processedInsertData.data === "object"
+            ) {
               actualValue = processedInsertData.data[jsonbKey];
-            } else if (processedUpdateData.data && typeof processedUpdateData.data === 'object') {
+            } else if (
+              processedUpdateData.data &&
+              typeof processedUpdateData.data === "object"
+            ) {
               actualValue = processedUpdateData.data[jsonbKey];
             }
           }
-          
+
           const paramPlaceholder = queryBuilder.addParam(actualValue);
           queryBuilder.addWhereRaw(`${field} = ${paramPlaceholder}`);
         } else {
           // Regular column - check type and cast if needed
           // Use cleanField for schema lookup
           const columnInfo = tableSchema.find((col) => col.name === cleanField);
-          
+
           if (columnInfo) {
             // Convert value to match column type
             const columnType = columnInfo.type.toLowerCase();
-            
-            if (columnType.includes('int') || columnType.includes('serial') || columnType.includes('bigint')) {
+
+            if (
+              columnType.includes("int") ||
+              columnType.includes("serial") ||
+              columnType.includes("bigint")
+            ) {
               // Integer types - convert string to number
-              if (typeof value === 'string') {
+              if (typeof value === "string") {
                 const numValue = parseInt(value, 10);
                 if (!isNaN(numValue)) {
                   value = numValue;
-                  console.log(`🔧 [DB-UPSERT] Converted ${field} from string "${processedInsertData[field] || processedUpdateData[field]}" to integer ${value}`);
+                  console.log(
+                    `🔧 [DB-UPSERT] Converted ${field} from string "${
+                      processedInsertData[field] || processedUpdateData[field]
+                    }" to integer ${value}`
+                  );
                 }
               }
-            } else if (columnType.includes('numeric') || columnType.includes('decimal') || columnType.includes('real') || columnType.includes('double')) {
+            } else if (
+              columnType.includes("numeric") ||
+              columnType.includes("decimal") ||
+              columnType.includes("real") ||
+              columnType.includes("double")
+            ) {
               // Numeric types - convert string to number
-              if (typeof value === 'string') {
+              if (typeof value === "string") {
                 const numValue = parseFloat(value);
                 if (!isNaN(numValue)) {
                   value = numValue;
                 }
               }
-            } else if (columnType === 'boolean') {
+            } else if (columnType === "boolean") {
               // Boolean type
-              if (typeof value === 'string') {
-                value = value.toLowerCase() === 'true' || value === '1';
+              if (typeof value === "string") {
+                value = value.toLowerCase() === "true" || value === "1";
               }
             }
           }
-          
+
           // Use standard condition with properly typed value (use cleanField)
           queryBuilder.addWhere(cleanField, "=", value);
         }
       } else {
-        console.warn(`⚠️ [DB-UPSERT] No value found for unique field "${cleanField}" in insertData or updateData`);
+        console.warn(
+          `⚠️ [DB-UPSERT] No value found for unique field "${cleanField}" in insertData or updateData`
+        );
       }
     }
-    
+
     // Verify WHERE clause was built
     const whereClause = queryBuilder.buildWhereClause();
     if (!whereClause) {
       throw new Error(
         `No WHERE conditions could be built from unique fields. ` +
-        `Make sure the unique field values exist in your Insert Data or Update Data. ` +
-        `Unique fields: ${uniqueFields.join(", ")}, ` +
-        `Insert Data keys: ${Object.keys(processedInsertData).join(", ")}, ` +
-        `Update Data keys: ${Object.keys(processedUpdateData).join(", ")}`
+          `Make sure the unique field values exist in your Insert Data or Update Data. ` +
+          `Unique fields: ${uniqueFields.join(", ")}, ` +
+          `Insert Data keys: ${Object.keys(processedInsertData).join(", ")}, ` +
+          `Update Data keys: ${Object.keys(processedUpdateData).join(", ")}`
       );
     }
 
@@ -2577,7 +3271,7 @@ const executeDbUpsert = async (node, context, appId, userId) => {
     try {
       await prisma.$queryRawUnsafe(`SELECT 1 FROM "${tableName}" LIMIT 1`);
     } catch (error) {
-      if (error.code === '42P01') {
+      if (error.code === "42P01") {
         throw new Error(
           `Table "${tableName}" does not exist. Please create the table first or ensure the table name is correct.`
         );
@@ -2592,17 +3286,14 @@ const executeDbUpsert = async (node, context, appId, userId) => {
       "🔄 [DB-UPSERT] Checking if record exists with query:",
       selectQuery
     );
-    console.log(
-      "🔄 [DB-UPSERT] Query params:",
-      selectParams
-    );
+    console.log("🔄 [DB-UPSERT] Query params:", selectParams);
 
     let existingRecords;
     try {
       existingRecords = await prisma.$queryRawUnsafe(
-      selectQuery,
-      ...selectParams
-    );
+        selectQuery,
+        ...selectParams
+      );
     } catch (error) {
       console.error("❌ [DB-UPSERT] Query error:", error);
       throw new Error(
@@ -2618,9 +3309,10 @@ const executeDbUpsert = async (node, context, appId, userId) => {
       console.log("🔄 [DB-UPSERT] Record exists, performing UPDATE");
 
       // If updateData is empty, use insertData for update (as per hint in UI)
-      const dataToUpdate = Object.keys(processedUpdateData).length > 0 
-        ? processedUpdateData 
-        : processedInsertData;
+      const dataToUpdate =
+        Object.keys(processedUpdateData).length > 0
+          ? processedUpdateData
+          : processedInsertData;
 
       if (Object.keys(dataToUpdate).length === 0) {
         throw new Error(
@@ -2630,26 +3322,28 @@ const executeDbUpsert = async (node, context, appId, userId) => {
 
       // Remove unique fields and reserved columns from update data
       // Reserved columns: id, created_at, updated_at, app_id (they're auto-managed)
-      const reservedColumns = ['id', 'created_at', 'updated_at', 'app_id'];
+      const reservedColumns = ["id", "created_at", "updated_at", "app_id"];
       const updateDataWithoutUniqueFields = { ...dataToUpdate };
-      
+
       // Remove unique fields (they're used in WHERE clause, not SET)
       for (const field of uniqueFields) {
         // Clean the field name (remove quotes)
-        const cleanField = field.replace(/^["']|["']$/g, '');
+        const cleanField = field.replace(/^["']|["']$/g, "");
         // Handle JSONB paths - extract just the field name
-        const fieldName = field.includes("->>") 
+        const fieldName = field.includes("->>")
           ? field.split("'")[1] || field.split('"')[1] || cleanField
           : cleanField;
         delete updateDataWithoutUniqueFields[fieldName];
         // Also try removing the full JSONB path if it exists
         delete updateDataWithoutUniqueFields[field];
       }
-      
+
       // Remove reserved columns (they shouldn't be updated)
       for (const reservedCol of reservedColumns) {
         if (updateDataWithoutUniqueFields.hasOwnProperty(reservedCol)) {
-          console.log(`⚠️ [DB-UPSERT] Removing reserved column '${reservedCol}' from update data`);
+          console.log(
+            `⚠️ [DB-UPSERT] Removing reserved column '${reservedCol}' from update data`
+          );
           delete updateDataWithoutUniqueFields[reservedCol];
         }
       }
@@ -2659,11 +3353,13 @@ const executeDbUpsert = async (node, context, appId, userId) => {
           tableName,
           updateData: updateDataWithoutUniqueFields,
           whereConditions: uniqueFields.map((field) => {
-            const cleanField = field.replace(/^["']|["']$/g, '');
+            const cleanField = field.replace(/^["']|["']$/g, "");
             return {
               field: cleanField,
-            operator: "=",
-              value: processedInsertData[cleanField] || processedUpdateData[cleanField],
+              operator: "=",
+              value:
+                processedInsertData[cleanField] ||
+                processedUpdateData[cleanField],
             };
           }),
           returnUpdatedRecords: returnRecord,
@@ -2725,7 +3421,7 @@ const executeDbUpsert = async (node, context, appId, userId) => {
 
       result = {
         success: true,
-          tableName,
+        tableName,
         recordId: insertedId,
         tableCreated: false,
         columnsInserted: insertColumns.length - 1, // Exclude app_id
@@ -3636,9 +4332,11 @@ const executeAuthVerify = async (node, context, appId, userId) => {
     }
 
     const roleSet = new Set();
-    if (Array.isArray(decoded?.roles)) decoded.roles.forEach((r) => r && roleSet.add(r));
+    if (Array.isArray(decoded?.roles))
+      decoded.roles.forEach((r) => r && roleSet.add(r));
     if (decoded?.role) roleSet.add(decoded.role);
-    if (Array.isArray(dbUser?.roles)) dbUser.roles.forEach((r) => r && roleSet.add(r));
+    if (Array.isArray(dbUser?.roles))
+      dbUser.roles.forEach((r) => r && roleSet.add(r));
     if (dbUser?.role) roleSet.add(dbUser.role);
     if (Array.isArray(context.user?.roles))
       context.user.roles.forEach((r) => r && roleSet.add(r));
@@ -3670,7 +4368,10 @@ const executeAuthVerify = async (node, context, appId, userId) => {
       email: dbUser.email,
       name: resolvedName,
       role: resolvedRoles[0] || dbUser.role || decoded?.role || null,
-      roles: resolvedRoles.length > 0 ? resolvedRoles : [dbUser.role].filter(Boolean),
+      roles:
+        resolvedRoles.length > 0
+          ? resolvedRoles
+          : [dbUser.role].filter(Boolean),
       verified: dbUser.verified,
       createdAt: dbUser.createdAt,
       updatedAt: dbUser.updatedAt,
@@ -3741,7 +4442,7 @@ const executeAuthVerify = async (node, context, appId, userId) => {
 
     return {
       success: isAuthorized,
-        isAuthenticated: true,
+      isAuthenticated: true,
       isAuthorized,
       failureReason: authVerifyResult.failureReason,
       user: sanitizedUser,
@@ -4207,6 +4908,282 @@ const executeAiSummarize = async (node, context, appId, userId) => {
   }
 };
 
+// File Upload action block handler
+const executeFileUpload = async (node, context, appId, userId) => {
+  try {
+    console.log(
+      "📤 [FILE-UPLOAD] Processing file upload action for app:",
+      appId
+    );
+
+    // Validate app access
+    const hasAccess = await securityValidator.validateAppAccess(
+      appId,
+      userId,
+      prisma
+    );
+    if (!hasAccess) {
+      throw new Error("Access denied to this app");
+    }
+
+    const config = node.data || {};
+    const {
+      fileUploadElementId,
+      fileUploadOutputVariable,
+      allowedFileTypes,
+      fileUploadMaxSizeMB,
+    } = config;
+
+    // Try to resolve file data from several possible context locations
+    let fileData = null;
+
+    if (fileUploadElementId) {
+      fileData =
+        (context.uploadedFiles && context.uploadedFiles[fileUploadElementId]) ||
+        context[fileUploadElementId] ||
+        (context.formData && context.formData[fileUploadElementId]) ||
+        null;
+    }
+
+    // Fallback to output variable if provided
+    if (!fileData && fileUploadOutputVariable) {
+      fileData = context[fileUploadOutputVariable] || null;
+    }
+
+    if (!fileData) {
+      throw new Error(
+        "No file found for file.upload. Ensure a file was uploaded and referenced by the configured element or variable."
+      );
+    }
+
+    // If the client already uploaded the file, metadata should include path/url/filename
+    const fileMeta = {
+      id: fileData.id || fileData.mediaId || null,
+      filename: fileData.filename || fileData.originalName || fileData.name,
+      url:
+        fileData.url ||
+        (fileData.filename
+          ? `/api/media/files/${fileData.filename}`
+          : undefined),
+      mimeType: fileData.mimeType || fileData.mimetype || fileData.type,
+      size: fileData.size || fileData.length || null,
+      path: fileData.path || null,
+    };
+
+    // Basic validation: file type and size if configured
+    if (allowedFileTypes && fileMeta.mimeType) {
+      const allowed = String(allowedFileTypes)
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (allowed.length > 0) {
+        const matches = allowed.some((a) => fileMeta.mimeType.includes(a));
+        if (!matches) {
+          throw new Error(
+            `Uploaded file type '${fileMeta.mimeType}' is not allowed by block configuration`
+          );
+        }
+      }
+    }
+
+    if (fileUploadMaxSizeMB && fileMeta.size) {
+      const maxBytes = parseFloat(fileUploadMaxSizeMB) * 1024 * 1024;
+      if (fileMeta.size > maxBytes) {
+        throw new Error(
+          `Uploaded file size ${fileMeta.size} exceeds configured limit of ${fileUploadMaxSizeMB}MB`
+        );
+      }
+    }
+
+    // Prepare result context variable name
+    const outVar =
+      fileUploadOutputVariable || fileUploadElementId || "lastUploadedFile";
+
+    const resultContext = {
+      [outVar]: fileMeta,
+      lastUploadedFile: fileMeta,
+    };
+
+    console.log(
+      "📤 [FILE-UPLOAD] File processed:",
+      fileMeta.filename || fileMeta.url
+    );
+
+    return {
+      success: true,
+      type: "fileUpload",
+      message: "File resolved for workflow",
+      file: fileMeta,
+      context: resultContext,
+    };
+  } catch (error) {
+    console.error("❌ [FILE-UPLOAD] Error:", error.message);
+    return {
+      success: false,
+      type: "fileUpload",
+      error: error.message,
+      context: context,
+    };
+  }
+};
+
+// File Download action block handler
+const executeFileDownload = async (node, context, appId, userId) => {
+  try {
+    console.log(
+      "📥 [FILE-DOWNLOAD] Processing file download action for app:",
+      appId
+    );
+
+    // Validate app access
+    const hasAccess = await securityValidator.validateAppAccess(
+      appId,
+      userId,
+      prisma
+    );
+    if (!hasAccess) {
+      throw new Error("Access denied to this app");
+    }
+
+    const config = node.data || {};
+    const {
+      downloadSourceType = "url",
+      downloadUrl,
+      downloadContextKey,
+      downloadPath,
+      downloadFileName,
+      downloadMimeType,
+    } = config;
+
+    let resolvedUrl = null;
+    let fileName = downloadFileName || "download";
+    let mimeType = downloadMimeType || undefined;
+
+    if (downloadSourceType === "url") {
+      if (!downloadUrl) {
+        throw new Error("No download URL configured");
+      }
+      resolvedUrl = substituteContextVariables(downloadUrl, context);
+
+      // Basic SSRF safety checks reuse logic from HTTP request
+      let urlObj;
+      try {
+        urlObj = new URL(resolvedUrl);
+      } catch (e) {
+        throw new Error("Invalid download URL format");
+      }
+
+      const blockedHosts = [
+        "localhost",
+        "127.0.0.1",
+        "0.0.0.0",
+        "::1",
+        "169.254.169.254",
+      ];
+      if (blockedHosts.includes(urlObj.hostname.toLowerCase())) {
+        throw new Error("Access to localhost/internal hosts is not allowed");
+      }
+
+      if (urlObj.port) {
+        const blockedPorts = [22, 23, 25, 3306, 5432, 6379, 27017];
+        if (blockedPorts.includes(parseInt(urlObj.port))) {
+          throw new Error(`Access to port ${urlObj.port} is not allowed`);
+        }
+      }
+
+      fileName = downloadFileName || path.basename(urlObj.pathname) || fileName;
+    } else if (downloadSourceType === "context") {
+      if (!downloadContextKey) {
+        throw new Error("No context key configured for download source");
+      }
+      const fileObj =
+        context[downloadContextKey] ||
+        (context.uploadedFiles && context.uploadedFiles[downloadContextKey]);
+      if (!fileObj) {
+        throw new Error(
+          `No file found in context under key '${downloadContextKey}'`
+        );
+      }
+
+      if (fileObj.url) {
+        resolvedUrl = fileObj.url;
+      } else if (fileObj.filename) {
+        resolvedUrl = `/api/media/files/${fileObj.filename}`;
+      } else if (fileObj.path) {
+        // Try to find media record by path
+        const mediaRec = await prisma.mediaFile.findFirst({
+          where: { path: fileObj.path },
+        });
+        if (mediaRec && mediaRec.filename) {
+          resolvedUrl = `/api/media/files/${mediaRec.filename}`;
+        } else {
+          throw new Error("File path provided but media record not found");
+        }
+      } else {
+        throw new Error(
+          "Context file object does not contain a usable URL or filename"
+        );
+      }
+
+      fileName =
+        downloadFileName ||
+        fileObj.originalName ||
+        fileObj.filename ||
+        fileName;
+      mimeType = mimeType || fileObj.mimeType || fileObj.mimetype;
+    } else if (downloadSourceType === "path") {
+      if (!downloadPath) {
+        throw new Error("No server path configured for download");
+      }
+      // If a server path is provided, attempt to locate corresponding media record
+      const mediaRec = await prisma.mediaFile.findFirst({
+        where: { path: downloadPath },
+      });
+      if (!mediaRec) {
+        throw new Error("No media record found for provided path");
+      }
+      if (!mediaRec.filename) {
+        throw new Error(
+          "Media record does not include a filename for URL construction"
+        );
+      }
+      resolvedUrl = `/api/media/files/${mediaRec.filename}`;
+      fileName = downloadFileName || mediaRec.originalName || mediaRec.filename;
+      mimeType = mimeType || mediaRec.mimeType;
+    } else {
+      throw new Error(`Unknown downloadSourceType: ${downloadSourceType}`);
+    }
+
+    console.log("📥 [FILE-DOWNLOAD] Resolved download URL:", resolvedUrl);
+
+    return {
+      success: true,
+      type: "download",
+      download: {
+        url: resolvedUrl,
+        fileName,
+        mimeType,
+      },
+      context: {
+        ...context,
+        lastDownload: {
+          url: resolvedUrl,
+          fileName,
+          mimeType,
+        },
+      },
+    };
+  } catch (error) {
+    console.error("❌ [FILE-DOWNLOAD] Error:", error.message);
+    return {
+      success: false,
+      type: "download",
+      error: error.message,
+      context: context,
+    };
+  }
+};
+
 // Match block handler
 const executeMatch = async (node, context, appId, userId) => {
   try {
@@ -4359,39 +5336,53 @@ const executeAuditLog = async (node, context, appId, userId) => {
     // Also check absolute paths from __dirname
     const cwd = process.cwd();
     const possibleLogDirs = [
-      path.resolve(cwd, "server", "logs"),                    // server/logs (relative to cwd)
-      path.resolve(cwd, "server", "server", "logs"),        // server/server/logs (relative to cwd)
-      path.join(__dirname, "..", "logs"),                    // server/logs (from __dirname)
-      path.join(__dirname, "..", "server", "logs"),          // server/server/logs (from __dirname)
-      path.resolve(cwd, "logs"),                             // logs (project root)
-      path.join(__dirname, "..", "..", "logs"),              // logs (from __dirname)
+      path.resolve(cwd, "server", "logs"), // server/logs (relative to cwd)
+      path.resolve(cwd, "server", "server", "logs"), // server/server/logs (relative to cwd)
+      path.join(__dirname, "..", "logs"), // server/logs (from __dirname)
+      path.join(__dirname, "..", "server", "logs"), // server/server/logs (from __dirname)
+      path.resolve(cwd, "logs"), // logs (project root)
+      path.join(__dirname, "..", "..", "logs"), // logs (from __dirname)
     ];
-    
-    console.log(`📋 [AUDIT-LOG] Searching for log files. CWD: ${cwd}, __dirname: ${__dirname}`);
+
+    console.log(
+      `📋 [AUDIT-LOG] Searching for log files. CWD: ${cwd}, __dirname: ${__dirname}`
+    );
     console.log(`📋 [AUDIT-LOG] Checking directories:`, possibleLogDirs);
-    
+
     let logFilePath = null;
-    
+
     // First, try to find audit.log
     for (const logDir of possibleLogDirs) {
       const testPath = path.join(logDir, logFileName);
-      console.log(`📋 [AUDIT-LOG] Checking: ${testPath} (exists: ${fs.existsSync(testPath)})`);
+      console.log(
+        `📋 [AUDIT-LOG] Checking: ${testPath} (exists: ${fs.existsSync(
+          testPath
+        )})`
+      );
       if (fs.existsSync(testPath)) {
         logFilePath = testPath;
-        console.log(`📋 [AUDIT-LOG] ✅ Found ${logFileName} at: ${logFilePath}`);
+        console.log(
+          `📋 [AUDIT-LOG] ✅ Found ${logFileName} at: ${logFilePath}`
+        );
         break;
       }
     }
-    
+
     // If audit.log not found and we're looking for audit.log, try auth.log
     if (!logFilePath && logFileName === "audit.log") {
       console.log(`📋 [AUDIT-LOG] audit.log not found, trying auth.log...`);
       for (const logDir of possibleLogDirs) {
         const authLogPath = path.join(logDir, "auth.log");
-        console.log(`📋 [AUDIT-LOG] Checking: ${authLogPath} (exists: ${fs.existsSync(authLogPath)})`);
+        console.log(
+          `📋 [AUDIT-LOG] Checking: ${authLogPath} (exists: ${fs.existsSync(
+            authLogPath
+          )})`
+        );
         if (fs.existsSync(authLogPath)) {
           logFilePath = authLogPath;
-          console.log(`📋 [AUDIT-LOG] ✅ Found auth.log at: ${authLogPath} (using as fallback)`);
+          console.log(
+            `📋 [AUDIT-LOG] ✅ Found auth.log at: ${authLogPath} (using as fallback)`
+          );
           break;
         }
       }
@@ -4425,7 +5416,7 @@ const executeAuditLog = async (node, context, appId, userId) => {
     // Parse log entries
     const parsedLogs = [];
     const isAuthLog = logFilePath.includes("auth.log");
-    
+
     for (const line of logLines) {
       try {
         const logEntry = {
@@ -4446,7 +5437,7 @@ const executeAuditLog = async (node, context, appId, userId) => {
             logEntry.timestamp = line.substring(0, timestampEnd + 1).trim();
             const message = line.substring(timestampEnd + 2).trim();
           }
-          
+
           // Extract action and details from message
           if (message.includes("Login success")) {
             logEntry.action = "LOGIN_SUCCESS";
@@ -4459,11 +5450,14 @@ const executeAuditLog = async (node, context, appId, userId) => {
           } else {
             logEntry.action = message.split(" ")[0] || "UNKNOWN";
           }
-          
+
           logEntry.message = message;
-          
+
           // Ensure timestamp is valid ISO format
-          if (!logEntry.timestamp.endsWith("Z") && !logEntry.timestamp.includes("T")) {
+          if (
+            !logEntry.timestamp.endsWith("Z") &&
+            !logEntry.timestamp.includes("T")
+          ) {
             // Try to parse as date and convert to ISO
             try {
               const date = new Date(logEntry.timestamp);
@@ -4545,9 +5539,15 @@ const executeAuditLog = async (node, context, appId, userId) => {
           try {
             const date = new Date(log.timestamp).toLocaleString();
             if (isAuthLog) {
-              return `[${date}] ${log.action || "UNKNOWN"} | ${log.message || log.raw}`;
+              return `[${date}] ${log.action || "UNKNOWN"} | ${
+                log.message || log.raw
+              }`;
             } else {
-              return `[${date}] ${log.action || "UNKNOWN"} | App: ${log.appId || "N/A"} | Record: ${log.recordId || "N/A"} | User: ${log.userId || "N/A"} | Status: ${log.status || "N/A"}`;
+              return `[${date}] ${log.action || "UNKNOWN"} | App: ${
+                log.appId || "N/A"
+              } | Record: ${log.recordId || "N/A"} | User: ${
+                log.userId || "N/A"
+              } | Status: ${log.status || "N/A"}`;
             }
           } catch (e) {
             return log.raw;
@@ -4635,12 +5635,12 @@ const executeInList = async (node, context, appId, userId) => {
         ? substitutedValue.trim()
         : substitutedValue;
 
-  console.log("📋 [IN-LIST] Value resolution:", {
-    rawValue,
-    substitutedValue,
-    preparedValue,
-    hasFormData: Boolean(context?.formData),
-  });
+    console.log("📋 [IN-LIST] Value resolution:", {
+      rawValue,
+      substitutedValue,
+      preparedValue,
+      hasFormData: Boolean(context?.formData),
+    });
 
     const normalizeText = (value) => {
       if (value === undefined || value === null) {
@@ -5152,20 +6152,24 @@ const verifyHmacSignature = (payload, providedSignature, secret) => {
   try {
     if (!providedSignature || !secret) return false;
 
-    const crypto = require('crypto');
-    const payloadString = typeof payload === 'string' ? payload : JSON.stringify(payload);
+    const crypto = require("crypto");
+    const payloadString =
+      typeof payload === "string" ? payload : JSON.stringify(payload);
 
     // Allow headers like 'sha256=...' or raw hex
-    let expectedPrefix = 'sha256=';
+    let expectedPrefix = "sha256=";
     let provided = providedSignature;
-    if (provided.startsWith('sha256=')) provided = provided.slice(7);
+    if (provided.startsWith("sha256=")) provided = provided.slice(7);
 
-    const hmac = crypto.createHmac('sha256', secret).update(payloadString).digest('hex');
+    const hmac = crypto
+      .createHmac("sha256", secret)
+      .update(payloadString)
+      .digest("hex");
 
-    const a = Buffer.from(hmac, 'hex');
+    const a = Buffer.from(hmac, "hex");
     let b;
     try {
-      b = Buffer.from(provided, 'hex');
+      b = Buffer.from(provided, "hex");
     } catch (e) {
       // Provided signature not hex - fail
       return false;
@@ -5466,7 +6470,6 @@ const verifyHmacSignature = (payload, providedSignature, secret) => {
 //   }
 // }
 
-
 async function executeRoleIs(node, context, appId, userId) {
   try {
     console.log("🔐 [ROLE-IS] Executing role check...");
@@ -5478,7 +6481,7 @@ async function executeRoleIs(node, context, appId, userId) {
       checkMultiple = false,
       userEmail,
       userPassword,
-      customRole
+      customRole,
     } = node.data || {};
 
     // ================== USER CREATION (if credentials provided) ==================
@@ -5488,7 +6491,7 @@ async function executeRoleIs(node, context, appId, userId) {
     if (userEmail && userPassword) {
       try {
         console.log("👤 [ROLE-IS] Creating new AppUser with credentials...");
-        
+
         // Check if AppUser table exists by trying a safe query first
         try {
           // Check if user already exists for this app
@@ -5500,15 +6503,17 @@ async function executeRoleIs(node, context, appId, userId) {
           });
 
           if (existingAppUser) {
-            console.log("⚠️ [ROLE-IS] AppUser already exists, using existing user");
+            console.log(
+              "⚠️ [ROLE-IS] AppUser already exists, using existing user"
+            );
             createdAppUserId = existingAppUser.id;
-            
+
             // Get existing user's roles
             const userRoles = await prisma.appUserRole.findMany({
               where: { appUserId: existingAppUser.id },
               include: { appRole: true },
             });
-            
+
             if (userRoles.length > 0) {
               createdUserRole = userRoles[0].appRole.slug;
             }
@@ -5519,7 +6524,10 @@ async function executeRoleIs(node, context, appId, userId) {
 
             // Determine role to assign (customRole or requiredRole)
             const roleToAssign = customRole || requiredRole || "user";
-            const roleSlug = roleToAssign.trim().toLowerCase().replace(/\s+/g, "-");
+            const roleSlug = roleToAssign
+              .trim()
+              .toLowerCase()
+              .replace(/\s+/g, "-");
 
             // Find or create role
             let appRole = await prisma.appRole.findFirst({
@@ -5534,7 +6542,9 @@ async function executeRoleIs(node, context, appId, userId) {
               appRole = await prisma.appRole.create({
                 data: {
                   appId: Number(appId),
-                  name: roleToAssign.charAt(0).toUpperCase() + roleToAssign.slice(1),
+                  name:
+                    roleToAssign.charAt(0).toUpperCase() +
+                    roleToAssign.slice(1),
                   slug: roleSlug,
                   description: `Auto-created role: ${roleToAssign}`,
                   isPredefined: false,
@@ -5566,8 +6576,10 @@ async function executeRoleIs(node, context, appId, userId) {
             });
 
             createdUserRole = appRole.slug;
-            console.log(`✅ [ROLE-IS] Created AppUser ${appUser.id} with role ${roleSlug}`);
-            
+            console.log(
+              `✅ [ROLE-IS] Created AppUser ${appUser.id} with role ${roleSlug}`
+            );
+
             // Assign page access if requiredPages are specified
             if (requiredPages && requiredPages.length > 0 && appUser.id) {
               try {
@@ -5577,20 +6589,24 @@ async function executeRoleIs(node, context, appId, userId) {
                     appId: Number(appId),
                   },
                 });
-                
+
                 // Match requiredPages (could be page IDs like "page-1" or slugs)
                 const matchedPages = allAppPages.filter((page) => {
                   // Check if slug matches
                   if (requiredPages.includes(page.slug)) return true;
                   // Check if page ID from canvas matches (e.g., "page-1" matches page with slug "page-1" or name "Page 1")
-                  const pageIdFromCanvas = page.slug.startsWith('page-') ? page.slug : `page-${page.id}`;
+                  const pageIdFromCanvas = page.slug.startsWith("page-")
+                    ? page.slug
+                    : `page-${page.id}`;
                   if (requiredPages.includes(pageIdFromCanvas)) return true;
                   // Check if page name matches (case-insensitive)
-                  const pageNameSlug = page.title.toLowerCase().replace(/\s+/g, '-');
+                  const pageNameSlug = page.title
+                    .toLowerCase()
+                    .replace(/\s+/g, "-");
                   if (requiredPages.includes(pageNameSlug)) return true;
                   return false;
                 });
-                
+
                 // Create PageAccess records for each matched page
                 const pageAccessData = matchedPages.map((page) => ({
                   appId: Number(appId),
@@ -5598,27 +6614,43 @@ async function executeRoleIs(node, context, appId, userId) {
                   pageId: page.id,
                   pageSlug: page.slug,
                 }));
-                
+
                 if (pageAccessData.length > 0) {
                   await prisma.pageAccess.createMany({
                     data: pageAccessData,
                     skipDuplicates: true,
                   });
-                  console.log(`✅ [ROLE-IS] Assigned ${pageAccessData.length} page(s) to AppUser ${appUser.id}:`, pageAccessData.map(p => p.pageSlug));
+                  console.log(
+                    `✅ [ROLE-IS] Assigned ${pageAccessData.length} page(s) to AppUser ${appUser.id}:`,
+                    pageAccessData.map((p) => p.pageSlug)
+                  );
                 } else {
-                  console.warn(`⚠️ [ROLE-IS] No pages matched for requiredPages:`, requiredPages);
+                  console.warn(
+                    `⚠️ [ROLE-IS] No pages matched for requiredPages:`,
+                    requiredPages
+                  );
                 }
               } catch (pageAccessErr) {
-                console.error("❌ [ROLE-IS] Error assigning page access:", pageAccessErr);
+                console.error(
+                  "❌ [ROLE-IS] Error assigning page access:",
+                  pageAccessErr
+                );
                 // Don't fail user creation if page access assignment fails
               }
             }
           }
         } catch (tableErr) {
           // If AppUser table doesn't exist, log warning and continue
-          if (tableErr.code === 'P2021' || tableErr.message?.includes('does not exist')) {
-            console.warn("⚠️ [ROLE-IS] AppUser table does not exist. Please run database migrations: npx prisma migrate dev");
-            console.warn("⚠️ [ROLE-IS] Skipping user creation. Continuing with role check using platform user.");
+          if (
+            tableErr.code === "P2021" ||
+            tableErr.message?.includes("does not exist")
+          ) {
+            console.warn(
+              "⚠️ [ROLE-IS] AppUser table does not exist. Please run database migrations: npx prisma migrate dev"
+            );
+            console.warn(
+              "⚠️ [ROLE-IS] Skipping user creation. Continuing with role check using platform user."
+            );
           } else {
             console.error("❌ [ROLE-IS] Error creating AppUser:", createErr);
           }
@@ -5646,7 +6678,7 @@ async function executeRoleIs(node, context, appId, userId) {
       if (!userRole) {
         const user = await prisma.user.findUnique({
           where: { id: userId },
-          select: { role: true }
+          select: { role: true },
         });
         if (user) userRole = user.role;
       }
@@ -5666,10 +6698,10 @@ async function executeRoleIs(node, context, appId, userId) {
               userRole: null,
               requiredRole,
               roles,
-              requiredPages
-            }
+              requiredPages,
+            },
           },
-          message: "User role missing"
+          message: "User role missing",
         };
       }
     }
@@ -5697,10 +6729,10 @@ async function executeRoleIs(node, context, appId, userId) {
         // Check AppUser page access (direct page access)
         const directAccess = await prisma.pageAccess.findMany({
           where: { appUserId: appUserIdForCheck },
-          select: { pageSlug: true }
+          select: { pageSlug: true },
         });
         const directPages = directAccess.map((p) => p.pageSlug);
-        
+
         // Also check role-based page access
         if (createdUserRole) {
           const appRole = await prisma.appRole.findFirst({
@@ -5716,19 +6748,32 @@ async function executeRoleIs(node, context, appId, userId) {
               },
             },
           });
-          
+
           if (appRole) {
             const rolePages = appRole.rolePages.map((rp) => rp.appPage.slug);
             const allUserPages = [...new Set([...directPages, ...rolePages])];
-            pageValid = requiredPages.every((slug) => allUserPages.includes(slug));
-            console.log(`📄 [ROLE-IS] AppUser page check (role-based): ${pageValid}`, { requiredPages, userPages: allUserPages });
+            pageValid = requiredPages.every((slug) =>
+              allUserPages.includes(slug)
+            );
+            console.log(
+              `📄 [ROLE-IS] AppUser page check (role-based): ${pageValid}`,
+              { requiredPages, userPages: allUserPages }
+            );
           } else {
-            pageValid = requiredPages.every((slug) => directPages.includes(slug));
-            console.log(`📄 [ROLE-IS] AppUser page check (direct only): ${pageValid}`, { requiredPages, userPages: directPages });
+            pageValid = requiredPages.every((slug) =>
+              directPages.includes(slug)
+            );
+            console.log(
+              `📄 [ROLE-IS] AppUser page check (direct only): ${pageValid}`,
+              { requiredPages, userPages: directPages }
+            );
           }
         } else {
           pageValid = requiredPages.every((slug) => directPages.includes(slug));
-          console.log(`📄 [ROLE-IS] AppUser page check (direct only): ${pageValid}`, { requiredPages, userPages: directPages });
+          console.log(
+            `📄 [ROLE-IS] AppUser page check (direct only): ${pageValid}`,
+            { requiredPages, userPages: directPages }
+          );
         }
       } else {
         // Platform users don't have PageAccess - skip page check for them
@@ -5745,11 +6790,13 @@ async function executeRoleIs(node, context, appId, userId) {
       context: {
         ...context,
         createdAppUserId,
-        appUser: createdAppUserId ? {
-          id: createdAppUserId,
-          email: userEmail,
-          role: createdUserRole
-        } : null,
+        appUser: createdAppUserId
+          ? {
+              id: createdAppUserId,
+              email: userEmail,
+              role: createdUserRole,
+            }
+          : null,
         roleCheck: {
           isValid,
           roleValid,
@@ -5757,9 +6804,9 @@ async function executeRoleIs(node, context, appId, userId) {
           userRole,
           requiredRole,
           roles,
-          requiredPages
-        }
-      }
+          requiredPages,
+        },
+      },
     };
   } catch (err) {
     console.error("❌ ROLE-IS ERROR:", err);
@@ -5767,12 +6814,10 @@ async function executeRoleIs(node, context, appId, userId) {
       success: false,
       isFilled: false,
       context,
-      message: err.message
+      message: err.message,
     };
   }
 }
-
-
 
 // Date utility functions
 const parseDate = (dateValue, format) => {
@@ -6585,7 +7630,7 @@ const executeOnRecordCreate = async (node, context, appId, userId) => {
 
     // Extract configuration
     const { tableName, enabled = true } = node.data || {};
-    
+
     // Check if trigger is enabled
     if (enabled === false) {
       console.log("📝 [ON-RECORD-CREATE] Trigger is disabled, skipping");
@@ -6812,9 +7857,7 @@ const executeOnLogin = async (node, context, appId) => {
       context.authStatus,
     ].some((status) =>
       typeof status === "string"
-        ? ["failed", "error", "unauthorized"].includes(
-            status.toLowerCase()
-          )
+        ? ["failed", "error", "unauthorized"].includes(status.toLowerCase())
         : false
     );
 
@@ -6838,8 +7881,9 @@ const executeOnLogin = async (node, context, appId) => {
       context.httpResponse?.data?.user,
     ];
 
-    const rawUser = userCandidates.find((candidate) =>
-      candidate && (candidate.id || candidate.userId || candidate.email)
+    const rawUser = userCandidates.find(
+      (candidate) =>
+        candidate && (candidate.id || candidate.userId || candidate.email)
     );
 
     if (!rawUser) {
@@ -6930,9 +7974,7 @@ const executeOnLogin = async (node, context, appId) => {
       roles: resolvedRoles,
       token: resolvedToken,
       loginTimestamp:
-        context.session?.loginTimestamp ||
-        loginMetadata?.timestamp ||
-        nowIso,
+        context.session?.loginTimestamp || loginMetadata?.timestamp || nowIso,
       metadata:
         loginConfig.captureMetadata !== false && loginMetadata
           ? {
@@ -7020,7 +8062,6 @@ const executeOnLogin = async (node, context, appId) => {
     };
   }
 };
-
 
 // // OnWebhook trigger handler
 // const executeOnWebhook = async (node, context, appId, userId = 1) => {
@@ -7146,7 +8187,13 @@ const executeOnLogin = async (node, context, appId) => {
 // };
 
 // Run a workflow given nodes/edges and an initial context
-const runWorkflow = async (nodes, edges, initialContext = {}, appId, userId = 1) => {
+const runWorkflow = async (
+  nodes,
+  edges,
+  initialContext = {},
+  appId,
+  userId = 1
+) => {
   try {
     const results = [];
     let currentContext = initialContext || {};
@@ -7181,7 +8228,11 @@ const runWorkflow = async (nodes, edges, initialContext = {}, appId, userId = 1)
     }
 
     if (!currentNodeId) {
-      return { success: false, message: "No trigger node found in workflow", results: [] };
+      return {
+        success: false,
+        message: "No trigger node found in workflow",
+        results: [],
+      };
     }
 
     const executedNodeIds = new Set();
@@ -7202,7 +8253,9 @@ const runWorkflow = async (nodes, edges, initialContext = {}, appId, userId = 1)
       }
       executedNodeIds.add(currentNodeId);
 
-      console.log(`🔄 [WF-EXEC] Processing node ${iteration}: ${node.data.label} (${node.id})`);
+      console.log(
+        `🔄 [WF-EXEC] Processing node ${iteration}: ${node.data.label} (${node.id})`
+      );
       console.log(`🔄 [WF-EXEC] Node category: ${node.data.category}`);
 
       try {
@@ -7212,31 +8265,69 @@ const runWorkflow = async (nodes, edges, initialContext = {}, appId, userId = 1)
         if (node.data.category === "Actions") {
           switch (node.data.label) {
             case "db.create":
-              result = await executeDbCreate(node, currentContext, appId, userId);
+              result = await executeDbCreate(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
               break;
             case "db.find":
               result = await executeDbFind(node, currentContext, appId, userId);
               break;
             case "db.update":
-              result = await executeDbUpdate(node, currentContext, appId, userId);
+              result = await executeDbUpdate(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
               break;
             case "db.upsert":
-              result = await executeDbUpsert(node, currentContext, appId, userId);
+              result = await executeDbUpsert(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
               break;
             case "email.send":
-              result = await executeEmailSend(node, currentContext, appId, userId);
+              result = await executeEmailSend(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
               break;
             case "http.request":
-              result = await executeHttpRequest(node, currentContext, appId, userId);
+              result = await executeHttpRequest(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
               break;
             case "ai.summarize":
-              result = await executeAiSummarize(node, currentContext, appId, userId);
+              result = await executeAiSummarize(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
               break;
             case "audit.log":
-              result = await executeAuditLog(node, currentContext, appId, userId);
+              result = await executeAuditLog(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
               break;
             default:
-              result = { success: true, message: `${node.data.label} executed (placeholder)` };
+              result = {
+                success: true,
+                message: `${node.data.label} executed (placeholder)`,
+              };
           }
         } else if (node.data.category === "Conditions") {
           switch (node.data.label) {
@@ -7259,7 +8350,11 @@ const runWorkflow = async (nodes, edges, initialContext = {}, appId, userId = 1)
               result = await executeExpr(node, currentContext, appId, userId);
               break;
             default:
-              result = { success: true, isFilled: true, message: `${node.data.label} processed (placeholder)` };
+              result = {
+                success: true,
+                isFilled: true,
+                message: `${node.data.label} processed (placeholder)`,
+              };
           }
         } else if (node.data.category === "Triggers") {
           switch (node.data.label) {
@@ -7279,19 +8374,42 @@ const runWorkflow = async (nodes, edges, initialContext = {}, appId, userId = 1)
               result = await executeOnLogin(node, currentContext, appId);
               break;
             case "onSchedule":
-              result = await executeOnSchedule(node, currentContext, appId, userId);
+              result = await executeOnSchedule(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
               break;
             case "onRecordCreate":
-              result = await executeOnRecordCreate(node, currentContext, appId, userId);
+              result = await executeOnRecordCreate(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
               break;
             case "onRecordUpdate":
-              result = await executeOnRecordUpdate(node, currentContext, appId, userId);
+              result = await executeOnRecordUpdate(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
               break;
             case "onWebhook":
-              result = await executeOnWebhook(node, currentContext, appId, userId);
+              result = await executeOnWebhook(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
               break;
             default:
-              result = { success: true, message: `${node.data.label} triggered (placeholder)` };
+              result = {
+                success: true,
+                message: `${node.data.label} triggered (placeholder)`,
+              };
           }
         } else {
           result = { success: true, message: `${node.data.label} processed` };
@@ -7316,7 +8434,8 @@ const runWorkflow = async (nodes, edges, initialContext = {}, appId, userId = 1)
             const edgeKey = `${node.id}:${connectorLabel}`;
             nextNodeId = edgeMap[edgeKey];
           } else {
-            const conditionResult = result?.isFilled || result?.isValid || result?.match || false;
+            const conditionResult =
+              result?.isFilled || result?.isValid || result?.match || false;
             const connectorLabel = conditionResult ? "yes" : "no";
             const edgeKey = `${node.id}:${connectorLabel}`;
             nextNodeId = edgeMap[edgeKey];
@@ -7328,7 +8447,11 @@ const runWorkflow = async (nodes, edges, initialContext = {}, appId, userId = 1)
 
         currentNodeId = nextNodeId;
       } catch (err) {
-        results.push({ nodeId: currentNodeId, nodeLabel: nodeMap[currentNodeId]?.data?.label, error: err.message });
+        results.push({
+          nodeId: currentNodeId,
+          nodeLabel: nodeMap[currentNodeId]?.data?.label,
+          error: err.message,
+        });
         break;
       }
     }
@@ -7739,6 +8862,24 @@ router.post("/execute", authenticateToken, async (req, res) => {
               );
               break;
 
+            case "file.upload":
+              result = await executeFileUpload(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
+              break;
+
+            case "file.download":
+              result = await executeFileDownload(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
+              break;
+
             default:
               console.log(
                 `⚠️ [WF-EXEC] Unhandled action block: ${node.data.label}`
@@ -7762,8 +8903,8 @@ router.post("/execute", authenticateToken, async (req, res) => {
               result = await executeMatch(node, currentContext, appId, userId);
               break;
 
-        case "inList":
-          result = await executeInList(node, currentContext, appId, userId);
+            case "inList":
+              result = await executeInList(node, currentContext, appId, userId);
               break;
 
             case "roleIs":
@@ -7811,7 +8952,12 @@ router.post("/execute", authenticateToken, async (req, res) => {
               break;
 
             case "onWebhook":
-              result = await executeOnWebhook(node, currentContext, appId, userId);
+              result = await executeOnWebhook(
+                node,
+                currentContext,
+                appId,
+                userId
+              );
               break;
 
             case "onSchedule":
@@ -7867,7 +9013,7 @@ router.post("/execute", authenticateToken, async (req, res) => {
           if (result.context) {
             currentContext = { ...currentContext, ...result.context };
           } else {
-          currentContext = { ...currentContext, ...result };
+            currentContext = { ...currentContext, ...result };
           }
         }
 
@@ -7999,7 +9145,8 @@ router.post("/execute", authenticateToken, async (req, res) => {
 router.post("/webhook/:appId", async (req, res) => {
   try {
     const { appId } = req.params;
-    const webhookSecret = req.headers["x-algo-secret"] || req.headers["x-webhook-secret"];
+    const webhookSecret =
+      req.headers["x-algo-secret"] || req.headers["x-webhook-secret"];
     const payload = req.body;
     const headers = req.headers;
 
@@ -8037,14 +9184,19 @@ router.post("/webhook/:appId", async (req, res) => {
     });
 
     if (!webhookWorkflows || webhookWorkflows.length === 0) {
-      console.warn("⚠️ [WEBHOOK] No workflows found with onWebhook trigger for app:", appId);
+      console.warn(
+        "⚠️ [WEBHOOK] No workflows found with onWebhook trigger for app:",
+        appId
+      );
       return res.status(404).json({
         success: false,
         message: "No webhook workflows found for this app",
       });
     }
 
-    console.log(`🔗 [WEBHOOK] Found ${webhookWorkflows.length} webhook workflow(s) for app ${appId}`);
+    console.log(
+      `🔗 [WEBHOOK] Found ${webhookWorkflows.length} webhook workflow(s) for app ${appId}`
+    );
 
     // Get app owner for access validation
     const app = await prisma.app.findUnique({
@@ -8079,7 +9231,8 @@ router.post("/webhook/:appId", async (req, res) => {
         // Use the existing workflow execution logic
         // Find the onWebhook trigger node
         const webhookNode = nodes.find(
-          (n) => n.data?.category === "Triggers" && n.data?.label === "onWebhook"
+          (n) =>
+            n.data?.category === "Triggers" && n.data?.label === "onWebhook"
         );
 
         if (!webhookNode) {
@@ -8110,30 +9263,69 @@ router.post("/webhook/:appId", async (req, res) => {
             let result;
 
             // Execute based on node type
-            if (node.data.category === "Triggers" && node.data.label === "onWebhook") {
-              result = await executeOnWebhook(node, currentContext, parseInt(appId), app.ownerId);
+            if (
+              node.data.category === "Triggers" &&
+              node.data.label === "onWebhook"
+            ) {
+              result = await executeOnWebhook(
+                node,
+                currentContext,
+                parseInt(appId),
+                app.ownerId
+              );
             } else if (node.data.category === "Actions") {
               switch (node.data.label) {
                 case "db.upsert":
-                  result = await executeDbUpsert(node, currentContext, parseInt(appId), app.ownerId);
+                  result = await executeDbUpsert(
+                    node,
+                    currentContext,
+                    parseInt(appId),
+                    app.ownerId
+                  );
                   break;
                 case "notify.toast":
-                  result = await executeNotifyToast(node, currentContext, parseInt(appId), app.ownerId);
+                  result = await executeNotifyToast(
+                    node,
+                    currentContext,
+                    parseInt(appId),
+                    app.ownerId
+                  );
                   break;
                 case "db.find":
-                  result = await executeDbFind(node, currentContext, parseInt(appId), app.ownerId);
+                  result = await executeDbFind(
+                    node,
+                    currentContext,
+                    parseInt(appId),
+                    app.ownerId
+                  );
                   break;
                 case "db.create":
-                  result = await executeDbCreate(node, currentContext, parseInt(appId), app.ownerId);
+                  result = await executeDbCreate(
+                    node,
+                    currentContext,
+                    parseInt(appId),
+                    app.ownerId
+                  );
                   break;
                 case "db.update":
-                  result = await executeDbUpdate(node, currentContext, parseInt(appId), app.ownerId);
+                  result = await executeDbUpdate(
+                    node,
+                    currentContext,
+                    parseInt(appId),
+                    app.ownerId
+                  );
                   break;
                 default:
-                  result = { success: true, message: `${node.data.label} executed` };
+                  result = {
+                    success: true,
+                    message: `${node.data.label} executed`,
+                  };
               }
             } else {
-              result = { success: true, message: `${node.data.label} processed` };
+              result = {
+                success: true,
+                message: `${node.data.label} processed`,
+              };
             }
 
             executionResults.push({
@@ -8151,7 +9343,10 @@ router.post("/webhook/:appId", async (req, res) => {
             const edgeKey = `${node.id}:next`;
             currentNodeId = edgeMap[edgeKey] || null;
           } catch (error) {
-            console.error(`❌ [WEBHOOK] Error in node ${node.data.label}:`, error);
+            console.error(
+              `❌ [WEBHOOK] Error in node ${node.data.label}:`,
+              error
+            );
             executionResults.push({
               nodeId: node.id,
               nodeLabel: node.data.label,
@@ -8167,9 +9362,14 @@ router.post("/webhook/:appId", async (req, res) => {
           results: executionResults,
         });
 
-        console.log(`✅ [WEBHOOK] Workflow ${workflow.id} executed successfully`);
+        console.log(
+          `✅ [WEBHOOK] Workflow ${workflow.id} executed successfully`
+        );
       } catch (workflowError) {
-        console.error(`❌ [WEBHOOK] Error executing workflow ${workflow.id}:`, workflowError);
+        console.error(
+          `❌ [WEBHOOK] Error executing workflow ${workflow.id}:`,
+          workflowError
+        );
         results.push({
           workflowId: workflow.id,
           success: false,
@@ -8196,10 +9396,6 @@ router.post("/webhook/:appId", async (req, res) => {
   }
 });
 
-
-
-
-
 /**
  * @route   POST /api/webhook/algorithm
  * @desc    Public webhook endpoint for Algorithm to push applicant + quote data
@@ -8208,11 +9404,16 @@ router.post("/webhook/:appId", async (req, res) => {
 router.post("/webhook/algorithm", async (req, res) => {
   try {
     // Expect a shared secret in header 'x-algo-secret' or Authorization: Bearer <secret>
-    const headerSecret = req.header("x-algo-secret") || req.header("authorization");
+    const headerSecret =
+      req.header("x-algo-secret") || req.header("authorization");
 
     if (!process.env.ALGORITHM_WEBHOOK_SECRET) {
-      console.warn("⚠️ ALGORTHM webhook secret is not configured (ALGORITHM_WEBHOOK_SECRET)");
-      return res.status(500).json({ success: false, message: "Server misconfiguration" });
+      console.warn(
+        "⚠️ ALGORTHM webhook secret is not configured (ALGORITHM_WEBHOOK_SECRET)"
+      );
+      return res
+        .status(500)
+        .json({ success: false, message: "Server misconfiguration" });
     }
 
     let provided = headerSecret || "";
@@ -8221,17 +9422,25 @@ router.post("/webhook/algorithm", async (req, res) => {
     // If the simple header secret is provided, verify it first
     if (!provided || provided !== process.env.ALGORITHM_WEBHOOK_SECRET) {
       console.warn("❌ [WEBHOOK] Invalid or missing webhook secret");
-      return res.status(403).json({ success: false, message: "Invalid webhook secret" });
+      return res
+        .status(403)
+        .json({ success: false, message: "Invalid webhook secret" });
     }
 
     // Additionally support HMAC signature verification when signature header present
-    const sigHeader = req.header('x-hub-signature-256') || req.header('x-hub-signature') || req.header('x-signature') || req.header('x-signature-256');
+    const sigHeader =
+      req.header("x-hub-signature-256") ||
+      req.header("x-hub-signature") ||
+      req.header("x-signature") ||
+      req.header("x-signature-256");
     if (sigHeader) {
       const secretForHmac = process.env.ALGORITHM_WEBHOOK_SECRET;
       const ok = verifyHmacSignature(req.body, sigHeader, secretForHmac);
       if (!ok) {
-        console.warn('❌ [WEBHOOK] HMAC signature verification failed');
-        return res.status(403).json({ success: false, message: 'Invalid webhook signature' });
+        console.warn("❌ [WEBHOOK] HMAC signature verification failed");
+        return res
+          .status(403)
+          .json({ success: false, message: "Invalid webhook signature" });
       }
     }
 
@@ -8243,7 +9452,12 @@ router.post("/webhook/algorithm", async (req, res) => {
     // Determine target appId: prefer payload.appId, then query param, then env LOS_APP_ID
     const appId = payload.appId || req.query.appId || process.env.LOS_APP_ID;
     if (!appId) {
-      return res.status(400).json({ success: false, message: "appId is required either in payload or query param" });
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "appId is required either in payload or query param",
+        });
     }
 
     // Use a standard table base name for storing applications inside each app namespace
@@ -8253,7 +9467,9 @@ router.post("/webhook/algorithm", async (req, res) => {
     // Ensure table exists. If missing, create a simple JSONB-backed table to store payloads.
     const exists = await dbUtils.tableExists(tableName);
     if (!exists) {
-      console.log(`🛠️ [WEBHOOK] Creating table ${tableName} to store incoming applications`);
+      console.log(
+        `🛠️ [WEBHOOK] Creating table ${tableName} to store incoming applications`
+      );
       await prisma.$executeRawUnsafe(
         `CREATE TABLE "${tableName}" (
           id SERIAL PRIMARY KEY,
@@ -8266,30 +9482,52 @@ router.post("/webhook/algorithm", async (req, res) => {
 
     // We'll try to upsert by applicant email if available, otherwise insert
     const applicantEmail =
-      payload.applicant?.email || payload.applicantEmail || payload.email || null;
+      payload.applicant?.email ||
+      payload.applicantEmail ||
+      payload.email ||
+      null;
 
     if (applicantEmail) {
       // Check several possible JSON paths for applicant email to support different payload shapes
       const selectQuery = `SELECT id FROM "${tableName}" WHERE (data->'applicant'->>'email' = $1) OR (data->>'applicantEmail' = $1) OR (data->>'email' = $1) LIMIT 1`;
-      const existing = await prisma.$queryRawUnsafe(selectQuery, applicantEmail);
+      const existing = await prisma.$queryRawUnsafe(
+        selectQuery,
+        applicantEmail
+      );
 
       if (existing && existing.length > 0) {
         // Update existing record
         const updateQuery = `UPDATE "${tableName}" SET data = $1, updated_at = NOW() WHERE id = $2 RETURNING *`;
-        const updated = await prisma.$queryRawUnsafe(updateQuery, JSON.stringify(payload), existing[0].id);
-        console.log(`✅ [WEBHOOK] Updated record id=${existing[0].id} in ${tableName}`);
+        const updated = await prisma.$queryRawUnsafe(
+          updateQuery,
+          JSON.stringify(payload),
+          existing[0].id
+        );
+        console.log(
+          `✅ [WEBHOOK] Updated record id=${existing[0].id} in ${tableName}`
+        );
 
         // Trigger workflows after update (async)
         try {
-          const workflows = await prisma.workflow.findMany({ where: { appId: parseInt(appId) } });
+          const workflows = await prisma.workflow.findMany({
+            where: { appId: parseInt(appId) },
+          });
           for (const wf of workflows) {
             let nodes = wf.nodes;
             let edges = wf.edges;
-            if (typeof nodes === 'string') {
-              try { nodes = JSON.parse(nodes); } catch (e) { nodes = []; }
+            if (typeof nodes === "string") {
+              try {
+                nodes = JSON.parse(nodes);
+              } catch (e) {
+                nodes = [];
+              }
             }
-            if (typeof edges === 'string') {
-              try { edges = JSON.parse(edges); } catch (e) { edges = []; }
+            if (typeof edges === "string") {
+              try {
+                edges = JSON.parse(edges);
+              } catch (e) {
+                edges = [];
+              }
             }
 
             const initialContext = {
@@ -8306,27 +9544,49 @@ router.post("/webhook/algorithm", async (req, res) => {
             enqueueWorkflow(nodes || [], edges || [], initialContext, appId);
           }
         } catch (e) {
-          console.warn('⚠️ [WEBHOOK] Failed to trigger workflows after update:', e.message || e);
+          console.warn(
+            "⚠️ [WEBHOOK] Failed to trigger workflows after update:",
+            e.message || e
+          );
         }
 
-        return res.json({ success: true, operation: "update", record: updated[0] });
+        return res.json({
+          success: true,
+          operation: "update",
+          record: updated[0],
+        });
       } else {
         // Insert new
         const insertQuery = `INSERT INTO "${tableName}" (data) VALUES ($1) RETURNING *`;
-        const inserted = await prisma.$queryRawUnsafe(insertQuery, JSON.stringify(payload));
-        console.log(`✅ [WEBHOOK] Inserted new record id=${inserted[0].id} in ${tableName}`);
+        const inserted = await prisma.$queryRawUnsafe(
+          insertQuery,
+          JSON.stringify(payload)
+        );
+        console.log(
+          `✅ [WEBHOOK] Inserted new record id=${inserted[0].id} in ${tableName}`
+        );
 
         // Trigger workflows after insert (async)
         try {
-          const workflows = await prisma.workflow.findMany({ where: { appId: parseInt(appId) } });
+          const workflows = await prisma.workflow.findMany({
+            where: { appId: parseInt(appId) },
+          });
           for (const wf of workflows) {
             let nodes = wf.nodes;
             let edges = wf.edges;
-            if (typeof nodes === 'string') {
-              try { nodes = JSON.parse(nodes); } catch (e) { nodes = []; }
+            if (typeof nodes === "string") {
+              try {
+                nodes = JSON.parse(nodes);
+              } catch (e) {
+                nodes = [];
+              }
             }
-            if (typeof edges === 'string') {
-              try { edges = JSON.parse(edges); } catch (e) { edges = []; }
+            if (typeof edges === "string") {
+              try {
+                edges = JSON.parse(edges);
+              } catch (e) {
+                edges = [];
+              }
             }
 
             const initialContext = {
@@ -8343,28 +9603,50 @@ router.post("/webhook/algorithm", async (req, res) => {
             enqueueWorkflow(nodes || [], edges || [], initialContext, appId);
           }
         } catch (e) {
-          console.warn('⚠️ [WEBHOOK] Failed to trigger workflows after insert:', e.message || e);
+          console.warn(
+            "⚠️ [WEBHOOK] Failed to trigger workflows after insert:",
+            e.message || e
+          );
         }
 
-        return res.json({ success: true, operation: "insert", record: inserted[0] });
+        return res.json({
+          success: true,
+          operation: "insert",
+          record: inserted[0],
+        });
       }
     } else {
       // No unique key available; perform blind insert
       const insertQuery = `INSERT INTO "${tableName}" (data) VALUES ($1) RETURNING *`;
-      const inserted = await prisma.$queryRawUnsafe(insertQuery, JSON.stringify(payload));
-      console.log(`✅ [WEBHOOK] Inserted new record id=${inserted[0].id} in ${tableName} (no unique key)`);
+      const inserted = await prisma.$queryRawUnsafe(
+        insertQuery,
+        JSON.stringify(payload)
+      );
+      console.log(
+        `✅ [WEBHOOK] Inserted new record id=${inserted[0].id} in ${tableName} (no unique key)`
+      );
 
       // After storing, optionally trigger workflows configured for this app
       try {
-        const workflows = await prisma.workflow.findMany({ where: { appId: parseInt(appId) } });
+        const workflows = await prisma.workflow.findMany({
+          where: { appId: parseInt(appId) },
+        });
         for (const wf of workflows) {
           let nodes = wf.nodes;
           let edges = wf.edges;
-          if (typeof nodes === 'string') {
-            try { nodes = JSON.parse(nodes); } catch (e) { nodes = []; }
+          if (typeof nodes === "string") {
+            try {
+              nodes = JSON.parse(nodes);
+            } catch (e) {
+              nodes = [];
+            }
           }
-          if (typeof edges === 'string') {
-            try { edges = JSON.parse(edges); } catch (e) { edges = []; }
+          if (typeof edges === "string") {
+            try {
+              edges = JSON.parse(edges);
+            } catch (e) {
+              edges = [];
+            }
           }
 
           const initialContext = {
@@ -8380,10 +9662,17 @@ router.post("/webhook/algorithm", async (req, res) => {
           enqueueWorkflow(nodes || [], edges || [], initialContext, appId);
         }
       } catch (e) {
-        console.warn('⚠️ [WEBHOOK] Failed to trigger workflows after insert:', e.message || e);
+        console.warn(
+          "⚠️ [WEBHOOK] Failed to trigger workflows after insert:",
+          e.message || e
+        );
       }
 
-      return res.json({ success: true, operation: "insert", record: inserted[0] });
+      return res.json({
+        success: true,
+        operation: "insert",
+        record: inserted[0],
+      });
     }
   } catch (error) {
     console.error("❌ [WEBHOOK] Error processing algorithm webhook:", error);
@@ -8402,21 +9691,42 @@ router.post("/fetch-quote", authenticateToken, async (req, res) => {
     const userId = req.user.id;
 
     if (!appId || !recordId || !url) {
-      return res.status(400).json({ success: false, message: "appId, recordId and url are required" });
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "appId, recordId and url are required",
+        });
     }
 
     // Verify user has access to this app
-    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
-    if (!hasAccess) return res.status(403).json({ success: false, message: "Access denied to this app" });
+    const hasAccess = await securityValidator.validateAppAccess(
+      appId,
+      userId,
+      prisma
+    );
+    if (!hasAccess)
+      return res
+        .status(403)
+        .json({ success: false, message: "Access denied to this app" });
 
     const tableName = generateTableName(appId, "applications");
     const exists = await dbUtils.tableExists(tableName);
-    if (!exists) return res.status(404).json({ success: false, message: "Applications table not found for this app" });
+    if (!exists)
+      return res
+        .status(404)
+        .json({
+          success: false,
+          message: "Applications table not found for this app",
+        });
 
     // Fetch record
     const selectQuery = `SELECT id, data FROM "${tableName}" WHERE id = $1 LIMIT 1`;
     const rows = await prisma.$queryRawUnsafe(selectQuery, recordId);
-    if (!rows || rows.length === 0) return res.status(404).json({ success: false, message: "Record not found" });
+    if (!rows || rows.length === 0)
+      return res
+        .status(404)
+        .json({ success: false, message: "Record not found" });
 
     const record = rows[0];
 
@@ -8427,7 +9737,9 @@ router.post("/fetch-quote", authenticateToken, async (req, res) => {
         method: "POST",
         headers: [],
         bodyType: "json",
-        body: JSON.stringify({ applicant: record.data?.applicant || record.data?.applicant || {} }),
+        body: JSON.stringify({
+          applicant: record.data?.applicant || record.data?.applicant || {},
+        }),
         authType: authType || "bearer",
         authConfig: authConfig || {},
         timeout: 30000,
@@ -8435,50 +9747,75 @@ router.post("/fetch-quote", authenticateToken, async (req, res) => {
       },
     };
 
-    const httpResult = await executeHttpRequest(node, { token: req.header("authorization") }, appId, userId);
+    const httpResult = await executeHttpRequest(
+      node,
+      { token: req.header("authorization") },
+      appId,
+      userId
+    );
 
-    if (!httpResult || !httpResult.context || !httpResult.context.httpResponse) {
-      return res.status(500).json({ success: false, message: "Failed to fetch quote" });
+    if (
+      !httpResult ||
+      !httpResult.context ||
+      !httpResult.context.httpResponse
+    ) {
+      return res
+        .status(500)
+        .json({ success: false, message: "Failed to fetch quote" });
     }
 
     const responseData = httpResult.context.httpResponse.data;
 
     // Merge quote into record.data.quote (replace existing quote)
     const updateQuery = `UPDATE "${tableName}" SET data = jsonb_set(coalesce(data, '{}'::jsonb), '{quote}', $1::jsonb, true), updated_at = NOW() WHERE id = $2 RETURNING *`;
-    const updated = await prisma.$queryRawUnsafe(updateQuery, JSON.stringify(responseData), record.id);
+    const updated = await prisma.$queryRawUnsafe(
+      updateQuery,
+      JSON.stringify(responseData),
+      record.id
+    );
 
     // Audit log
     try {
-      const fs = require('fs');
-      const logDir = 'server/logs';
+      const fs = require("fs");
+      const logDir = "server/logs";
       if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
       const logEntry = `${new Date().toISOString()}: FETCH_QUOTE app:${appId} record:${recordId} user:${userId} status:success\n`;
       fs.appendFileSync(`${logDir}/audit.log`, logEntry);
     } catch (e) {
-      console.warn('⚠️ Audit log write failed', e.message);
+      console.warn("⚠️ Audit log write failed", e.message);
     }
 
     // Notify app owner
     try {
-      const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+      const app = await prisma.app.findUnique({
+        where: { id: parseInt(appId) },
+        select: { ownerId: true },
+      });
       if (app && app.ownerId) {
         const message = `Latest quote fetched for record ${recordId}`;
-        await prisma.notification.create({ data: { userId: app.ownerId, type: 'system', message } });
+        await prisma.notification.create({
+          data: { userId: app.ownerId, type: "system", message },
+        });
         if (global.emitNotification) {
-          global.emitNotification({ userId: app.ownerId, type: 'system', message, id: Date.now(), createdAt: new Date() });
+          global.emitNotification({
+            userId: app.ownerId,
+            type: "system",
+            message,
+            id: Date.now(),
+            createdAt: new Date(),
+          });
         }
       }
     } catch (e) {
-      console.warn('⚠️ Notification failed', e.message);
+      console.warn("⚠️ Notification failed", e.message);
     }
 
     return res.json({ success: true, updated: updated[0] });
   } catch (error) {
-    console.error('❌ [FETCH-QUOTE] Error:', error);
+    console.error("❌ [FETCH-QUOTE] Error:", error);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
-
 
 /**
  * @route POST /api/workflow/update-status
@@ -8489,71 +9826,109 @@ router.post("/update-status", authenticateToken, async (req, res) => {
   try {
     const { appId, recordId, status } = req.body;
     const userId = req.user.id;
-    if (!appId || !recordId || !status) return res.status(400).json({ success: false, message: 'appId, recordId and status required' });
+    if (!appId || !recordId || !status)
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "appId, recordId and status required",
+        });
 
-    const allowed = ['Completed', 'Rejected', 'Pending'];
-    if (!allowed.includes(status)) return res.status(400).json({ success: false, message: 'Invalid status' });
+    const allowed = ["Completed", "Rejected", "Pending"];
+    if (!allowed.includes(status))
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid status" });
 
-    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
-    if (!hasAccess) return res.status(403).json({ success: false, message: 'Access denied' });
+    const hasAccess = await securityValidator.validateAppAccess(
+      appId,
+      userId,
+      prisma
+    );
+    if (!hasAccess)
+      return res.status(403).json({ success: false, message: "Access denied" });
 
-    const tableName = generateTableName(appId, 'applications');
+    const tableName = generateTableName(appId, "applications");
     const exists = await dbUtils.tableExists(tableName);
-    if (!exists) return res.status(404).json({ success: false, message: 'Applications table not found' });
+    if (!exists)
+      return res
+        .status(404)
+        .json({ success: false, message: "Applications table not found" });
 
     const updateQuery = `UPDATE "${tableName}" SET data = jsonb_set(coalesce(data, '{}'::jsonb), '{status}', to_jsonb($1::text), true), updated_at = NOW() WHERE id = $2 RETURNING *`;
     const updated = await prisma.$queryRawUnsafe(updateQuery, status, recordId);
 
     // Write audit log
     try {
-      const fs = require('fs');
-      const logDir = 'server/logs';
+      const fs = require("fs");
+      const logDir = "server/logs";
       if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
       const logEntry = `${new Date().toISOString()}: UPDATE_STATUS app:${appId} record:${recordId} user:${userId} status:${status}\n`;
       fs.appendFileSync(`${logDir}/audit.log`, logEntry);
     } catch (e) {
-      console.warn('⚠️ Audit log write failed', e.message);
+      console.warn("⚠️ Audit log write failed", e.message);
     }
 
     // Notify owner
     try {
-      const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+      const app = await prisma.app.findUnique({
+        where: { id: parseInt(appId) },
+        select: { ownerId: true },
+      });
       if (app && app.ownerId) {
         const message = `Application ${recordId} marked ${status}`;
-        await prisma.notification.create({ data: { userId: app.ownerId, type: 'system', message } });
+        await prisma.notification.create({
+          data: { userId: app.ownerId, type: "system", message },
+        });
         if (global.emitNotification) {
-          global.emitNotification({ userId: app.ownerId, type: 'system', message, id: Date.now(), createdAt: new Date() });
+          global.emitNotification({
+            userId: app.ownerId,
+            type: "system",
+            message,
+            id: Date.now(),
+            createdAt: new Date(),
+          });
         }
       }
     } catch (e) {
-      console.warn('⚠️ Notification failed', e.message);
+      console.warn("⚠️ Notification failed", e.message);
     }
 
     return res.json({ success: true, updated: updated[0] });
   } catch (error) {
-    console.error('❌ [UPDATE-STATUS] Error:', error);
+    console.error("❌ [UPDATE-STATUS] Error:", error);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
-
 
 /**
  * @route POST /api/workflow/send-daily-summary
  * @desc  Send daily summary email to app owner (records in last 24h)
  * @access Private (banker or scheduled system user)
  */
-router.post('/send-daily-summary', authenticateToken, async (req, res) => {
+router.post("/send-daily-summary", authenticateToken, async (req, res) => {
   try {
     const { appId } = req.body;
     const userId = req.user.id;
-    if (!appId) return res.status(400).json({ success: false, message: 'appId required' });
+    if (!appId)
+      return res
+        .status(400)
+        .json({ success: false, message: "appId required" });
 
-    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
-    if (!hasAccess) return res.status(403).json({ success: false, message: 'Access denied' });
+    const hasAccess = await securityValidator.validateAppAccess(
+      appId,
+      userId,
+      prisma
+    );
+    if (!hasAccess)
+      return res.status(403).json({ success: false, message: "Access denied" });
 
-    const tableName = generateTableName(appId, 'applications');
+    const tableName = generateTableName(appId, "applications");
     const exists = await dbUtils.tableExists(tableName);
-    if (!exists) return res.status(404).json({ success: false, message: 'Applications table not found' });
+    if (!exists)
+      return res
+        .status(404)
+        .json({ success: false, message: "Applications table not found" });
 
     // Fetch records from last 24 hours
     const selectQuery = `SELECT id, data, created_at FROM "${tableName}" WHERE created_at >= NOW() - INTERVAL '24 hours' ORDER BY created_at DESC`;
@@ -8564,42 +9939,79 @@ router.post('/send-daily-summary', authenticateToken, async (req, res) => {
     // Build summary
     let message = `Daily summary for app ${appId}: ${count} new application(s) in last 24 hours.`;
     if (count > 0) {
-      const rows = recent.slice(0, 10).map(r => {
-        const applicantName = (r.data && (r.data.applicant?.name || r.data.applicantName || r.data.name)) || 'Unknown';
-        const email = (r.data && (r.data.applicant?.email || r.data.applicantEmail || r.data.email)) || 'Unknown';
+      const rows = recent.slice(0, 10).map((r) => {
+        const applicantName =
+          (r.data &&
+            (r.data.applicant?.name || r.data.applicantName || r.data.name)) ||
+          "Unknown";
+        const email =
+          (r.data &&
+            (r.data.applicant?.email ||
+              r.data.applicantEmail ||
+              r.data.email)) ||
+          "Unknown";
         return `#${r.id} - ${applicantName} <${email}>`;
       });
-      message += '\n\nRecent applications:\n' + rows.join('\n');
+      message += "\n\nRecent applications:\n" + rows.join("\n");
     }
 
     // Find app owner email
-    const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
-    if (!app || !app.ownerId) return res.status(404).json({ success: false, message: 'App owner not found' });
+    const app = await prisma.app.findUnique({
+      where: { id: parseInt(appId) },
+      select: { ownerId: true },
+    });
+    if (!app || !app.ownerId)
+      return res
+        .status(404)
+        .json({ success: false, message: "App owner not found" });
 
-    const owner = await prisma.user.findUnique({ where: { id: app.ownerId }, select: { email: true, id: true, role: true } });
-    if (!owner || !owner.email) return res.status(404).json({ success: false, message: 'Owner email not found' });
+    const owner = await prisma.user.findUnique({
+      where: { id: app.ownerId },
+      select: { email: true, id: true, role: true },
+    });
+    if (!owner || !owner.email)
+      return res
+        .status(404)
+        .json({ success: false, message: "Owner email not found" });
 
     // Send email (emailService handles console fallback in dev)
-    const emailResult = await emailService.sendNotificationEmail(owner.email, 'system', message, owner.email.split('@')[0]);
+    const emailResult = await emailService.sendNotificationEmail(
+      owner.email,
+      "system",
+      message,
+      owner.email.split("@")[0]
+    );
 
     // Log and notify
     try {
-      const fs = require('fs');
-      const logDir = 'server/logs';
+      const fs = require("fs");
+      const logDir = "server/logs";
       if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
-      const logEntry = `${new Date().toISOString()}: DAILY_SUMMARY app:${appId} user:${userId} emailsent:${emailResult.success}\n`;
+      const logEntry = `${new Date().toISOString()}: DAILY_SUMMARY app:${appId} user:${userId} emailsent:${
+        emailResult.success
+      }\n`;
       fs.appendFileSync(`${logDir}/audit.log`, logEntry);
     } catch (e) {
-      console.warn('⚠️ Audit log write failed', e.message);
+      console.warn("⚠️ Audit log write failed", e.message);
     }
 
     if (global.emitNotification) {
-      global.emitNotification({ userId: app.ownerId, type: 'system', message: `Daily summary: ${count} new application(s)`, id: Date.now(), createdAt: new Date() });
+      global.emitNotification({
+        userId: app.ownerId,
+        type: "system",
+        message: `Daily summary: ${count} new application(s)`,
+        id: Date.now(),
+        createdAt: new Date(),
+      });
     }
 
-    return res.json({ success: true, emailed: emailResult.success, details: emailResult });
+    return res.json({
+      success: true,
+      emailed: emailResult.success,
+      details: emailResult,
+    });
   } catch (error) {
-    console.error('❌ [DAILY-SUMMARY] Error:', error);
+    console.error("❌ [DAILY-SUMMARY] Error:", error);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -8615,21 +10027,42 @@ router.post("/workflow/fetch-quote", authenticateToken, async (req, res) => {
     const userId = req.user.id;
 
     if (!appId || !recordId || !url) {
-      return res.status(400).json({ success: false, message: "appId, recordId and url are required" });
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "appId, recordId and url are required",
+        });
     }
 
     // Verify user has access to this app
-    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
-    if (!hasAccess) return res.status(403).json({ success: false, message: "Access denied to this app" });
+    const hasAccess = await securityValidator.validateAppAccess(
+      appId,
+      userId,
+      prisma
+    );
+    if (!hasAccess)
+      return res
+        .status(403)
+        .json({ success: false, message: "Access denied to this app" });
 
     const tableName = generateTableName(appId, "applications");
     const exists = await dbUtils.tableExists(tableName);
-    if (!exists) return res.status(404).json({ success: false, message: "Applications table not found for this app" });
+    if (!exists)
+      return res
+        .status(404)
+        .json({
+          success: false,
+          message: "Applications table not found for this app",
+        });
 
     // Fetch record
     const selectQuery = `SELECT id, data FROM "${tableName}" WHERE id = $1 LIMIT 1`;
     const rows = await prisma.$queryRawUnsafe(selectQuery, recordId);
-    if (!rows || rows.length === 0) return res.status(404).json({ success: false, message: "Record not found" });
+    if (!rows || rows.length === 0)
+      return res
+        .status(404)
+        .json({ success: false, message: "Record not found" });
 
     const record = rows[0];
 
@@ -8640,7 +10073,9 @@ router.post("/workflow/fetch-quote", authenticateToken, async (req, res) => {
         method: "POST",
         headers: [],
         bodyType: "json",
-        body: JSON.stringify({ applicant: record.data?.applicant || record.data?.applicant || {} }),
+        body: JSON.stringify({
+          applicant: record.data?.applicant || record.data?.applicant || {},
+        }),
         authType: authType || "bearer",
         authConfig: authConfig || {},
         timeout: 30000,
@@ -8648,50 +10083,75 @@ router.post("/workflow/fetch-quote", authenticateToken, async (req, res) => {
       },
     };
 
-    const httpResult = await executeHttpRequest(node, { token: req.header("authorization") }, appId, userId);
+    const httpResult = await executeHttpRequest(
+      node,
+      { token: req.header("authorization") },
+      appId,
+      userId
+    );
 
-    if (!httpResult || !httpResult.context || !httpResult.context.httpResponse) {
-      return res.status(500).json({ success: false, message: "Failed to fetch quote" });
+    if (
+      !httpResult ||
+      !httpResult.context ||
+      !httpResult.context.httpResponse
+    ) {
+      return res
+        .status(500)
+        .json({ success: false, message: "Failed to fetch quote" });
     }
 
     const responseData = httpResult.context.httpResponse.data;
 
     // Merge quote into record.data.quote (replace existing quote)
     const updateQuery = `UPDATE "${tableName}" SET data = jsonb_set(coalesce(data, '{}'::jsonb), '{quote}', $1::jsonb, true), updated_at = NOW() WHERE id = $2 RETURNING *`;
-    const updated = await prisma.$queryRawUnsafe(updateQuery, JSON.stringify(responseData), record.id);
+    const updated = await prisma.$queryRawUnsafe(
+      updateQuery,
+      JSON.stringify(responseData),
+      record.id
+    );
 
     // Audit log (file)
     try {
-      const fs = require('fs');
-      const logDir = 'server/logs';
+      const fs = require("fs");
+      const logDir = "server/logs";
       if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
       const logEntry = `${new Date().toISOString()}: FETCH_QUOTE app:${appId} record:${recordId} user:${userId} status:success\n`;
       fs.appendFileSync(`${logDir}/audit.log`, logEntry);
     } catch (e) {
-      console.warn('⚠️ Audit log write failed', e.message);
+      console.warn("⚠️ Audit log write failed", e.message);
     }
 
     // Notify app owner
     try {
-      const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+      const app = await prisma.app.findUnique({
+        where: { id: parseInt(appId) },
+        select: { ownerId: true },
+      });
       if (app && app.ownerId) {
         const message = `Latest quote fetched for record ${recordId}`;
-        await prisma.notification.create({ data: { userId: app.ownerId, type: 'system', message } });
+        await prisma.notification.create({
+          data: { userId: app.ownerId, type: "system", message },
+        });
         if (global.emitNotification) {
-          global.emitNotification({ userId: app.ownerId, type: 'system', message, id: Date.now(), createdAt: new Date() });
+          global.emitNotification({
+            userId: app.ownerId,
+            type: "system",
+            message,
+            id: Date.now(),
+            createdAt: new Date(),
+          });
         }
       }
     } catch (e) {
-      console.warn('⚠️ Notification failed', e.message);
+      console.warn("⚠️ Notification failed", e.message);
     }
 
     return res.json({ success: true, updated: updated[0] });
   } catch (error) {
-    console.error('❌ [FETCH-QUOTE] Error:', error);
+    console.error("❌ [FETCH-QUOTE] Error:", error);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
-
 
 /**
  * @route POST /api/workflow/update-status
@@ -8702,124 +10162,203 @@ router.post("/workflow/update-status", authenticateToken, async (req, res) => {
   try {
     const { appId, recordId, status } = req.body;
     const userId = req.user.id;
-    if (!appId || !recordId || !status) return res.status(400).json({ success: false, message: 'appId, recordId and status required' });
+    if (!appId || !recordId || !status)
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "appId, recordId and status required",
+        });
 
-    const allowed = ['Completed', 'Rejected', 'Pending'];
-    if (!allowed.includes(status)) return res.status(400).json({ success: false, message: 'Invalid status' });
+    const allowed = ["Completed", "Rejected", "Pending"];
+    if (!allowed.includes(status))
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid status" });
 
-    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
-    if (!hasAccess) return res.status(403).json({ success: false, message: 'Access denied' });
+    const hasAccess = await securityValidator.validateAppAccess(
+      appId,
+      userId,
+      prisma
+    );
+    if (!hasAccess)
+      return res.status(403).json({ success: false, message: "Access denied" });
 
-    const tableName = generateTableName(appId, 'applications');
+    const tableName = generateTableName(appId, "applications");
     const exists = await dbUtils.tableExists(tableName);
-    if (!exists) return res.status(404).json({ success: false, message: 'Applications table not found' });
+    if (!exists)
+      return res
+        .status(404)
+        .json({ success: false, message: "Applications table not found" });
 
     const updateQuery = `UPDATE "${tableName}" SET data = jsonb_set(coalesce(data, '{}'::jsonb), '{status}', to_jsonb($1::text), true), updated_at = NOW() WHERE id = $2 RETURNING *`;
     const updated = await prisma.$queryRawUnsafe(updateQuery, status, recordId);
 
     // Write audit log
     try {
-      const fs = require('fs');
-      const logDir = 'server/logs';
+      const fs = require("fs");
+      const logDir = "server/logs";
       if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
       const logEntry = `${new Date().toISOString()}: UPDATE_STATUS app:${appId} record:${recordId} user:${userId} status:${status}\n`;
       fs.appendFileSync(`${logDir}/audit.log`, logEntry);
     } catch (e) {
-      console.warn('⚠️ Audit log write failed', e.message);
+      console.warn("⚠️ Audit log write failed", e.message);
     }
 
     // Notify owner
     try {
-      const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+      const app = await prisma.app.findUnique({
+        where: { id: parseInt(appId) },
+        select: { ownerId: true },
+      });
       if (app && app.ownerId) {
         const message = `Application ${recordId} marked ${status}`;
-        await prisma.notification.create({ data: { userId: app.ownerId, type: 'system', message } });
+        await prisma.notification.create({
+          data: { userId: app.ownerId, type: "system", message },
+        });
         if (global.emitNotification) {
-          global.emitNotification({ userId: app.ownerId, type: 'system', message, id: Date.now(), createdAt: new Date() });
+          global.emitNotification({
+            userId: app.ownerId,
+            type: "system",
+            message,
+            id: Date.now(),
+            createdAt: new Date(),
+          });
         }
       }
     } catch (e) {
-      console.warn('⚠️ Notification failed', e.message);
+      console.warn("⚠️ Notification failed", e.message);
     }
 
     return res.json({ success: true, updated: updated[0] });
   } catch (error) {
-    console.error('❌ [UPDATE-STATUS] Error:', error);
+    console.error("❌ [UPDATE-STATUS] Error:", error);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
-
 
 /**
  * @route POST /api/workflow/send-daily-summary
  * @desc  Send daily summary email to app owner (records in last 24h)
  * @access Private (banker or scheduled system user)
  */
-router.post('/workflow/send-daily-summary', authenticateToken, async (req, res) => {
-  try {
-    const { appId } = req.body;
-    const userId = req.user.id;
-    if (!appId) return res.status(400).json({ success: false, message: 'appId required' });
-
-    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
-    if (!hasAccess) return res.status(403).json({ success: false, message: 'Access denied' });
-
-    const tableName = generateTableName(appId, 'applications');
-    const exists = await dbUtils.tableExists(tableName);
-    if (!exists) return res.status(404).json({ success: false, message: 'Applications table not found' });
-
-    // Fetch records from last 24 hours
-    const selectQuery = `SELECT id, data, created_at FROM "${tableName}" WHERE created_at >= NOW() - INTERVAL '24 hours' ORDER BY created_at DESC`;
-    const recent = await prisma.$queryRawUnsafe(selectQuery);
-
-    const count = recent ? recent.length : 0;
-
-    // Build summary
-    let message = `Daily summary for app ${appId}: ${count} new application(s) in last 24 hours.`;
-    if (count > 0) {
-      const rows = recent.slice(0, 10).map(r => {
-        const applicantName = (r.data && (r.data.applicant?.name || r.data.applicantName || r.data.name)) || 'Unknown';
-        const email = (r.data && (r.data.applicant?.email || r.data.applicantEmail || r.data.email)) || 'Unknown';
-        return `#${r.id} - ${applicantName} <${email}>`;
-      });
-      message += '\n\nRecent applications:\n' + rows.join('\n');
-    }
-
-    // Find app owner email
-    const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
-    if (!app || !app.ownerId) return res.status(404).json({ success: false, message: 'App owner not found' });
-
-    const owner = await prisma.user.findUnique({ where: { id: app.ownerId }, select: { email: true, id: true, role: true } });
-    if (!owner || !owner.email) return res.status(404).json({ success: false, message: 'Owner email not found' });
-
-    // Send email (emailService handles console fallback in dev)
-    const emailResult = await emailService.sendNotificationEmail(owner.email, 'system', message, owner.email.split('@')[0]);
-
-    // Log and notify
+router.post(
+  "/workflow/send-daily-summary",
+  authenticateToken,
+  async (req, res) => {
     try {
-      const fs = require('fs');
-      const logDir = 'server/logs';
-      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
-      const logEntry = `${new Date().toISOString()}: DAILY_SUMMARY app:${appId} user:${userId} emailsent:${emailResult.success}\n`;
-      fs.appendFileSync(`${logDir}/audit.log`, logEntry);
-    } catch (e) {
-      console.warn('⚠️ Audit log write failed', e.message);
-    }
+      const { appId } = req.body;
+      const userId = req.user.id;
+      if (!appId)
+        return res
+          .status(400)
+          .json({ success: false, message: "appId required" });
 
-    if (global.emitNotification) {
-      global.emitNotification({ userId: app.ownerId, type: 'system', message: `Daily summary: ${count} new application(s)`, id: Date.now(), createdAt: new Date() });
-    }
+      const hasAccess = await securityValidator.validateAppAccess(
+        appId,
+        userId,
+        prisma
+      );
+      if (!hasAccess)
+        return res
+          .status(403)
+          .json({ success: false, message: "Access denied" });
 
-    return res.json({ success: true, emailed: emailResult.success, details: emailResult });
-  } catch (error) {
-    console.error('❌ [DAILY-SUMMARY] Error:', error);
-    return res.status(500).json({ success: false, error: error.message });
+      const tableName = generateTableName(appId, "applications");
+      const exists = await dbUtils.tableExists(tableName);
+      if (!exists)
+        return res
+          .status(404)
+          .json({ success: false, message: "Applications table not found" });
+
+      // Fetch records from last 24 hours
+      const selectQuery = `SELECT id, data, created_at FROM "${tableName}" WHERE created_at >= NOW() - INTERVAL '24 hours' ORDER BY created_at DESC`;
+      const recent = await prisma.$queryRawUnsafe(selectQuery);
+
+      const count = recent ? recent.length : 0;
+
+      // Build summary
+      let message = `Daily summary for app ${appId}: ${count} new application(s) in last 24 hours.`;
+      if (count > 0) {
+        const rows = recent.slice(0, 10).map((r) => {
+          const applicantName =
+            (r.data &&
+              (r.data.applicant?.name ||
+                r.data.applicantName ||
+                r.data.name)) ||
+            "Unknown";
+          const email =
+            (r.data &&
+              (r.data.applicant?.email ||
+                r.data.applicantEmail ||
+                r.data.email)) ||
+            "Unknown";
+          return `#${r.id} - ${applicantName} <${email}>`;
+        });
+        message += "\n\nRecent applications:\n" + rows.join("\n");
+      }
+
+      // Find app owner email
+      const app = await prisma.app.findUnique({
+        where: { id: parseInt(appId) },
+        select: { ownerId: true },
+      });
+      if (!app || !app.ownerId)
+        return res
+          .status(404)
+          .json({ success: false, message: "App owner not found" });
+
+      const owner = await prisma.user.findUnique({
+        where: { id: app.ownerId },
+        select: { email: true, id: true, role: true },
+      });
+      if (!owner || !owner.email)
+        return res
+          .status(404)
+          .json({ success: false, message: "Owner email not found" });
+
+      // Send email (emailService handles console fallback in dev)
+      const emailResult = await emailService.sendNotificationEmail(
+        owner.email,
+        "system",
+        message,
+        owner.email.split("@")[0]
+      );
+
+      // Log and notify
+      try {
+        const fs = require("fs");
+        const logDir = "server/logs";
+        if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+        const logEntry = `${new Date().toISOString()}: DAILY_SUMMARY app:${appId} user:${userId} emailsent:${
+          emailResult.success
+        }\n`;
+        fs.appendFileSync(`${logDir}/audit.log`, logEntry);
+      } catch (e) {
+        console.warn("⚠️ Audit log write failed", e.message);
+      }
+
+      if (global.emitNotification) {
+        global.emitNotification({
+          userId: app.ownerId,
+          type: "system",
+          message: `Daily summary: ${count} new application(s)`,
+          id: Date.now(),
+          createdAt: new Date(),
+        });
+      }
+
+      return res.json({
+        success: true,
+        emailed: emailResult.success,
+        details: emailResult,
+      });
+    } catch (error) {
+      console.error("❌ [DAILY-SUMMARY] Error:", error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
   }
-});
-
-
-
-
+);
 
 /**
  * @route   POST /api/webhook/algorithm
@@ -8829,11 +10368,16 @@ router.post('/workflow/send-daily-summary', authenticateToken, async (req, res) 
 router.post("/webhook/algorithm", async (req, res) => {
   try {
     // Expect a shared secret in header 'x-algo-secret' or Authorization: Bearer <secret>
-    const headerSecret = req.header("x-algo-secret") || req.header("authorization");
+    const headerSecret =
+      req.header("x-algo-secret") || req.header("authorization");
 
     if (!process.env.ALGORITHM_WEBHOOK_SECRET) {
-      console.warn("⚠️ ALGORTHM webhook secret is not configured (ALGORITHM_WEBHOOK_SECRET)");
-      return res.status(500).json({ success: false, message: "Server misconfiguration" });
+      console.warn(
+        "⚠️ ALGORTHM webhook secret is not configured (ALGORITHM_WEBHOOK_SECRET)"
+      );
+      return res
+        .status(500)
+        .json({ success: false, message: "Server misconfiguration" });
     }
 
     let provided = headerSecret || "";
@@ -8842,17 +10386,25 @@ router.post("/webhook/algorithm", async (req, res) => {
     // If the simple header secret is provided, verify it first
     if (!provided || provided !== process.env.ALGORITHM_WEBHOOK_SECRET) {
       console.warn("❌ [WEBHOOK] Invalid or missing webhook secret");
-      return res.status(403).json({ success: false, message: "Invalid webhook secret" });
+      return res
+        .status(403)
+        .json({ success: false, message: "Invalid webhook secret" });
     }
 
     // Additionally support HMAC signature verification when signature header present
-    const sigHeader = req.header('x-hub-signature-256') || req.header('x-hub-signature') || req.header('x-signature') || req.header('x-signature-256');
+    const sigHeader =
+      req.header("x-hub-signature-256") ||
+      req.header("x-hub-signature") ||
+      req.header("x-signature") ||
+      req.header("x-signature-256");
     if (sigHeader) {
       const secretForHmac = process.env.ALGORITHM_WEBHOOK_SECRET;
       const ok = verifyHmacSignature(req.body, sigHeader, secretForHmac);
       if (!ok) {
-        console.warn('❌ [WEBHOOK] HMAC signature verification failed');
-        return res.status(403).json({ success: false, message: 'Invalid webhook signature' });
+        console.warn("❌ [WEBHOOK] HMAC signature verification failed");
+        return res
+          .status(403)
+          .json({ success: false, message: "Invalid webhook signature" });
       }
     }
 
@@ -8864,7 +10416,12 @@ router.post("/webhook/algorithm", async (req, res) => {
     // Determine target appId: prefer payload.appId, then query param, then env LOS_APP_ID
     const appId = payload.appId || req.query.appId || process.env.LOS_APP_ID;
     if (!appId) {
-      return res.status(400).json({ success: false, message: "appId is required either in payload or query param" });
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "appId is required either in payload or query param",
+        });
     }
 
     // Use a standard table base name for storing applications inside each app namespace
@@ -8874,7 +10431,9 @@ router.post("/webhook/algorithm", async (req, res) => {
     // Ensure table exists. If missing, create a simple JSONB-backed table to store payloads.
     const exists = await dbUtils.tableExists(tableName);
     if (!exists) {
-      console.log(`🛠️ [WEBHOOK] Creating table ${tableName} to store incoming applications`);
+      console.log(
+        `🛠️ [WEBHOOK] Creating table ${tableName} to store incoming applications`
+      );
       await prisma.$executeRawUnsafe(
         `CREATE TABLE "${tableName}" (
           id SERIAL PRIMARY KEY,
@@ -8887,30 +10446,52 @@ router.post("/webhook/algorithm", async (req, res) => {
 
     // We'll try to upsert by applicant email if available, otherwise insert
     const applicantEmail =
-      payload.applicant?.email || payload.applicantEmail || payload.email || null;
+      payload.applicant?.email ||
+      payload.applicantEmail ||
+      payload.email ||
+      null;
 
     if (applicantEmail) {
       // Check several possible JSON paths for applicant email to support different payload shapes
       const selectQuery = `SELECT id FROM "${tableName}" WHERE (data->'applicant'->>'email' = $1) OR (data->>'applicantEmail' = $1) OR (data->>'email' = $1) LIMIT 1`;
-      const existing = await prisma.$queryRawUnsafe(selectQuery, applicantEmail);
+      const existing = await prisma.$queryRawUnsafe(
+        selectQuery,
+        applicantEmail
+      );
 
       if (existing && existing.length > 0) {
         // Update existing record
         const updateQuery = `UPDATE "${tableName}" SET data = $1, updated_at = NOW() WHERE id = $2 RETURNING *`;
-        const updated = await prisma.$queryRawUnsafe(updateQuery, JSON.stringify(payload), existing[0].id);
-        console.log(`✅ [WEBHOOK] Updated record id=${existing[0].id} in ${tableName}`);
+        const updated = await prisma.$queryRawUnsafe(
+          updateQuery,
+          JSON.stringify(payload),
+          existing[0].id
+        );
+        console.log(
+          `✅ [WEBHOOK] Updated record id=${existing[0].id} in ${tableName}`
+        );
 
         // Trigger workflows after update (async)
         try {
-          const workflows = await prisma.workflow.findMany({ where: { appId: parseInt(appId) } });
+          const workflows = await prisma.workflow.findMany({
+            where: { appId: parseInt(appId) },
+          });
           for (const wf of workflows) {
             let nodes = wf.nodes;
             let edges = wf.edges;
-            if (typeof nodes === 'string') {
-              try { nodes = JSON.parse(nodes); } catch (e) { nodes = []; }
+            if (typeof nodes === "string") {
+              try {
+                nodes = JSON.parse(nodes);
+              } catch (e) {
+                nodes = [];
+              }
             }
-            if (typeof edges === 'string') {
-              try { edges = JSON.parse(edges); } catch (e) { edges = []; }
+            if (typeof edges === "string") {
+              try {
+                edges = JSON.parse(edges);
+              } catch (e) {
+                edges = [];
+              }
             }
 
             const initialContext = {
@@ -8927,27 +10508,49 @@ router.post("/webhook/algorithm", async (req, res) => {
             enqueueWorkflow(nodes || [], edges || [], initialContext, appId);
           }
         } catch (e) {
-          console.warn('⚠️ [WEBHOOK] Failed to trigger workflows after update:', e.message || e);
+          console.warn(
+            "⚠️ [WEBHOOK] Failed to trigger workflows after update:",
+            e.message || e
+          );
         }
 
-        return res.json({ success: true, operation: "update", record: updated[0] });
+        return res.json({
+          success: true,
+          operation: "update",
+          record: updated[0],
+        });
       } else {
         // Insert new
         const insertQuery = `INSERT INTO "${tableName}" (data) VALUES ($1) RETURNING *`;
-        const inserted = await prisma.$queryRawUnsafe(insertQuery, JSON.stringify(payload));
-        console.log(`✅ [WEBHOOK] Inserted new record id=${inserted[0].id} in ${tableName}`);
+        const inserted = await prisma.$queryRawUnsafe(
+          insertQuery,
+          JSON.stringify(payload)
+        );
+        console.log(
+          `✅ [WEBHOOK] Inserted new record id=${inserted[0].id} in ${tableName}`
+        );
 
         // Trigger workflows after insert (async)
         try {
-          const workflows = await prisma.workflow.findMany({ where: { appId: parseInt(appId) } });
+          const workflows = await prisma.workflow.findMany({
+            where: { appId: parseInt(appId) },
+          });
           for (const wf of workflows) {
             let nodes = wf.nodes;
             let edges = wf.edges;
-            if (typeof nodes === 'string') {
-              try { nodes = JSON.parse(nodes); } catch (e) { nodes = []; }
+            if (typeof nodes === "string") {
+              try {
+                nodes = JSON.parse(nodes);
+              } catch (e) {
+                nodes = [];
+              }
             }
-            if (typeof edges === 'string') {
-              try { edges = JSON.parse(edges); } catch (e) { edges = []; }
+            if (typeof edges === "string") {
+              try {
+                edges = JSON.parse(edges);
+              } catch (e) {
+                edges = [];
+              }
             }
 
             const initialContext = {
@@ -8964,28 +10567,50 @@ router.post("/webhook/algorithm", async (req, res) => {
             enqueueWorkflow(nodes || [], edges || [], initialContext, appId);
           }
         } catch (e) {
-          console.warn('⚠️ [WEBHOOK] Failed to trigger workflows after insert:', e.message || e);
+          console.warn(
+            "⚠️ [WEBHOOK] Failed to trigger workflows after insert:",
+            e.message || e
+          );
         }
 
-        return res.json({ success: true, operation: "insert", record: inserted[0] });
+        return res.json({
+          success: true,
+          operation: "insert",
+          record: inserted[0],
+        });
       }
     } else {
       // No unique key available; perform blind insert
       const insertQuery = `INSERT INTO "${tableName}" (data) VALUES ($1) RETURNING *`;
-      const inserted = await prisma.$queryRawUnsafe(insertQuery, JSON.stringify(payload));
-      console.log(`✅ [WEBHOOK] Inserted new record id=${inserted[0].id} in ${tableName} (no unique key)`);
+      const inserted = await prisma.$queryRawUnsafe(
+        insertQuery,
+        JSON.stringify(payload)
+      );
+      console.log(
+        `✅ [WEBHOOK] Inserted new record id=${inserted[0].id} in ${tableName} (no unique key)`
+      );
 
       // After storing, optionally trigger workflows configured for this app
       try {
-        const workflows = await prisma.workflow.findMany({ where: { appId: parseInt(appId) } });
+        const workflows = await prisma.workflow.findMany({
+          where: { appId: parseInt(appId) },
+        });
         for (const wf of workflows) {
           let nodes = wf.nodes;
           let edges = wf.edges;
-          if (typeof nodes === 'string') {
-            try { nodes = JSON.parse(nodes); } catch (e) { nodes = []; }
+          if (typeof nodes === "string") {
+            try {
+              nodes = JSON.parse(nodes);
+            } catch (e) {
+              nodes = [];
+            }
           }
-          if (typeof edges === 'string') {
-            try { edges = JSON.parse(edges); } catch (e) { edges = []; }
+          if (typeof edges === "string") {
+            try {
+              edges = JSON.parse(edges);
+            } catch (e) {
+              edges = [];
+            }
           }
 
           const initialContext = {
@@ -9001,10 +10626,17 @@ router.post("/webhook/algorithm", async (req, res) => {
           enqueueWorkflow(nodes || [], edges || [], initialContext, appId);
         }
       } catch (e) {
-        console.warn('⚠️ [WEBHOOK] Failed to trigger workflows after insert:', e.message || e);
+        console.warn(
+          "⚠️ [WEBHOOK] Failed to trigger workflows after insert:",
+          e.message || e
+        );
       }
 
-      return res.json({ success: true, operation: "insert", record: inserted[0] });
+      return res.json({
+        success: true,
+        operation: "insert",
+        record: inserted[0],
+      });
     }
   } catch (error) {
     console.error("❌ [WEBHOOK] Error processing algorithm webhook:", error);
@@ -9023,21 +10655,42 @@ router.post("/fetch-quote", authenticateToken, async (req, res) => {
     const userId = req.user.id;
 
     if (!appId || !recordId || !url) {
-      return res.status(400).json({ success: false, message: "appId, recordId and url are required" });
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "appId, recordId and url are required",
+        });
     }
 
     // Verify user has access to this app
-    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
-    if (!hasAccess) return res.status(403).json({ success: false, message: "Access denied to this app" });
+    const hasAccess = await securityValidator.validateAppAccess(
+      appId,
+      userId,
+      prisma
+    );
+    if (!hasAccess)
+      return res
+        .status(403)
+        .json({ success: false, message: "Access denied to this app" });
 
     const tableName = generateTableName(appId, "applications");
     const exists = await dbUtils.tableExists(tableName);
-    if (!exists) return res.status(404).json({ success: false, message: "Applications table not found for this app" });
+    if (!exists)
+      return res
+        .status(404)
+        .json({
+          success: false,
+          message: "Applications table not found for this app",
+        });
 
     // Fetch record
     const selectQuery = `SELECT id, data FROM "${tableName}" WHERE id = $1 LIMIT 1`;
     const rows = await prisma.$queryRawUnsafe(selectQuery, recordId);
-    if (!rows || rows.length === 0) return res.status(404).json({ success: false, message: "Record not found" });
+    if (!rows || rows.length === 0)
+      return res
+        .status(404)
+        .json({ success: false, message: "Record not found" });
 
     const record = rows[0];
 
@@ -9048,7 +10701,9 @@ router.post("/fetch-quote", authenticateToken, async (req, res) => {
         method: "POST",
         headers: [],
         bodyType: "json",
-        body: JSON.stringify({ applicant: record.data?.applicant || record.data?.applicant || {} }),
+        body: JSON.stringify({
+          applicant: record.data?.applicant || record.data?.applicant || {},
+        }),
         authType: authType || "bearer",
         authConfig: authConfig || {},
         timeout: 30000,
@@ -9056,50 +10711,75 @@ router.post("/fetch-quote", authenticateToken, async (req, res) => {
       },
     };
 
-    const httpResult = await executeHttpRequest(node, { token: req.header("authorization") }, appId, userId);
+    const httpResult = await executeHttpRequest(
+      node,
+      { token: req.header("authorization") },
+      appId,
+      userId
+    );
 
-    if (!httpResult || !httpResult.context || !httpResult.context.httpResponse) {
-      return res.status(500).json({ success: false, message: "Failed to fetch quote" });
+    if (
+      !httpResult ||
+      !httpResult.context ||
+      !httpResult.context.httpResponse
+    ) {
+      return res
+        .status(500)
+        .json({ success: false, message: "Failed to fetch quote" });
     }
 
     const responseData = httpResult.context.httpResponse.data;
 
     // Merge quote into record.data.quote (replace existing quote)
     const updateQuery = `UPDATE "${tableName}" SET data = jsonb_set(coalesce(data, '{}'::jsonb), '{quote}', $1::jsonb, true), updated_at = NOW() WHERE id = $2 RETURNING *`;
-    const updated = await prisma.$queryRawUnsafe(updateQuery, JSON.stringify(responseData), record.id);
+    const updated = await prisma.$queryRawUnsafe(
+      updateQuery,
+      JSON.stringify(responseData),
+      record.id
+    );
 
     // Audit log
     try {
-      const fs = require('fs');
-      const logDir = 'server/logs';
+      const fs = require("fs");
+      const logDir = "server/logs";
       if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
       const logEntry = `${new Date().toISOString()}: FETCH_QUOTE app:${appId} record:${recordId} user:${userId} status:success\n`;
       fs.appendFileSync(`${logDir}/audit.log`, logEntry);
     } catch (e) {
-      console.warn('⚠️ Audit log write failed', e.message);
+      console.warn("⚠️ Audit log write failed", e.message);
     }
 
     // Notify app owner
     try {
-      const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+      const app = await prisma.app.findUnique({
+        where: { id: parseInt(appId) },
+        select: { ownerId: true },
+      });
       if (app && app.ownerId) {
         const message = `Latest quote fetched for record ${recordId}`;
-        await prisma.notification.create({ data: { userId: app.ownerId, type: 'system', message } });
+        await prisma.notification.create({
+          data: { userId: app.ownerId, type: "system", message },
+        });
         if (global.emitNotification) {
-          global.emitNotification({ userId: app.ownerId, type: 'system', message, id: Date.now(), createdAt: new Date() });
+          global.emitNotification({
+            userId: app.ownerId,
+            type: "system",
+            message,
+            id: Date.now(),
+            createdAt: new Date(),
+          });
         }
       }
     } catch (e) {
-      console.warn('⚠️ Notification failed', e.message);
+      console.warn("⚠️ Notification failed", e.message);
     }
 
     return res.json({ success: true, updated: updated[0] });
   } catch (error) {
-    console.error('❌ [FETCH-QUOTE] Error:', error);
+    console.error("❌ [FETCH-QUOTE] Error:", error);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
-
 
 /**
  * @route POST /api/workflow/update-status
@@ -9110,71 +10790,109 @@ router.post("/update-status", authenticateToken, async (req, res) => {
   try {
     const { appId, recordId, status } = req.body;
     const userId = req.user.id;
-    if (!appId || !recordId || !status) return res.status(400).json({ success: false, message: 'appId, recordId and status required' });
+    if (!appId || !recordId || !status)
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "appId, recordId and status required",
+        });
 
-    const allowed = ['Completed', 'Rejected', 'Pending'];
-    if (!allowed.includes(status)) return res.status(400).json({ success: false, message: 'Invalid status' });
+    const allowed = ["Completed", "Rejected", "Pending"];
+    if (!allowed.includes(status))
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid status" });
 
-    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
-    if (!hasAccess) return res.status(403).json({ success: false, message: 'Access denied' });
+    const hasAccess = await securityValidator.validateAppAccess(
+      appId,
+      userId,
+      prisma
+    );
+    if (!hasAccess)
+      return res.status(403).json({ success: false, message: "Access denied" });
 
-    const tableName = generateTableName(appId, 'applications');
+    const tableName = generateTableName(appId, "applications");
     const exists = await dbUtils.tableExists(tableName);
-    if (!exists) return res.status(404).json({ success: false, message: 'Applications table not found' });
+    if (!exists)
+      return res
+        .status(404)
+        .json({ success: false, message: "Applications table not found" });
 
     const updateQuery = `UPDATE "${tableName}" SET data = jsonb_set(coalesce(data, '{}'::jsonb), '{status}', to_jsonb($1::text), true), updated_at = NOW() WHERE id = $2 RETURNING *`;
     const updated = await prisma.$queryRawUnsafe(updateQuery, status, recordId);
 
     // Write audit log
     try {
-      const fs = require('fs');
-      const logDir = 'server/logs';
+      const fs = require("fs");
+      const logDir = "server/logs";
       if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
       const logEntry = `${new Date().toISOString()}: UPDATE_STATUS app:${appId} record:${recordId} user:${userId} status:${status}\n`;
       fs.appendFileSync(`${logDir}/audit.log`, logEntry);
     } catch (e) {
-      console.warn('⚠️ Audit log write failed', e.message);
+      console.warn("⚠️ Audit log write failed", e.message);
     }
 
     // Notify owner
     try {
-      const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+      const app = await prisma.app.findUnique({
+        where: { id: parseInt(appId) },
+        select: { ownerId: true },
+      });
       if (app && app.ownerId) {
         const message = `Application ${recordId} marked ${status}`;
-        await prisma.notification.create({ data: { userId: app.ownerId, type: 'system', message } });
+        await prisma.notification.create({
+          data: { userId: app.ownerId, type: "system", message },
+        });
         if (global.emitNotification) {
-          global.emitNotification({ userId: app.ownerId, type: 'system', message, id: Date.now(), createdAt: new Date() });
+          global.emitNotification({
+            userId: app.ownerId,
+            type: "system",
+            message,
+            id: Date.now(),
+            createdAt: new Date(),
+          });
         }
       }
     } catch (e) {
-      console.warn('⚠️ Notification failed', e.message);
+      console.warn("⚠️ Notification failed", e.message);
     }
 
     return res.json({ success: true, updated: updated[0] });
   } catch (error) {
-    console.error('❌ [UPDATE-STATUS] Error:', error);
+    console.error("❌ [UPDATE-STATUS] Error:", error);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
-
 
 /**
  * @route POST /api/workflow/send-daily-summary
  * @desc  Send daily summary email to app owner (records in last 24h)
  * @access Private (banker or scheduled system user)
  */
-router.post('/send-daily-summary', authenticateToken, async (req, res) => {
+router.post("/send-daily-summary", authenticateToken, async (req, res) => {
   try {
     const { appId } = req.body;
     const userId = req.user.id;
-    if (!appId) return res.status(400).json({ success: false, message: 'appId required' });
+    if (!appId)
+      return res
+        .status(400)
+        .json({ success: false, message: "appId required" });
 
-    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
-    if (!hasAccess) return res.status(403).json({ success: false, message: 'Access denied' });
+    const hasAccess = await securityValidator.validateAppAccess(
+      appId,
+      userId,
+      prisma
+    );
+    if (!hasAccess)
+      return res.status(403).json({ success: false, message: "Access denied" });
 
-    const tableName = generateTableName(appId, 'applications');
+    const tableName = generateTableName(appId, "applications");
     const exists = await dbUtils.tableExists(tableName);
-    if (!exists) return res.status(404).json({ success: false, message: 'Applications table not found' });
+    if (!exists)
+      return res
+        .status(404)
+        .json({ success: false, message: "Applications table not found" });
 
     // Fetch records from last 24 hours
     const selectQuery = `SELECT id, data, created_at FROM "${tableName}" WHERE created_at >= NOW() - INTERVAL '24 hours' ORDER BY created_at DESC`;
@@ -9185,42 +10903,79 @@ router.post('/send-daily-summary', authenticateToken, async (req, res) => {
     // Build summary
     let message = `Daily summary for app ${appId}: ${count} new application(s) in last 24 hours.`;
     if (count > 0) {
-      const rows = recent.slice(0, 10).map(r => {
-        const applicantName = (r.data && (r.data.applicant?.name || r.data.applicantName || r.data.name)) || 'Unknown';
-        const email = (r.data && (r.data.applicant?.email || r.data.applicantEmail || r.data.email)) || 'Unknown';
+      const rows = recent.slice(0, 10).map((r) => {
+        const applicantName =
+          (r.data &&
+            (r.data.applicant?.name || r.data.applicantName || r.data.name)) ||
+          "Unknown";
+        const email =
+          (r.data &&
+            (r.data.applicant?.email ||
+              r.data.applicantEmail ||
+              r.data.email)) ||
+          "Unknown";
         return `#${r.id} - ${applicantName} <${email}>`;
       });
-      message += '\n\nRecent applications:\n' + rows.join('\n');
+      message += "\n\nRecent applications:\n" + rows.join("\n");
     }
 
     // Find app owner email
-    const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
-    if (!app || !app.ownerId) return res.status(404).json({ success: false, message: 'App owner not found' });
+    const app = await prisma.app.findUnique({
+      where: { id: parseInt(appId) },
+      select: { ownerId: true },
+    });
+    if (!app || !app.ownerId)
+      return res
+        .status(404)
+        .json({ success: false, message: "App owner not found" });
 
-    const owner = await prisma.user.findUnique({ where: { id: app.ownerId }, select: { email: true, id: true, role: true } });
-    if (!owner || !owner.email) return res.status(404).json({ success: false, message: 'Owner email not found' });
+    const owner = await prisma.user.findUnique({
+      where: { id: app.ownerId },
+      select: { email: true, id: true, role: true },
+    });
+    if (!owner || !owner.email)
+      return res
+        .status(404)
+        .json({ success: false, message: "Owner email not found" });
 
     // Send email (emailService handles console fallback in dev)
-    const emailResult = await emailService.sendNotificationEmail(owner.email, 'system', message, owner.email.split('@')[0]);
+    const emailResult = await emailService.sendNotificationEmail(
+      owner.email,
+      "system",
+      message,
+      owner.email.split("@")[0]
+    );
 
     // Log and notify
     try {
-      const fs = require('fs');
-      const logDir = 'server/logs';
+      const fs = require("fs");
+      const logDir = "server/logs";
       if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
-      const logEntry = `${new Date().toISOString()}: DAILY_SUMMARY app:${appId} user:${userId} emailsent:${emailResult.success}\n`;
+      const logEntry = `${new Date().toISOString()}: DAILY_SUMMARY app:${appId} user:${userId} emailsent:${
+        emailResult.success
+      }\n`;
       fs.appendFileSync(`${logDir}/audit.log`, logEntry);
     } catch (e) {
-      console.warn('⚠️ Audit log write failed', e.message);
+      console.warn("⚠️ Audit log write failed", e.message);
     }
 
     if (global.emitNotification) {
-      global.emitNotification({ userId: app.ownerId, type: 'system', message: `Daily summary: ${count} new application(s)`, id: Date.now(), createdAt: new Date() });
+      global.emitNotification({
+        userId: app.ownerId,
+        type: "system",
+        message: `Daily summary: ${count} new application(s)`,
+        id: Date.now(),
+        createdAt: new Date(),
+      });
     }
 
-    return res.json({ success: true, emailed: emailResult.success, details: emailResult });
+    return res.json({
+      success: true,
+      emailed: emailResult.success,
+      details: emailResult,
+    });
   } catch (error) {
-    console.error('❌ [DAILY-SUMMARY] Error:', error);
+    console.error("❌ [DAILY-SUMMARY] Error:", error);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -9236,21 +10991,42 @@ router.post("/workflow/fetch-quote", authenticateToken, async (req, res) => {
     const userId = req.user.id;
 
     if (!appId || !recordId || !url) {
-      return res.status(400).json({ success: false, message: "appId, recordId and url are required" });
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "appId, recordId and url are required",
+        });
     }
 
     // Verify user has access to this app
-    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
-    if (!hasAccess) return res.status(403).json({ success: false, message: "Access denied to this app" });
+    const hasAccess = await securityValidator.validateAppAccess(
+      appId,
+      userId,
+      prisma
+    );
+    if (!hasAccess)
+      return res
+        .status(403)
+        .json({ success: false, message: "Access denied to this app" });
 
     const tableName = generateTableName(appId, "applications");
     const exists = await dbUtils.tableExists(tableName);
-    if (!exists) return res.status(404).json({ success: false, message: "Applications table not found for this app" });
+    if (!exists)
+      return res
+        .status(404)
+        .json({
+          success: false,
+          message: "Applications table not found for this app",
+        });
 
     // Fetch record
     const selectQuery = `SELECT id, data FROM "${tableName}" WHERE id = $1 LIMIT 1`;
     const rows = await prisma.$queryRawUnsafe(selectQuery, recordId);
-    if (!rows || rows.length === 0) return res.status(404).json({ success: false, message: "Record not found" });
+    if (!rows || rows.length === 0)
+      return res
+        .status(404)
+        .json({ success: false, message: "Record not found" });
 
     const record = rows[0];
 
@@ -9261,7 +11037,9 @@ router.post("/workflow/fetch-quote", authenticateToken, async (req, res) => {
         method: "POST",
         headers: [],
         bodyType: "json",
-        body: JSON.stringify({ applicant: record.data?.applicant || record.data?.applicant || {} }),
+        body: JSON.stringify({
+          applicant: record.data?.applicant || record.data?.applicant || {},
+        }),
         authType: authType || "bearer",
         authConfig: authConfig || {},
         timeout: 30000,
@@ -9269,50 +11047,75 @@ router.post("/workflow/fetch-quote", authenticateToken, async (req, res) => {
       },
     };
 
-    const httpResult = await executeHttpRequest(node, { token: req.header("authorization") }, appId, userId);
+    const httpResult = await executeHttpRequest(
+      node,
+      { token: req.header("authorization") },
+      appId,
+      userId
+    );
 
-    if (!httpResult || !httpResult.context || !httpResult.context.httpResponse) {
-      return res.status(500).json({ success: false, message: "Failed to fetch quote" });
+    if (
+      !httpResult ||
+      !httpResult.context ||
+      !httpResult.context.httpResponse
+    ) {
+      return res
+        .status(500)
+        .json({ success: false, message: "Failed to fetch quote" });
     }
 
     const responseData = httpResult.context.httpResponse.data;
 
     // Merge quote into record.data.quote (replace existing quote)
     const updateQuery = `UPDATE "${tableName}" SET data = jsonb_set(coalesce(data, '{}'::jsonb), '{quote}', $1::jsonb, true), updated_at = NOW() WHERE id = $2 RETURNING *`;
-    const updated = await prisma.$queryRawUnsafe(updateQuery, JSON.stringify(responseData), record.id);
+    const updated = await prisma.$queryRawUnsafe(
+      updateQuery,
+      JSON.stringify(responseData),
+      record.id
+    );
 
     // Audit log (file)
     try {
-      const fs = require('fs');
-      const logDir = 'server/logs';
+      const fs = require("fs");
+      const logDir = "server/logs";
       if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
       const logEntry = `${new Date().toISOString()}: FETCH_QUOTE app:${appId} record:${recordId} user:${userId} status:success\n`;
       fs.appendFileSync(`${logDir}/audit.log`, logEntry);
     } catch (e) {
-      console.warn('⚠️ Audit log write failed', e.message);
+      console.warn("⚠️ Audit log write failed", e.message);
     }
 
     // Notify app owner
     try {
-      const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+      const app = await prisma.app.findUnique({
+        where: { id: parseInt(appId) },
+        select: { ownerId: true },
+      });
       if (app && app.ownerId) {
         const message = `Latest quote fetched for record ${recordId}`;
-        await prisma.notification.create({ data: { userId: app.ownerId, type: 'system', message } });
+        await prisma.notification.create({
+          data: { userId: app.ownerId, type: "system", message },
+        });
         if (global.emitNotification) {
-          global.emitNotification({ userId: app.ownerId, type: 'system', message, id: Date.now(), createdAt: new Date() });
+          global.emitNotification({
+            userId: app.ownerId,
+            type: "system",
+            message,
+            id: Date.now(),
+            createdAt: new Date(),
+          });
         }
       }
     } catch (e) {
-      console.warn('⚠️ Notification failed', e.message);
+      console.warn("⚠️ Notification failed", e.message);
     }
 
     return res.json({ success: true, updated: updated[0] });
   } catch (error) {
-    console.error('❌ [FETCH-QUOTE] Error:', error);
+    console.error("❌ [FETCH-QUOTE] Error:", error);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
-
 
 /**
  * @route POST /api/workflow/update-status
@@ -9323,120 +11126,203 @@ router.post("/workflow/update-status", authenticateToken, async (req, res) => {
   try {
     const { appId, recordId, status } = req.body;
     const userId = req.user.id;
-    if (!appId || !recordId || !status) return res.status(400).json({ success: false, message: 'appId, recordId and status required' });
+    if (!appId || !recordId || !status)
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "appId, recordId and status required",
+        });
 
-    const allowed = ['Completed', 'Rejected', 'Pending'];
-    if (!allowed.includes(status)) return res.status(400).json({ success: false, message: 'Invalid status' });
+    const allowed = ["Completed", "Rejected", "Pending"];
+    if (!allowed.includes(status))
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid status" });
 
-    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
-    if (!hasAccess) return res.status(403).json({ success: false, message: 'Access denied' });
+    const hasAccess = await securityValidator.validateAppAccess(
+      appId,
+      userId,
+      prisma
+    );
+    if (!hasAccess)
+      return res.status(403).json({ success: false, message: "Access denied" });
 
-    const tableName = generateTableName(appId, 'applications');
+    const tableName = generateTableName(appId, "applications");
     const exists = await dbUtils.tableExists(tableName);
-    if (!exists) return res.status(404).json({ success: false, message: 'Applications table not found' });
+    if (!exists)
+      return res
+        .status(404)
+        .json({ success: false, message: "Applications table not found" });
 
     const updateQuery = `UPDATE "${tableName}" SET data = jsonb_set(coalesce(data, '{}'::jsonb), '{status}', to_jsonb($1::text), true), updated_at = NOW() WHERE id = $2 RETURNING *`;
     const updated = await prisma.$queryRawUnsafe(updateQuery, status, recordId);
 
     // Write audit log
     try {
-      const fs = require('fs');
-      const logDir = 'server/logs';
+      const fs = require("fs");
+      const logDir = "server/logs";
       if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
       const logEntry = `${new Date().toISOString()}: UPDATE_STATUS app:${appId} record:${recordId} user:${userId} status:${status}\n`;
       fs.appendFileSync(`${logDir}/audit.log`, logEntry);
     } catch (e) {
-      console.warn('⚠️ Audit log write failed', e.message);
+      console.warn("⚠️ Audit log write failed", e.message);
     }
 
     // Notify owner
     try {
-      const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
+      const app = await prisma.app.findUnique({
+        where: { id: parseInt(appId) },
+        select: { ownerId: true },
+      });
       if (app && app.ownerId) {
         const message = `Application ${recordId} marked ${status}`;
-        await prisma.notification.create({ data: { userId: app.ownerId, type: 'system', message } });
+        await prisma.notification.create({
+          data: { userId: app.ownerId, type: "system", message },
+        });
         if (global.emitNotification) {
-          global.emitNotification({ userId: app.ownerId, type: 'system', message, id: Date.now(), createdAt: new Date() });
+          global.emitNotification({
+            userId: app.ownerId,
+            type: "system",
+            message,
+            id: Date.now(),
+            createdAt: new Date(),
+          });
         }
       }
     } catch (e) {
-      console.warn('⚠️ Notification failed', e.message);
+      console.warn("⚠️ Notification failed", e.message);
     }
 
     return res.json({ success: true, updated: updated[0] });
   } catch (error) {
-    console.error('❌ [UPDATE-STATUS] Error:', error);
+    console.error("❌ [UPDATE-STATUS] Error:", error);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
-
 
 /**
  * @route POST /api/workflow/send-daily-summary
  * @desc  Send daily summary email to app owner (records in last 24h)
  * @access Private (banker or scheduled system user)
  */
-router.post('/workflow/send-daily-summary', authenticateToken, async (req, res) => {
-  try {
-    const { appId } = req.body;
-    const userId = req.user.id;
-    if (!appId) return res.status(400).json({ success: false, message: 'appId required' });
-
-    const hasAccess = await securityValidator.validateAppAccess(appId, userId, prisma);
-    if (!hasAccess) return res.status(403).json({ success: false, message: 'Access denied' });
-
-    const tableName = generateTableName(appId, 'applications');
-    const exists = await dbUtils.tableExists(tableName);
-    if (!exists) return res.status(404).json({ success: false, message: 'Applications table not found' });
-
-    // Fetch records from last 24 hours
-    const selectQuery = `SELECT id, data, created_at FROM "${tableName}" WHERE created_at >= NOW() - INTERVAL '24 hours' ORDER BY created_at DESC`;
-    const recent = await prisma.$queryRawUnsafe(selectQuery);
-
-    const count = recent ? recent.length : 0;
-
-    // Build summary
-    let message = `Daily summary for app ${appId}: ${count} new application(s) in last 24 hours.`;
-    if (count > 0) {
-      const rows = recent.slice(0, 10).map(r => {
-        const applicantName = (r.data && (r.data.applicant?.name || r.data.applicantName || r.data.name)) || 'Unknown';
-        const email = (r.data && (r.data.applicant?.email || r.data.applicantEmail || r.data.email)) || 'Unknown';
-        return `#${r.id} - ${applicantName} <${email}>`;
-      });
-      message += '\n\nRecent applications:\n' + rows.join('\n');
-    }
-
-    // Find app owner email
-    const app = await prisma.app.findUnique({ where: { id: parseInt(appId) }, select: { ownerId: true } });
-    if (!app || !app.ownerId) return res.status(404).json({ success: false, message: 'App owner not found' });
-
-    const owner = await prisma.user.findUnique({ where: { id: app.ownerId }, select: { email: true, id: true, role: true } });
-    if (!owner || !owner.email) return res.status(404).json({ success: false, message: 'Owner email not found' });
-
-    // Send email (emailService handles console fallback in dev)
-    const emailResult = await emailService.sendNotificationEmail(owner.email, 'system', message, owner.email.split('@')[0]);
-
-    // Log and notify
+router.post(
+  "/workflow/send-daily-summary",
+  authenticateToken,
+  async (req, res) => {
     try {
-      const fs = require('fs');
-      const logDir = 'server/logs';
-      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
-      const logEntry = `${new Date().toISOString()}: DAILY_SUMMARY app:${appId} user:${userId} emailsent:${emailResult.success}\n`;
-      fs.appendFileSync(`${logDir}/audit.log`, logEntry);
-    } catch (e) {
-      console.warn('⚠️ Audit log write failed', e.message);
-    }
+      const { appId } = req.body;
+      const userId = req.user.id;
+      if (!appId)
+        return res
+          .status(400)
+          .json({ success: false, message: "appId required" });
 
-    if (global.emitNotification) {
-      global.emitNotification({ userId: app.ownerId, type: 'system', message: `Daily summary: ${count} new application(s)`, id: Date.now(), createdAt: new Date() });
-    }
+      const hasAccess = await securityValidator.validateAppAccess(
+        appId,
+        userId,
+        prisma
+      );
+      if (!hasAccess)
+        return res
+          .status(403)
+          .json({ success: false, message: "Access denied" });
 
-    return res.json({ success: true, emailed: emailResult.success, details: emailResult });
-  } catch (error) {
-    console.error('❌ [DAILY-SUMMARY] Error:', error);
-    return res.status(500).json({ success: false, error: error.message });
+      const tableName = generateTableName(appId, "applications");
+      const exists = await dbUtils.tableExists(tableName);
+      if (!exists)
+        return res
+          .status(404)
+          .json({ success: false, message: "Applications table not found" });
+
+      // Fetch records from last 24 hours
+      const selectQuery = `SELECT id, data, created_at FROM "${tableName}" WHERE created_at >= NOW() - INTERVAL '24 hours' ORDER BY created_at DESC`;
+      const recent = await prisma.$queryRawUnsafe(selectQuery);
+
+      const count = recent ? recent.length : 0;
+
+      // Build summary
+      let message = `Daily summary for app ${appId}: ${count} new application(s) in last 24 hours.`;
+      if (count > 0) {
+        const rows = recent.slice(0, 10).map((r) => {
+          const applicantName =
+            (r.data &&
+              (r.data.applicant?.name ||
+                r.data.applicantName ||
+                r.data.name)) ||
+            "Unknown";
+          const email =
+            (r.data &&
+              (r.data.applicant?.email ||
+                r.data.applicantEmail ||
+                r.data.email)) ||
+            "Unknown";
+          return `#${r.id} - ${applicantName} <${email}>`;
+        });
+        message += "\n\nRecent applications:\n" + rows.join("\n");
+      }
+
+      // Find app owner email
+      const app = await prisma.app.findUnique({
+        where: { id: parseInt(appId) },
+        select: { ownerId: true },
+      });
+      if (!app || !app.ownerId)
+        return res
+          .status(404)
+          .json({ success: false, message: "App owner not found" });
+
+      const owner = await prisma.user.findUnique({
+        where: { id: app.ownerId },
+        select: { email: true, id: true, role: true },
+      });
+      if (!owner || !owner.email)
+        return res
+          .status(404)
+          .json({ success: false, message: "Owner email not found" });
+
+      // Send email (emailService handles console fallback in dev)
+      const emailResult = await emailService.sendNotificationEmail(
+        owner.email,
+        "system",
+        message,
+        owner.email.split("@")[0]
+      );
+
+      // Log and notify
+      try {
+        const fs = require("fs");
+        const logDir = "server/logs";
+        if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+        const logEntry = `${new Date().toISOString()}: DAILY_SUMMARY app:${appId} user:${userId} emailsent:${
+          emailResult.success
+        }\n`;
+        fs.appendFileSync(`${logDir}/audit.log`, logEntry);
+      } catch (e) {
+        console.warn("⚠️ Audit log write failed", e.message);
+      }
+
+      if (global.emitNotification) {
+        global.emitNotification({
+          userId: app.ownerId,
+          type: "system",
+          message: `Daily summary: ${count} new application(s)`,
+          id: Date.now(),
+          createdAt: new Date(),
+        });
+      }
+
+      return res.json({
+        success: true,
+        emailed: emailResult.success,
+        details: emailResult,
+      });
+    } catch (error) {
+      console.error("❌ [DAILY-SUMMARY] Error:", error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
   }
-});
+);
 
 module.exports = router;
 // Export runWorkflow for background worker to invoke

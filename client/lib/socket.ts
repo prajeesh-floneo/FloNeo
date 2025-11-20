@@ -190,35 +190,15 @@ import { getAuthToken } from "./auth";
 
 let socket: Socket | null = null;
 
-export const initializeSocket = (): Socket => {
-  if (socket && socket.connected) {
-    return socket;
-  }
-
-  const token = getAuthToken();
-  if (!token) {
-    throw new Error("No authentication token available");
-  }
-
-  const BACKEND_URL =
-    process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
-
-  socket = io(BACKEND_URL, {
-    auth: { token },
-    transports: ["websocket", "polling"],
-  });
-
-  socket.on("connect", () => {
-    console.log("✅ Socket.io connected:", socket?.id);
-  });
-
-  socket.on("disconnect", (reason) => {
-    console.log("❌ Socket.io disconnected:", reason);
-  });
-
-  socket.on("connect_error", (error) => {
-    console.error("❌ Socket.io connection error:", error);
-  });
+// Helper function to register socket event listeners
+const registerSocketListeners = (socket: Socket) => {
+  // Remove existing listeners to prevent duplicates
+  socket.off("database:data-updated");
+  socket.off("database:table-created");
+  socket.off("record:updated");
+  socket.off("app-user:created");
+  socket.off("app-user:updated");
+  socket.off("app-user:deleted");
 
   // 🔥 Real-time database events - Match backend event names
   socket.on("database:data-updated", (payload) => {
@@ -255,6 +235,66 @@ export const initializeSocket = (): Socket => {
       new CustomEvent("db_record_updated", { detail: { ...payload, action: "updated" } })
     );
   });
+
+  // App User events - dispatch as window events
+  socket.on("app-user:created", (payload) => {
+    console.log("🟢 [SOCKET] App User Created:", payload);
+    window.dispatchEvent(
+      new CustomEvent("app_user_created", { detail: payload })
+    );
+  });
+
+  socket.on("app-user:updated", (payload) => {
+    console.log("🟢 [SOCKET] App User Updated:", payload);
+    window.dispatchEvent(
+      new CustomEvent("app_user_updated", { detail: payload })
+    );
+  });
+
+  socket.on("app-user:deleted", (payload) => {
+    console.log("🟢 [SOCKET] App User Deleted:", payload);
+    window.dispatchEvent(
+      new CustomEvent("app_user_deleted", { detail: payload })
+    );
+  });
+};
+
+export const initializeSocket = (): Socket => {
+  // If socket exists and is connected, ensure listeners are registered
+  if (socket && socket.connected) {
+    registerSocketListeners(socket);
+    return socket;
+  }
+
+  const token = getAuthToken();
+  if (!token) {
+    throw new Error("No authentication token available");
+  }
+
+  const BACKEND_URL =
+    process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
+
+  socket = io(BACKEND_URL, {
+    auth: { token },
+    transports: ["websocket", "polling"],
+  });
+
+  socket.on("connect", () => {
+    console.log("✅ Socket.io connected:", socket?.id);
+    // Register listeners after connection
+    registerSocketListeners(socket!);
+  });
+
+  socket.on("disconnect", (reason) => {
+    console.log("❌ Socket.io disconnected:", reason);
+  });
+
+  socket.on("connect_error", (error) => {
+    console.error("❌ Socket.io connection error:", error);
+  });
+
+  // Register listeners immediately (they'll work once connected)
+  registerSocketListeners(socket);
 
   return socket;
 };

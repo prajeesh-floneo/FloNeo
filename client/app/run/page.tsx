@@ -1142,6 +1142,8 @@ function RunAppContent() {
             "[WF-RUN] 📤 Uploading files before workflow execution..."
           );
 
+          const resolvedUploads: Record<string, any> = {};
+
           for (const [elementId, file] of Object.entries(
             initialContext.uploadedFiles
           )) {
@@ -1182,7 +1184,10 @@ function RunAppContent() {
                 uploadResult.files &&
                 uploadResult.files.length > 0
               ) {
-                const uploadedFile = uploadResult.files[0];
+                const uploadedFile = {
+                  ...uploadResult.files[0],
+                  elementId,
+                };
                 console.log(
                   `[WF-RUN] ✅ File uploaded successfully for ${elementId}:`,
                   {
@@ -1195,6 +1200,7 @@ function RunAppContent() {
 
                 // Store the uploaded file data in context with the element ID as key
                 contextWithFiles[elementId] = uploadedFile;
+                resolvedUploads[elementId] = uploadedFile;
                 console.log(
                   `[WF-RUN] ✅ Stored file data in context[${elementId}]`
                 );
@@ -1212,9 +1218,12 @@ function RunAppContent() {
             }
           }
 
-          // Remove the uploadedFiles from context before sending to backend
-          delete contextWithFiles.uploadedFiles;
-          console.log("[WF-RUN] 📤 Removed uploadedFiles from context");
+          if (Object.keys(resolvedUploads).length > 0) {
+            contextWithFiles.uploadedFiles = resolvedUploads;
+
+            const uploadList = Object.values(resolvedUploads);
+            contextWithFiles.lastUploadedFile = uploadList[uploadList.length - 1];
+          }
         }
 
         console.log("[WF-RUN] Context before workflow execution:", {
@@ -1452,6 +1461,74 @@ function RunAppContent() {
               toast({
                 title: errorToast.title || "Error",
                 description: errorToast.message || "An error occurred",
+                variant: "destructive",
+                duration: 5000,
+              });
+            }
+
+            if (
+              !blockResult.success &&
+              blockResult.type === "fileUpload"
+            ) {
+              toast({
+                title: "File Upload Failed",
+                description:
+                  blockResult.message ||
+                  "The uploaded file did not meet the configured rules.",
+                variant: "destructive",
+                duration: 5000,
+              });
+            }
+
+            if (
+              blockResult.success &&
+              blockResult.type === "download" &&
+              blockResult.download?.url &&
+              typeof window !== "undefined"
+            ) {
+              const { url, fileName, mimeType } = blockResult.download;
+              console.log("⬇️ [WF-RUN] Starting download:", {
+                url,
+                fileName,
+                mimeType,
+              });
+
+              try {
+                const link = document.createElement("a");
+                link.href = url;
+                if (fileName) {
+                  link.download = fileName;
+                }
+                if (mimeType) {
+                  link.type = mimeType;
+                }
+                link.style.display = "none";
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+
+                toast({
+                  title: "Download starting",
+                  description: fileName
+                    ? `Downloading ${fileName}`
+                    : "Your download is on the way",
+                  duration: 3000,
+                });
+              } catch (downloadError) {
+                console.error(
+                  "❌ [WF-RUN] Failed to trigger browser download:",
+                  downloadError
+                );
+              }
+            }
+
+            if (
+              !blockResult.success &&
+              blockResult.type === "download"
+            ) {
+              toast({
+                title: "Download Failed",
+                description: blockResult.message || "Unable to start download",
                 variant: "destructive",
                 duration: 5000,
               });

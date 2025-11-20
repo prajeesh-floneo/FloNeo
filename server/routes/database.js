@@ -4,23 +4,18 @@ const { PrismaClient } = require("@prisma/client");
 const { authenticateToken } = require("../middleware/auth");
 const { exportTableData } = require("../utils/exporters");
 const { emitTableCreated, emitDataUpdated } = require("../utils/dbEvents");
+const {
+  parseAppId,
+} = require("../utils/databaseHelpers");
 
 const prisma = new PrismaClient();
 
-// Validate table names to prevent SQL injection
-const isValidTableName = (name) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name);
-
-// ✅ helper: parse & validate appId once
-function parseAppId(appIdParam) {
-  // ⬅️ NEW
-  const id = Number(appIdParam);
-  if (!Number.isInteger(id) || id <= 0) return null;
-  return id;
-}
+// ✅ helper: parse & validate appId once (using imported version)
+// Note: parseAppId is imported from databaseHelpers
 
 // ✅ helper: strict app check (404 if not found, 403 if not owner)
+// Local version that uses file-scoped prisma instance
 async function assertAppAccess(appIdInt, userId) {
-  // ⬅️ NEW
   const app = await prisma.app.findUnique({
     where: { id: appIdInt },
     select: { id: true, ownerId: true },
@@ -37,6 +32,9 @@ async function assertAppAccess(appIdInt, userId) {
   }
   return app;
 }
+
+// Validate table names to prevent SQL injection
+const isValidTableName = (name) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name);
 
 /**
  * @route   GET /api/database/:appId/tables
@@ -56,7 +54,7 @@ router.get("/:appId/tables", authenticateToken, async (req, res) => {
     console.log(`[DATABASE] Fetching tables for appId=${appIdInt}`);
 
     // strict app access (404 vs 403)
-    await assertAppAccess(appIdInt, userId); // ⬅️ NEW
+    await assertAppAccess(appIdInt, userId);
 
     // Get table metadata only for this app
     const userTables = await prisma.userTable.findMany({
@@ -266,7 +264,7 @@ router.post("/:appId/tables/create", authenticateToken, async (req, res) => {
       });
     }
 
-    // Verify app access
+    // strict app access
     await assertAppAccess(appIdInt, userId);
 
     // Check if table already exists in metadata
@@ -1093,8 +1091,8 @@ router.post(
         columns = [],
       } = req.body;
 
-      // ensure access before emitting
-      await assertAppAccess(appIdInt, req.user.id); // ⬅️ NEW
+    // ensure access before emitting
+    await assertAppAccess(appIdInt, req.user.id);
 
       let payload;
       if (type === "created") {
@@ -1248,4 +1246,5 @@ router.post(
   }
 );
 module.exports = router;
+
 

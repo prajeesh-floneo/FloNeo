@@ -34,6 +34,7 @@ import {
   HardDrive,
   Plus,
   Trash,
+  User,
 } from "lucide-react";
 import {
   Dialog,
@@ -1303,7 +1304,7 @@ export function DatabaseScreen() {
   const totalRows = tables.reduce((sum, table) => sum + table.rowCount, 0);
 
   return (
-    <div className="h-full flex flex-col bg-gray-50 dark:bg-gray-950">
+    <div className="h-screen flex flex-col bg-gray-50 dark:bg-gray-950 overflow-hidden responsive-container">
       {/* Navigation Bar */}
       <div className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
         <div className="px-6 py-4">
@@ -1339,24 +1340,32 @@ export function DatabaseScreen() {
                   <Database className="w-6 h-6 text-blue-600 dark:text-blue-400" />
                 </div>
                 <div>
-                  <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+                  <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 responsive-text-2xl">
                     Database Management
                   </h1>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                  <p className="text-sm text-gray-600 dark:text-gray-400 responsive-text-sm">
                     Manage and view your application data
                   </p>
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 responsive-gap-4 responsive-flex-row">
+              <Button
+                onClick={() => router.push(`/app-users?appId=${appId}&appName=${encodeURIComponent(appName)}`)}
+                variant="outline"
+                className="gap-2 responsive-button"
+              >
+                <User className="w-4 h-4" />
+                App Users
+              </Button>
               <Button
                 onClick={() => setShowCreateTableModal(true)}
-                className="gap-2"
+                className="gap-2 responsive-button"
               >
                 <Plus className="w-4 h-4" />
                 Create Table
               </Button>
-              <Button onClick={loadTables} variant="outline" size="sm">
+              <Button onClick={loadTables} variant="outline" size="sm" className="responsive-button">
                 <RefreshCw className="w-4 h-4 mr-2" />
                 Refresh
               </Button>
@@ -1467,7 +1476,7 @@ export function DatabaseScreen() {
         </div>
 
         {/* Main Content - Table Data */}
-        <div className="flex-1 flex flex-col bg-gray-50 dark:bg-gray-950">
+        <div className="flex-1 flex flex-col bg-gray-50 dark:bg-gray-950 overflow-hidden">
           {selectedTable ? (
             <>
               {/* Header */}
@@ -1515,9 +1524,9 @@ export function DatabaseScreen() {
               </div>
 
               {/* Table */}
-              <div className="flex-1 overflow-auto p-4">
+              <div className="flex-1 flex flex-col min-h-0 p-4 pb-6 responsive-p-6">
                 {/* Column Visibility Toggle */}
-                <div className="mb-4 flex items-center justify-between">
+                <div className="mb-4 flex items-center justify-between flex-shrink-0">
                   <div className="flex items-center gap-2">
                     <span className="text-sm text-gray-600 dark:text-gray-400">
                       Showing {Math.min(visibleColumnsCount, selectedTable.columns.length)} of {selectedTable.columns.length} columns
@@ -1543,9 +1552,9 @@ export function DatabaseScreen() {
                   </div>
                 </div>
 
-                <div className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 overflow-hidden">
-                  <div className="overflow-x-auto">
-                    <Table>
+                <div className="flex-1 bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 overflow-hidden flex flex-col min-h-0 responsive-card">
+                  <div className="flex-1 overflow-y-auto overflow-x-auto min-h-0">
+                    <Table className="responsive-table">
                       <TableHeader>
                         <TableRow>
                           <TableHead className="w-12">#</TableHead>
@@ -1631,7 +1640,7 @@ export function DatabaseScreen() {
 
                 {/* Pagination */}
                 {totalPages > 1 && (
-                  <div className="flex items-center justify-between mt-4">
+                  <div className="flex items-center justify-between mt-4 flex-shrink-0">
                     <div className="text-sm text-gray-600 dark:text-gray-400">
                       Page {currentPage} of {totalPages}
                     </div>
@@ -1661,6 +1670,9 @@ export function DatabaseScreen() {
                     </div>
                   </div>
                 )}
+                
+                {/* Bottom margin for better scrolling experience */}
+                <div className="h-4 flex-shrink-0"></div>
               </div>
             </>
           ) : (

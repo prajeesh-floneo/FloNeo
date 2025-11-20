@@ -61,6 +61,7 @@ const workflowRoutes = require("./routes/workflow");
 const workflowExecutionRoutes = require("./routes/workflow-execution");
 const databaseRoutes = require("./routes/database");
 const pagesRoutes = require("./routes/pages");
+const chartRoutes = require("./routes/charts");
 const publishRoutes = require("./routes/publish");
 const proxyRoutes = require("./routes/proxy");
 
@@ -130,6 +131,7 @@ app.use("/api/workflow", workflowRoutes);
 app.use("/api/workflow", workflowExecutionRoutes);
 app.use("/api/database", databaseRoutes);
 app.use("/api/pages", pagesRoutes);
+app.use("/api/charts", chartRoutes);
 app.use("/api", publishRoutes);
 app.use("/api/proxy", proxyRoutes);
 

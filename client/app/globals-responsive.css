@@ -1,0 +1,164 @@
+/* Responsive CSS for different screen sizes */
+/* This file adds responsive styles without changing existing CSS */
+/* Uses viewport-based scaling for automatic adaptation */
+
+/* Base font size scaling based on viewport width */
+/* This automatically adapts to different screen sizes */
+
+/* Very large screens (24+ inch, 4K displays) */
+@media screen and (min-width: 2560px) {
+  html {
+    font-size: 16px; /* Base size */
+  }
+}
+
+/* Large screens (24 inch laptops, Full HD) */
+@media screen and (max-width: 2559px) and (min-width: 1920px) {
+  html {
+    font-size: 15px; /* Slightly smaller */
+  }
+}
+
+/* Medium-large screens (20-23 inch) */
+@media screen and (max-width: 1919px) and (min-width: 1600px) {
+  html {
+    font-size: 14px; /* Medium size */
+  }
+}
+
+/* Medium screens (15.6 inch laptops, 1366px-1599px) */
+@media screen and (max-width: 1599px) and (min-width: 1366px) {
+  html {
+    font-size: 13px; /* Smaller for compact screens */
+  }
+  
+  /* Slightly reduce spacing */
+  .responsive-p-6 {
+    padding: 1rem !important; /* 16px instead of 24px */
+  }
+  
+  .responsive-gap-4 {
+    gap: 0.75rem !important; /* 12px instead of 16px */
+  }
+}
+
+/* Small to medium screens (smaller laptops, tablets) */
+@media screen and (max-width: 1365px) and (min-width: 1024px) {
+  html {
+    font-size: 12px; /* Even smaller */
+  }
+  
+  /* Further reduce sizes */
+  .responsive-text-xl {
+    font-size: 1.125rem !important; /* 18px */
+  }
+  
+  .responsive-text-2xl {
+    font-size: 1.25rem !important; /* 20px */
+  }
+  
+  .responsive-text-sm {
+    font-size: 0.8125rem !important; /* 13px */
+  }
+  
+  .responsive-p-6 {
+    padding: 0.875rem !important; /* 14px */
+  }
+  
+  .responsive-gap-4 {
+    gap: 0.5rem !important; /* 8px */
+  }
+  
+  /* Make tables more compact */
+  .responsive-table {
+    font-size: 0.8125rem !important; /* 13px */
+  }
+  
+  .responsive-table th,
+  .responsive-table td {
+    padding: 0.5rem 0.75rem !important; /* Reduced padding */
+  }
+  
+  /* Reduce button sizes */
+  .responsive-button {
+    padding: 0.375rem 0.75rem !important; /* Smaller buttons */
+    font-size: 0.8125rem !important;
+  }
+  
+  /* Make cards more compact */
+  .responsive-card {
+    padding: 1rem !important;
+  }
+}
+
+/* Very small screens (tablets and below) */
+@media screen and (max-width: 1023px) {
+  html {
+    font-size: 11px; /* Very small for mobile */
+  }
+  
+  .responsive-text-xl {
+    font-size: 1rem !important; /* 16px */
+  }
+  
+  .responsive-text-2xl {
+    font-size: 1.125rem !important; /* 18px */
+  }
+  
+  .responsive-text-sm {
+    font-size: 0.75rem !important; /* 12px */
+  }
+  
+  .responsive-p-6 {
+    padding: 0.75rem !important; /* 12px */
+  }
+  
+  /* Stack elements vertically on small screens */
+  .responsive-flex-row {
+    flex-direction: column !important;
+  }
+  
+  .responsive-gap-4 {
+    gap: 0.5rem !important;
+  }
+  
+  /* Hide less important columns on mobile */
+  .responsive-hide-mobile {
+    display: none !important;
+  }
+  
+  .responsive-table {
+    font-size: 0.75rem !important; /* 12px */
+  }
+}
+
+/* Container max-width adjustments for better content fit */
+@media screen and (min-width: 2560px) {
+  .responsive-container {
+    max-width: 100%;
+  }
+}
+
+@media screen and (max-width: 2559px) and (min-width: 1920px) {
+  .responsive-container {
+    max-width: 95%;
+    margin: 0 auto;
+  }
+}
+
+@media screen and (max-width: 1919px) {
+  .responsive-container {
+    max-width: 98%;
+    margin: 0 auto;
+    padding: 0 0.75rem;
+  }
+}
+
+@media screen and (max-width: 1365px) {
+  .responsive-container {
+    max-width: 100%;
+    margin: 0 auto;
+    padding: 0 0.5rem;
+  }
+}
+

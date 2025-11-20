@@ -2,6 +2,7 @@ const router = require("express").Router();
 const { PrismaClient } = require("@prisma/client");
 const bcrypt = require("bcryptjs");
 const prisma = new PrismaClient();
+const { emitAppUserCreated, emitAppUserUpdated, emitAppUserDeleted } = require("../utils/appUserEvents");
 
 /**
  * CREATE APP USER WITH ROLE
@@ -95,6 +96,12 @@ router.post("/:appId/create", async (req, res) => {
 
     // Return user without password
     const { password: _, ...userWithoutPassword } = appUser;
+
+    // Emit socket event for real-time update
+    emitAppUserCreated(Number(appId), {
+      user: userWithoutPassword,
+      roleAssigned: roleId ? true : false,
+    });
 
     res.json({
       success: true,
@@ -366,6 +373,321 @@ router.post("/:appId/login", async (req, res) => {
     res.status(500).json({
       success: false,
       message: err.message || "Failed to login",
+    });
+  }
+});
+
+/**
+ * GET SINGLE APP USER
+ * GET /api/app-users/:appUserId
+ */
+router.get("/:appUserId", async (req, res) => {
+  try {
+    const { appUserId } = req.params;
+
+    const appUser = await prisma.appUser.findUnique({
+      where: { id: Number(appUserId) },
+      include: {
+        roles: {
+          include: {
+            appRole: true,
+          },
+        },
+        pageAccess: {
+          include: {
+            page: true,
+          },
+        },
+      },
+    });
+
+    if (!appUser) {
+      return res.status(404).json({
+        success: false,
+        message: "App user not found",
+      });
+    }
+
+    // Remove password from response
+    const { password: _, ...userWithoutPassword } = appUser;
+
+    res.json({
+      success: true,
+      user: userWithoutPassword,
+    });
+  } catch (err) {
+    console.error("❌ [APP-USER] Get user error:", err);
+    res.status(500).json({
+      success: false,
+      message: err.message || "Failed to get user",
+    });
+  }
+});
+
+/**
+ * UPDATE APP USER
+ * PUT /api/app-users/:appUserId
+ * Body: { email?, name?, isActive?, roleSlug? }
+ */
+router.put("/:appUserId", async (req, res) => {
+  try {
+    const { appUserId } = req.params;
+    const { email, name, isActive, roleSlug } = req.body;
+
+    // Get app user
+    const appUser = await prisma.appUser.findUnique({
+      where: { id: Number(appUserId) },
+      include: {
+        roles: {
+          include: {
+            appRole: true,
+          },
+        },
+      },
+    });
+
+    if (!appUser) {
+      return res.status(404).json({
+        success: false,
+        message: "App user not found",
+      });
+    }
+
+    // Update user fields
+    const updateData = {};
+    if (email !== undefined) updateData.email = email.trim().toLowerCase();
+    if (name !== undefined) updateData.name = name || null;
+    if (isActive !== undefined) updateData.isActive = isActive;
+
+    // Update user
+    const updatedUser = await prisma.appUser.update({
+      where: { id: Number(appUserId) },
+      data: updateData,
+      include: {
+        roles: {
+          include: {
+            appRole: true,
+          },
+        },
+        pageAccess: {
+          include: {
+            page: true,
+          },
+        },
+      },
+    });
+
+    // Update role if provided
+    if (roleSlug) {
+      const roleSlugNormalized = roleSlug.trim().toLowerCase().replace(/\s+/g, "-");
+      
+      let role = await prisma.appRole.findFirst({
+        where: {
+          appId: appUser.appId,
+          slug: roleSlugNormalized,
+        },
+      });
+
+      if (!role) {
+        role = await prisma.appRole.create({
+          data: {
+            appId: appUser.appId,
+            name: roleSlug.charAt(0).toUpperCase() + roleSlug.slice(1),
+            slug: roleSlugNormalized,
+            description: `Auto-created role: ${roleSlug}`,
+            isPredefined: false,
+          },
+        });
+      }
+
+      // Remove existing roles and assign new one
+      await prisma.appUserRole.deleteMany({
+        where: { appUserId: Number(appUserId) },
+      });
+
+      await prisma.appUserRole.create({
+        data: {
+          appUserId: Number(appUserId),
+          appRoleId: role.id,
+          grantedBy: null,
+        },
+      });
+
+      // Reload user with updated roles
+      const userWithNewRole = await prisma.appUser.findUnique({
+        where: { id: Number(appUserId) },
+        include: {
+          roles: {
+            include: {
+              appRole: true,
+            },
+          },
+          pageAccess: {
+            include: {
+              page: true,
+            },
+          },
+        },
+      });
+
+      const { password: _, ...userWithoutPassword } = userWithNewRole;
+
+      // Emit socket event for real-time update
+      emitAppUserUpdated(appUser.appId, {
+        user: userWithoutPassword,
+      });
+
+      return res.json({
+        success: true,
+        message: "User updated successfully",
+        user: userWithoutPassword,
+      });
+    }
+
+    // Remove password from response
+    const { password: _, ...userWithoutPassword } = updatedUser;
+
+    // Emit socket event for real-time update
+    emitAppUserUpdated(appUser.appId, {
+      user: userWithoutPassword,
+    });
+
+    res.json({
+      success: true,
+      message: "User updated successfully",
+      user: userWithoutPassword,
+    });
+  } catch (err) {
+    console.error("❌ [APP-USER] Update error:", err);
+    res.status(500).json({
+      success: false,
+      message: err.message || "Failed to update user",
+    });
+  }
+});
+
+/**
+ * RESET APP USER PASSWORD (by app owner)
+ * POST /api/app-users/:appUserId/reset-password
+ * Body: { newPassword }
+ */
+router.post("/:appUserId/reset-password", async (req, res) => {
+  try {
+    const { appUserId } = req.params;
+    const { newPassword } = req.body;
+
+    if (!newPassword || newPassword.trim() === "") {
+      return res.status(400).json({
+        success: false,
+        message: "New password is required",
+      });
+    }
+
+    // Validate password strength (optional - you can customize this)
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 6 characters long",
+      });
+    }
+
+    // Get app user
+    const appUser = await prisma.appUser.findUnique({
+      where: { id: Number(appUserId) },
+    });
+
+    if (!appUser) {
+      return res.status(404).json({
+        success: false,
+        message: "App user not found",
+      });
+    }
+
+    // Hash new password
+    const saltRounds = parseInt(process.env.BCRYPT_SALT_ROUNDS) || 12;
+    const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
+
+    // Update password
+    await prisma.appUser.update({
+      where: { id: Number(appUserId) },
+      data: { password: hashedPassword },
+    });
+
+    console.log(`✅ [APP-USER] Password reset for user ${appUserId} by app owner`);
+
+    // Emit socket event for real-time update (password reset is an update)
+    emitAppUserUpdated(appUser.appId, {
+      user: { id: appUser.id, email: appUser.email },
+      action: "password_reset",
+    });
+
+    res.json({
+      success: true,
+      message: "Password reset successfully",
+    });
+  } catch (err) {
+    console.error("❌ [APP-USER] Reset password error:", err);
+    res.status(500).json({
+      success: false,
+      message: err.message || "Failed to reset password",
+    });
+  }
+});
+
+/**
+ * DELETE APP USER
+ * DELETE /api/app-users/:appUserId
+ */
+router.delete("/:appUserId", async (req, res) => {
+  try {
+    const { appUserId } = req.params;
+
+    // Check if user exists
+    const appUser = await prisma.appUser.findUnique({
+      where: { id: Number(appUserId) },
+    });
+
+    if (!appUser) {
+      return res.status(404).json({
+        success: false,
+        message: "App user not found",
+      });
+    }
+
+    // Delete user roles first (cascade)
+    await prisma.appUserRole.deleteMany({
+      where: { appUserId: Number(appUserId) },
+    });
+
+    // Delete page access
+    await prisma.pageAccess.deleteMany({
+      where: { appUserId: Number(appUserId) },
+    });
+
+    const appIdForEvent = appUser.appId;
+
+    // Delete user
+    await prisma.appUser.delete({
+      where: { id: Number(appUserId) },
+    });
+
+    console.log(`✅ [APP-USER] Deleted user ${appUserId}`);
+
+    // Emit socket event for real-time update
+    emitAppUserDeleted(appIdForEvent, {
+      userId: Number(appUserId),
+      email: appUser.email,
+    });
+
+    res.json({
+      success: true,
+      message: "User deleted successfully",
+    });
+  } catch (err) {
+    console.error("❌ [APP-USER] Delete error:", err);
+    res.status(500).json({
+      success: false,
+      message: err.message || "Failed to delete user",
     });
   }
 });
