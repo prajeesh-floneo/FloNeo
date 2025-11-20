@@ -708,6 +708,7 @@ const executeDbCreate = async (node, context, appId, userId) => {
     
     let dataToInsert = {};
     let dataSource = "none";
+    let recordsToInsert = []; // Array to store multiple records from data array
     
     // 1. Check manual insertData (highest priority)
     if (hasValidInsertData) {
@@ -767,21 +768,17 @@ const executeDbCreate = async (node, context, appId, userId) => {
             console.log("📋 [DB-CREATE] [EXTRACT] Found 'data' field, type:", typeof data.data, "isArray:", Array.isArray(data.data));
             
             if (Array.isArray(data.data) && data.data.length > 0) {
-              console.log("📋 [DB-CREATE] ✅ [EXTRACT] Found nested 'data' array with", data.data.length, "items, extracting first element");
-              const firstItem = data.data[0];
-              
-              if (typeof firstItem === 'object' && firstItem !== null) {
-                // Flatten the object and merge with top-level metadata (if needed)
-                const flattened = { ...firstItem };
-                // Optionally add metadata fields with prefixes to avoid conflicts
-                if (data.success !== undefined) flattened._success = data.success;
-                if (data.tableName) flattened._tableName = data.tableName;
-                if (data.count !== undefined) flattened._count = data.count;
-                console.log("📋 [DB-CREATE] ✅ [EXTRACT] Extracted flattened object with", Object.keys(flattened).length, "keys:", Object.keys(flattened));
-                return flattened;
-              } else {
-                console.warn("⚠️ [DB-CREATE] [EXTRACT] First item in data array is not an object:", typeof firstItem);
-              }
+              console.log("📋 [DB-CREATE] ✅ [EXTRACT] Found nested 'data' array with", data.data.length, "items");
+              // Return a special marker object to indicate we have multiple records
+              return {
+                __hasMultipleRecords: true,
+                __recordsArray: data.data,
+                __metadata: {
+                  success: data.success,
+                  tableName: data.tableName,
+                  count: data.count
+                }
+              };
             } else if (!Array.isArray(data.data)) {
               console.log("📋 [DB-CREATE] [EXTRACT] 'data' field exists but is not an array, type:", typeof data.data);
             } else {
@@ -830,9 +827,51 @@ const executeDbCreate = async (node, context, appId, userId) => {
         }
       }
       
-      dataToInsert = extractDataFromResponse(httpData);
+      const extractedData = extractDataFromResponse(httpData);
+      
+      // Check if we have multiple records to insert
+      console.log("📋 [DB-CREATE] 🔍 Checking extractedData:", {
+        hasExtractedData: !!extractedData,
+        hasMultipleRecordsFlag: extractedData?.__hasMultipleRecords,
+        recordsArrayLength: extractedData?.__recordsArray?.length,
+        extractedDataType: typeof extractedData,
+        extractedDataKeys: extractedData ? Object.keys(extractedData) : []
+      });
+      
+      if (extractedData && extractedData.__hasMultipleRecords && Array.isArray(extractedData.__recordsArray)) {
+        console.log("📋 [DB-CREATE] ✅ Detected multiple records in 'data' array:", extractedData.__recordsArray.length);
+        // Process all records from the array
+        recordsToInsert = extractedData.__recordsArray.map((item, index) => {
+          if (typeof item === 'object' && item !== null) {
+            const flattened = { ...item };
+            // Add metadata fields with prefixes
+            if (extractedData.__metadata?.success !== undefined) flattened._success = extractedData.__metadata.success;
+            if (extractedData.__metadata?.tableName) flattened._tableName = extractedData.__metadata.tableName;
+            if (extractedData.__metadata?.count !== undefined) flattened._count = extractedData.__metadata.count;
+            console.log(`📋 [DB-CREATE] ✅ [EXTRACT] Processed record ${index + 1}/${extractedData.__recordsArray.length} with`, Object.keys(flattened).length, "keys");
+            return flattened;
+          } else {
+            console.warn(`⚠️ [DB-CREATE] [EXTRACT] Record ${index + 1} is not an object:`, typeof item);
+            return null;
+          }
+        }).filter(record => record !== null); // Remove null entries
+        
+        // Use first record for table schema creation
+        if (recordsToInsert.length > 0) {
+          dataToInsert = recordsToInsert[0];
+          console.log("📋 [DB-CREATE] ✅ Using first record for table schema, will insert", recordsToInsert.length, "records total");
+        } else {
+          throw new Error("No valid records found in 'data' array");
+        }
+      } else {
+        // Single record case (existing behavior)
+        dataToInsert = extractedData;
+        recordsToInsert = [dataToInsert]; // Single record in array for consistent processing
+      }
+      
       dataSource = "httpResponse";
       console.log("📋 [DB-CREATE] ✅ Using data from http.request response");
+      console.log("📋 [DB-CREATE] ✅ Records to insert:", recordsToInsert.length);
       console.log("📋 [DB-CREATE] ✅ Final extracted fields:", Object.keys(dataToInsert));
       console.log("📋 [DB-CREATE] ✅ Sample values:", Object.keys(dataToInsert).slice(0, 10).reduce((acc, key) => {
         const val = dataToInsert[key];
@@ -1068,6 +1107,12 @@ const executeDbCreate = async (node, context, appId, userId) => {
     // Generate secure table name (use node configuration or default)
     const baseName = node.data.tableName || "form_data";
     const tableName = `app_${appId}_${baseName}`;
+    
+    console.log("🗄️ [DB-CREATE] Table name configuration:", {
+      baseName,
+      fullTableName: tableName,
+      nodeTableName: node.data.tableName
+    });
 
     // Validate table name for security
     securityValidator.validateTableName(tableName, appId);
@@ -1168,37 +1213,57 @@ const executeDbCreate = async (node, context, appId, userId) => {
       // If we have data from context (http.request, roleIs, etc.), create columns from it
       else if (hasDataForColumns) {
         // FINAL CHECK: If we have a 'data' array field, extract from it NOW before creating table
-        if (dataSource.includes('httpResponse') && 'data' in dataToInsert) {
+        // Note: This is a fallback check. If recordsToInsert is already populated, skip this.
+        if (recordsToInsert.length === 0 && dataSource.includes('httpResponse') && 'data' in dataToInsert) {
           if (Array.isArray(dataToInsert.data) && dataToInsert.data.length > 0) {
-            console.log("📋 [DB-CREATE] 🚨 FINAL CHECK: Found 'data' array before table creation, extracting NOW!");
-            const firstItem = dataToInsert.data[0];
-            if (typeof firstItem === 'object' && firstItem !== null) {
-              const extracted = { ...firstItem };
-              if (dataToInsert.success !== undefined) extracted._success = dataToInsert.success;
-              if (dataToInsert.tableName) extracted._tableName = dataToInsert.tableName;
-              if (dataToInsert.count !== undefined) extracted._count = dataToInsert.count;
-              dataToInsert = extracted;
-              console.log("📋 [DB-CREATE] ✅ FINAL CHECK: Extracted", Object.keys(dataToInsert).length, "fields:", Object.keys(dataToInsert));
+            console.log("📋 [DB-CREATE] 🚨 FINAL CHECK: Found 'data' array before table creation, extracting all records NOW!");
+            recordsToInsert = dataToInsert.data.map((item, index) => {
+              if (typeof item === 'object' && item !== null) {
+                const extracted = { ...item };
+                if (dataToInsert.success !== undefined) extracted._success = dataToInsert.success;
+                if (dataToInsert.tableName) extracted._tableName = dataToInsert.tableName;
+                if (dataToInsert.count !== undefined) extracted._count = dataToInsert.count;
+                console.log(`📋 [DB-CREATE] ✅ FINAL CHECK: Extracted record ${index + 1}/${dataToInsert.data.length}`);
+                return extracted;
+              }
+              return null;
+            }).filter(record => record !== null);
+            
+            if (recordsToInsert.length > 0) {
+              dataToInsert = recordsToInsert[0];
+              console.log("📋 [DB-CREATE] ✅ FINAL CHECK: Extracted", recordsToInsert.length, "records, using first for schema");
             }
           } else if (typeof dataToInsert.data === 'string') {
             try {
               const parsed = JSON.parse(dataToInsert.data);
               if (Array.isArray(parsed) && parsed.length > 0) {
-                console.log("📋 [DB-CREATE] 🚨 FINAL CHECK: Parsed 'data' string contains array, extracting NOW!");
-                const firstItem = parsed[0];
-                if (typeof firstItem === 'object' && firstItem !== null) {
-                  const extracted = { ...firstItem };
-                  if (dataToInsert.success !== undefined) extracted._success = dataToInsert.success;
-                  if (dataToInsert.tableName) extracted._tableName = dataToInsert.tableName;
-                  if (dataToInsert.count !== undefined) extracted._count = dataToInsert.count;
-                  dataToInsert = extracted;
-                  console.log("📋 [DB-CREATE] ✅ FINAL CHECK: Extracted", Object.keys(dataToInsert).length, "fields from parsed string");
+                console.log("📋 [DB-CREATE] 🚨 FINAL CHECK: Parsed 'data' string contains array, extracting all records NOW!");
+                recordsToInsert = parsed.map((item, index) => {
+                  if (typeof item === 'object' && item !== null) {
+                    const extracted = { ...item };
+                    if (dataToInsert.success !== undefined) extracted._success = dataToInsert.success;
+                    if (dataToInsert.tableName) extracted._tableName = dataToInsert.tableName;
+                    if (dataToInsert.count !== undefined) extracted._count = dataToInsert.count;
+                    console.log(`📋 [DB-CREATE] ✅ FINAL CHECK: Extracted record ${index + 1}/${parsed.length} from parsed string`);
+                    return extracted;
+                  }
+                  return null;
+                }).filter(record => record !== null);
+                
+                if (recordsToInsert.length > 0) {
+                  dataToInsert = recordsToInsert[0];
+                  console.log("📋 [DB-CREATE] ✅ FINAL CHECK: Extracted", recordsToInsert.length, "records from parsed string");
                 }
               }
             } catch (e) {
               // Ignore parse errors
             }
           }
+        }
+        
+        // If we still don't have recordsToInsert, use dataToInsert as single record
+        if (recordsToInsert.length === 0) {
+          recordsToInsert = [dataToInsert];
         }
         
         console.log("🔧 [DB-CREATE] Creating table from context data (http.request/roleIs/etc.)");
@@ -1349,13 +1414,19 @@ const executeDbCreate = async (node, context, appId, userId) => {
     // INSERT DATA INTO TABLE
     console.log("💾 [DB-CREATE] Inserting data into table:", tableName);
     console.log("💾 [DB-CREATE] Data source:", dataSource);
+    console.log("💾 [DB-CREATE] Total records to insert:", recordsToInsert.length);
     console.log("💾 [DB-CREATE] Data to insert keys:", Object.keys(dataToInsert));
 
-    if (Object.keys(dataToInsert).length === 0) {
+    if (recordsToInsert.length === 0) {
       throw new Error("No data provided for database insertion");
     }
     
-    // Convert complex types to strings for storage
+    // Ensure recordsToInsert is populated (fallback for non-httpResponse sources)
+    if (recordsToInsert.length === 0 && Object.keys(dataToInsert).length > 0) {
+      recordsToInsert = [dataToInsert];
+    }
+    
+    // Helper function to convert complex types to strings for storage (shared by multiple functions)
     const prepareValueForInsert = (value) => {
       if (value === null || value === undefined) {
         return null;
@@ -1374,61 +1445,42 @@ const executeDbCreate = async (node, context, appId, userId) => {
       return value;
     };
     
-    // Prepare data values - ensure we extract values from objects
-    const preparedData = {};
-    for (const [key, value] of Object.entries(dataToInsert)) {
-      // Triple-check: if value is still an object with 'value' property, extract it
-      let finalValue = value;
+    // Helper function to prepare a single record for insertion (defined early for use in schema discovery)
+    const prepareRecordForInsert = (recordData) => {
       
-      // Check if it's the new format object
-      if (typeof value === 'object' && value !== null && 'value' in value && !(value instanceof Date) && !Array.isArray(value)) {
-        console.warn(`⚠️ [DB-CREATE] Found object format in dataToInsert for key "${key}", extracting value`);
-        finalValue = value.value;
+      // Prepare data values - ensure we extract values from objects
+      const preparedData = {};
+      for (const [key, value] of Object.entries(recordData)) {
+        // Triple-check: if value is still an object with 'value' property, extract it
+        let finalValue = value;
+        
+        // Check if it's the new format object
+        if (typeof value === 'object' && value !== null && 'value' in value && !(value instanceof Date) && !Array.isArray(value)) {
+          console.warn(`⚠️ [DB-CREATE] Found object format in recordData for key "${key}", extracting value`);
+          finalValue = value.value;
+        }
+        
+        // Prepare the value (this will handle any remaining objects by JSON.stringify)
+        preparedData[key] = prepareValueForInsert(finalValue);
       }
       
-      // Prepare the value (this will handle any remaining objects by JSON.stringify)
-      preparedData[key] = prepareValueForInsert(finalValue);
-    }
-    
-    console.log("💾 [DB-CREATE] Prepared data for insertion:", Object.keys(preparedData).reduce((acc, key) => {
-      const val = preparedData[key];
-      let typeInfo = typeof val;
-      if (val !== null && typeof val === 'object') {
-        if (val instanceof Date) {
-          typeInfo = 'Date';
-        } else if (Array.isArray(val)) {
-          typeInfo = 'Array';
-        } else if ('value' in val) {
-          typeInfo = 'Object with value property';
-        } else {
-          typeInfo = 'OBJECT!';
+      // Final validation: ensure no objects remain
+      for (const [key, value] of Object.entries(preparedData)) {
+        if (typeof value === 'object' && value !== null && !(value instanceof Date) && !Array.isArray(value)) {
+          console.error(`❌ [DB-CREATE] CRITICAL: Object still present in preparedData for key "${key}":`, value);
+          // Try to extract value if it's the new format
+          if ('value' in value) {
+            console.warn(`⚠️ [DB-CREATE] Extracting value from object for key "${key}"`);
+            preparedData[key] = prepareValueForInsert(value.value);
+          } else {
+            // Force convert to JSON string as last resort
+            preparedData[key] = JSON.stringify(value);
+          }
         }
       }
-      acc[key] = typeInfo;
-      return acc;
-    }, {}));
-    
-    // Final validation: ensure no objects remain
-    for (const [key, value] of Object.entries(preparedData)) {
-      if (typeof value === 'object' && value !== null && !(value instanceof Date) && !Array.isArray(value)) {
-        console.error(`❌ [DB-CREATE] CRITICAL: Object still present in preparedData for key "${key}":`, value);
-        // Try to extract value if it's the new format
-        if ('value' in value) {
-          console.warn(`⚠️ [DB-CREATE] Extracting value from object for key "${key}"`);
-          preparedData[key] = prepareValueForInsert(value.value);
-        } else {
-          // Force convert to JSON string as last resort
-          preparedData[key] = JSON.stringify(value);
-        }
-      }
-    }
-    
-    // Log final prepared data types
-    console.log("💾 [DB-CREATE] Final prepared data types:", Object.keys(preparedData).reduce((acc, key) => {
-      const val = preparedData[key];
-      acc[key] = typeof val + (val !== null && typeof val === 'object' && !(val instanceof Date) && !Array.isArray(val) ? ' (STILL OBJECT!)' : '');
-      return acc;
-    }, {}));
+      
+      return preparedData;
+    };
 
     // Get table schema to map form data to columns
     let tableSchema;
@@ -1458,8 +1510,10 @@ const executeDbCreate = async (node, context, appId, userId) => {
       });
       
       // Check if we have new fields in data that don't exist in table
+      // Use first record to check for new fields
+      const firstRecordPrepared = prepareRecordForInsert(recordsToInsert[0]);
       const existingColumnNames = new Set(tableSchema.keys());
-      const newFields = Object.keys(preparedData).filter(
+      const newFields = Object.keys(firstRecordPrepared).filter(
         key => !existingColumnNames.has(key) && 
                 !['id', 'created_at', 'updated_at', 'app_id'].includes(key)
       );
@@ -1472,8 +1526,8 @@ const executeDbCreate = async (node, context, appId, userId) => {
           const columnName = sanitizeIdentifier(fieldName);
           securityValidator.validateColumnName(columnName);
           
-          // Get the value to infer type
-          const fieldValue = preparedData[fieldName];
+          // Get the value to infer type from first record
+          const fieldValue = firstRecordPrepared[fieldName];
           
           // Try to get type from insertDataRaw if available (user-selected type)
           let sqlType = 'TEXT'; // Default
@@ -1556,12 +1610,13 @@ const executeDbCreate = async (node, context, appId, userId) => {
       }
     }
 
-    // Build INSERT statement with proper SQL escaping
-    const insertColumns = [];
-    const escapedValues = [];
+    // Build INSERT statement with proper SQL escaping for a single record
+    const buildInsertStatement = (preparedData) => {
+      const insertColumns = [];
+      const escapedValues = [];
 
-    // Map data to table columns
-    for (const [columnName, columnInfo] of tableSchema) {
+      // Map data to table columns
+      for (const [columnName, columnInfo] of tableSchema) {
       // Skip auto-generated columns
       if (
         columnName === "id" ||
@@ -1727,23 +1782,49 @@ const executeDbCreate = async (node, context, appId, userId) => {
       }
     }
 
-    // Add app_id
-    insertColumns.push('"app_id"');
-    escapedValues.push(String(parseInt(appId)));
+        // Add app_id
+        insertColumns.push('"app_id"');
+        escapedValues.push(String(parseInt(appId)));
 
-    const insertSQL = `INSERT INTO "${tableName}" (${insertColumns.join(
-      ", "
-    )}) VALUES (${escapedValues.join(", ")}) RETURNING id`;
+        return {
+          columns: insertColumns,
+          values: escapedValues
+        };
+      };
+    
+    // Insert all records
+    const insertedIds = [];
+    console.log(`💾 [DB-CREATE] Starting batch insert of ${recordsToInsert.length} record(s)`);
+    
+    for (let recordIndex = 0; recordIndex < recordsToInsert.length; recordIndex++) {
+      const recordData = recordsToInsert[recordIndex];
+      console.log(`💾 [DB-CREATE] Processing record ${recordIndex + 1}/${recordsToInsert.length}`);
+      
+      // Prepare this record's data
+      const preparedData = prepareRecordForInsert(recordData);
+      
+      // Build INSERT statement for this record
+      const { columns: insertColumns, values: escapedValues } = buildInsertStatement(preparedData);
+      
+      const insertSQL = `INSERT INTO "${tableName}" (${insertColumns.join(
+        ", "
+      )}) VALUES (${escapedValues.join(", ")}) RETURNING id`;
 
-    console.log("💾 [DB-CREATE] Insert SQL:", insertSQL);
-    console.log("💾 [DB-CREATE] Escaped values:", escapedValues);
+      console.log(`💾 [DB-CREATE] Insert SQL for record ${recordIndex + 1}:`, insertSQL.substring(0, 200) + "...");
 
-    const insertResult = await prisma.$queryRawUnsafe(insertSQL);
-    const insertedId = insertResult[0]?.id;
+      const insertResult = await prisma.$queryRawUnsafe(insertSQL);
+      const insertedId = insertResult[0]?.id;
+      insertedIds.push(insertedId);
 
+      console.log(
+        `✅ [DB-CREATE] Record ${recordIndex + 1} inserted successfully, record ID:`,
+        insertedId
+      );
+    }
+    
     console.log(
-      "✅ [DB-CREATE] Data inserted successfully, record ID:",
-      insertedId
+      `✅ [DB-CREATE] All ${insertedIds.length} record(s) inserted successfully. IDs:`,
+      insertedIds.join(", ")
     );
 
     // Record performance metrics
@@ -1753,28 +1834,35 @@ const executeDbCreate = async (node, context, appId, userId) => {
       tableName,
       tableCreated ? "create" : "insert",
       executionTime,
-      1 // One record inserted
+      insertedIds.length // Number of records inserted
     );
 
     console.log("✅ [DB-CREATE] Operation completed successfully:", tableName);
 
+    // Use first inserted ID for backward compatibility
+    const firstInsertedId = insertedIds[0];
+    
     return {
       success: true,
       tableName,
-      recordId: insertedId,
+      recordId: firstInsertedId,
+      recordIds: insertedIds, // Array of all inserted IDs
+      recordsInserted: insertedIds.length,
       tableCreated,
-      columnsInserted: insertColumns.length - 1, // Exclude app_id
       message: tableCreated
-        ? `Table '${tableName}' created and data inserted (ID: ${insertedId})`
-        : `Data inserted into '${tableName}' (ID: ${insertedId})`,
+        ? `Table '${tableName}' created and ${insertedIds.length} record(s) inserted (IDs: ${insertedIds.join(", ")})`
+        : `${insertedIds.length} record(s) inserted into '${tableName}' (IDs: ${insertedIds.join(", ")})`,
       executionTime,
       context: {
         ...context,
-        recordId: insertedId,
+        recordId: firstInsertedId,
+        recordIds: insertedIds,
         tableName: tableName,
         dbCreateResult: {
           tableName,
-          recordId: insertedId,
+          recordId: firstInsertedId,
+          recordIds: insertedIds,
+          recordsInserted: insertedIds.length,
           tableCreated,
           executionTime,
         },
