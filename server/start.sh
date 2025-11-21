@@ -1,44 +1,33 @@
 #!/bin/sh
 set -e
 
-# Colors for output
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m' # No Color
-
-echo "${YELLOW}[FloNeo] Waiting for database server to be ready...${NC}"
-
-# Wait for database to be ready using pg_isready
+echo "Waiting for database server to be ready..."
 for i in $(seq 1 30); do
-  if pg_isready -h postgres -U floneo > /dev/null 2>&1; then
-    echo "${GREEN}[FloNeo] Database is ready!${NC}"
+  if pg_isready -h postgres -p 5432 2>/dev/null | grep -q "accepting"; then
+    echo "✅ Database server is ready!"
     break
   fi
-  echo "${YELLOW}[FloNeo] Attempt $i/30: Waiting for database...${NC}"
+  echo "⏳ Attempt $i: Database server not ready yet, waiting..."
   sleep 2
 done
 
-# Run migrations
-echo "${YELLOW}[FloNeo] Running database migrations...${NC}"
-if npx prisma migrate deploy; then
-  echo "${GREEN}[FloNeo] Migrations completed successfully!${NC}"
+# Apply migrations or fallback to push schema
+if [ -d "prisma/migrations" ] && [ "$(ls -A prisma/migrations)" ]; then
+  echo "🧱 Running database migrations..."
+  npx prisma migrate deploy || echo "⚠ Migration failed, continuing..."
 else
-  echo "${YELLOW}[FloNeo] Migrations completed with warnings (continuing...)${NC}"
+  echo "⚙ No migrations found, pushing schema to DB..."
+  npx prisma db push || echo "⚠ Schema push failed, continuing..."
 fi
 
-# Seed the database with test data
-echo "${YELLOW}[FloNeo] Seeding database with test data...${NC}"
-if npx prisma db seed; then
-  echo "${GREEN}[FloNeo] Database seeding completed successfully!${NC}"
-else
-  echo "${YELLOW}[FloNeo] Database seeding completed with warnings (continuing...)${NC}"
-fi
+# Seed the database
+echo "🌱 Seeding database..."
+npx prisma db seed || echo "⚠ Seeding failed, continuing..."
 
 # Generate Prisma client
-echo "${YELLOW}[FloNeo] Generating Prisma client...${NC}"
+echo "⚡ Generating Prisma client..."
 npx prisma generate
 
-# Start the application
-echo "${GREEN}[FloNeo] Starting FloNeo application...${NC}"
+# Start the app
+echo "🚀 Starting FloNeo application..."
 npm start

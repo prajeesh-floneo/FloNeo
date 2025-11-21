@@ -36,11 +36,17 @@ export function useTableSuggestions() {
     setError(null)
 
     try {
-      const token = localStorage.getItem('token')
-      const response = await fetch(`/api/database/${currentAppId}/tables`, {
+      const token = localStorage.getItem('authToken')
+      if (!token) {
+        throw new Error('Authentication token not found')
+      }
+      const response = await fetch(`/api/database/${currentAppId}`, {
+        method: 'GET',
         headers: {
           Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
         },
+        cache: 'no-store',
       })
 
       if (!response.ok) {
@@ -109,11 +115,17 @@ export function useColumnSuggestions(tableName?: string) {
     setError(null)
 
     try {
-      const token = localStorage.getItem('token')
-      const response = await fetch(`/api/database/${currentAppId}/tables`, {
+      const token = localStorage.getItem('authToken')
+      if (!token) {
+        throw new Error('Authentication token not found')
+      }
+      const response = await fetch(`/api/database/${currentAppId}`, {
+        method: 'GET',
         headers: {
           Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
         },
+        cache: 'no-store',
       })
 
       if (!response.ok) {

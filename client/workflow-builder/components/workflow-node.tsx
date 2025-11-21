@@ -10,7 +10,6 @@ import {
   UserPlus,
   LogIn,
   Upload,
-  Download,
   Calendar,
   Send,
   CheckCircle,
@@ -30,6 +29,8 @@ import {
   AlertCircle,
   Check,
   Sparkles,
+  CheckSquare,
+  FileCheck,
 } from "lucide-react";
 import {
   Dialog,
@@ -78,6 +79,30 @@ interface DbFindSimpleState {
   latestLimit?: number;
 }
 
+// ========== DB.UPDATE SIMPLE MODE TYPES ==========
+
+// Simple mode UI state interface for db.update
+interface DbUpdateSimpleState {
+  mode: "simple" | "advanced";
+  tableName: string;
+
+  // Fields to update
+  updateFields: Array<{
+    id: string;
+    field: string;
+    value: string;
+  }>;
+
+  // Where conditions
+  whereConditions: Array<{
+    id: string;
+    field: string;
+    operator: string;
+    value: string;
+    logic: "AND" | "OR";
+  }>;
+}
+
 // Operator mapping: Plain language → SQL
 const OPERATOR_MAP: Record<string, string> = {
   equals: "=",
@@ -112,8 +137,9 @@ function convertSimpleModeToBackend(simple: DbFindSimpleState): any {
 
   switch (simple.template) {
     case "all":
-      // Get all records - just defaults with sorting by newest
-      config.orderBy = [{ field: "createdAt", direction: "DESC" }];
+      // Get all records - just defaults without sorting
+      // Don't assume created_at/createdAt exists in all tables
+      config.orderBy = [];
       config.limit = 100;
       break;
 
@@ -162,7 +188,8 @@ function convertSimpleModeToBackend(simple: DbFindSimpleState): any {
         config.offset = simple.customOffset || 0;
       }
 
-      config.orderBy = [{ field: "createdAt", direction: "DESC" }];
+      // Don't assume created_at/createdAt exists in all tables
+      config.orderBy = [];
       break;
 
     case "latest":
@@ -278,6 +305,108 @@ function convertBackendToSimpleMode(data: any): DbFindSimpleState {
   return simple;
 }
 
+// ========== DB.UPDATE CONVERSION FUNCTIONS ==========
+
+// Convert simple mode state to backend format for db.update
+function convertDbUpdateSimpleToBackend(simple: DbUpdateSimpleState): any {
+  // Convert updateFields array to updateData object
+  const updateData: Record<string, string> = {};
+  simple.updateFields.forEach((field) => {
+    if (field.field && field.value !== undefined) {
+      updateData[field.field] = field.value;
+    }
+  });
+
+  // Convert whereConditions array to backend format
+  const whereConditions = simple.whereConditions.map((condition) => ({
+    field: condition.field,
+    operator: OPERATOR_MAP[condition.operator] || condition.operator,
+    value: condition.value,
+    logic: condition.logic || "AND",
+  }));
+
+  return {
+    tableName: simple.tableName,
+    updateData,
+    whereConditions,
+  };
+}
+
+// Convert backend format to simple mode state for db.update
+function convertDbUpdateBackendToSimple(data: any): DbUpdateSimpleState {
+  const simple: DbUpdateSimpleState = {
+    mode: "simple",
+    tableName: data.tableName || "",
+    updateFields: [],
+    whereConditions: [],
+  };
+
+  // Convert updateData object to updateFields array
+  if (data.updateData) {
+    let updateDataObj = data.updateData;
+
+    // Parse if it's a string
+    if (typeof updateDataObj === "string") {
+      try {
+        updateDataObj = JSON.parse(updateDataObj);
+      } catch {
+        // If parsing fails, switch to advanced mode
+        simple.mode = "advanced";
+        return simple;
+      }
+    }
+
+    // Convert object to array of fields
+    if (typeof updateDataObj === "object" && updateDataObj !== null) {
+      simple.updateFields = Object.entries(updateDataObj).map(
+        ([field, value], index) => ({
+          id: `field-${index}-${Date.now()}`,
+          field,
+          value: String(value),
+        })
+      );
+    }
+  }
+
+  // Convert whereConditions to array format
+  if (data.whereConditions) {
+    let conditionsArray = data.whereConditions;
+
+    // Parse if it's a string
+    if (typeof conditionsArray === "string") {
+      try {
+        const parsed = JSON.parse(conditionsArray);
+        conditionsArray = Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        // If parsing fails, switch to advanced mode
+        simple.mode = "advanced";
+        return simple;
+      }
+    }
+
+    // Ensure it's an array
+    if (!Array.isArray(conditionsArray)) {
+      conditionsArray = [conditionsArray];
+    }
+
+    // Convert to simple format
+    simple.whereConditions = conditionsArray.map(
+      (condition: any, index: number) => ({
+        id: `condition-${index}-${Date.now()}`,
+        field: condition.field || "",
+        operator:
+          OPERATOR_REVERSE_MAP[condition.operator] ||
+          condition.operator ||
+          "equals",
+        value: String(condition.value || ""),
+        logic: condition.logic || "AND",
+      })
+    );
+  }
+
+  return simple;
+}
+
 // ============================================================================
 // END OF TRANSLATION LAYER
 // ============================================================================
@@ -299,6 +428,7 @@ const getBlockIcon = (label: string) => {
     dateValid: Calendar,
     isFilled: CheckCircle,
     match: Shuffle,
+    inList: CheckSquare,
     roleIs: UserCheck,
     "auth.verify": Shield,
 
@@ -313,10 +443,9 @@ const getBlockIcon = (label: string) => {
     "ui.openModal": ExternalLink,
     "notify.toast": Bell,
     "http.request": Globe,
-    "file.upload": Upload,
-    "file.download": Download,
     "page.redirect": ArrowRight,
     "ai.summarize": Sparkles,
+    "audit.log": FileCheck,
   };
 
   return iconMap[label] || Settings;
@@ -333,7 +462,11 @@ const isBlockConfigured = (data: WorkflowNodeData): boolean => {
     case "onSchedule":
       return !!data.cronExpression;
 
+    case "onWebhook":
+      return true; // Always configured - webhook URL is auto-generated
+
     case "onRecordCreate":
+      return !!(data.tableName && data.enabled !== false);
     case "onRecordUpdate":
       return !!data.tableName;
 
@@ -341,11 +474,20 @@ const isBlockConfigured = (data: WorkflowNodeData): boolean => {
       return !!data.targetElementId;
 
     case "dateValid":
-      return !!(data.selectedElementIds && data.selectedElementIds.length > 0);
+      return !!(
+        (data.selectedElementIds && data.selectedElementIds.length > 0) ||
+        (data.customDateFields && data.customDateFields.length > 0)
+      );
 
     case "onSubmit":
-    case "isFilled":
       return !!data.selectedFormGroup;
+
+    case "isFilled":
+      return !!(
+        data.selectedFormGroup &&
+        data.selectedElementIds &&
+        data.selectedElementIds.length > 0
+      );
 
     case "db.create":
       return !!(data.tableName && data.insertData);
@@ -359,9 +501,8 @@ const isBlockConfigured = (data: WorkflowNodeData): boolean => {
     case "db.upsert":
       return !!(
         data.tableName &&
-        data.insertData &&
-        data.updateData &&
-        data.uniqueFields
+        data.uniqueFields &&
+        (data.insertData || data.updateData)
       );
 
     case "email.send":
@@ -389,19 +530,20 @@ const isBlockConfigured = (data: WorkflowNodeData): boolean => {
     case "http.request":
       return !!(data.url && data.method);
 
-    case "file.upload":
-      return !!data.fileUploadElementId;
-
-    case "file.download": {
-      const source = data.downloadSourceType || "url";
-      if (source === "url") return !!data.downloadUrl;
-      if (source === "context") return !!data.downloadContextKey;
-      if (source === "path") return !!data.downloadPath;
-      return false;
-    }
-
     case "match":
       return !!(data.leftValue && data.rightValue);
+
+    case "inList": {
+      if (!data.inListValue) return false;
+      const mode = data.inListMode || "static";
+      if (mode === "context") {
+        return !!data.inListContextPath;
+      }
+      if (mode === "table") {
+        return !!data.inListTableName;
+      }
+      return !!data.inListStaticList;
+    }
 
     case "roleIs":
       return !!data.requiredRole;
@@ -411,6 +553,9 @@ const isBlockConfigured = (data: WorkflowNodeData): boolean => {
 
     case "ai.summarize":
       return !!(data.fileVariable && data.apiKey);
+
+    case "audit.log":
+      return true; // Always configured - optional filters
 
     default:
       return false;
@@ -489,10 +634,6 @@ export interface WorkflowNodeData {
   acceptedTypes?: string[];
   maxFileSize?: number;
   allowMultiple?: boolean;
-  allowedFileTypes?: string[];
-  fileUploadElementId?: string;
-  fileUploadOutputVariable?: string;
-  fileUploadMaxSizeMB?: number;
   dateFormat?: string;
   validationRules?: {
     required?: boolean;
@@ -503,6 +644,7 @@ export interface WorkflowNodeData {
     minDate?: string;
     maxDate?: string;
   };
+  customDateFields?: string[];
   tableName?: string;
   triggerType?: string;
   // DbFind configuration properties
@@ -591,6 +733,16 @@ export interface WorkflowNodeData {
     allowPartialMatches?: boolean;
   };
 
+  // inList configuration properties
+  inListValue?: string;
+  inListMode?: "static" | "context" | "table";
+  inListStaticList?: string;
+  inListContextPath?: string;
+  inListTableName?: string;
+  inListTableColumn?: string;
+  inListIgnoreCase?: boolean;
+  inListTrimValues?: boolean;
+
   // auth.verify configuration properties
   tokenSource?: "context" | "header" | "config";
   requireVerified?: boolean;
@@ -622,25 +774,28 @@ export interface WorkflowNodeData {
   responseType?: string;
   saveResponseTo?: string;
 
-  // file.upload configuration properties
-  fileUploadSource?: "form" | "context";
-
-  // file.download configuration properties
-  downloadSourceType?: "url" | "context" | "path";
-  downloadUrl?: string;
-  downloadContextKey?: string;
-  downloadPath?: string;
-  downloadFileName?: string;
-  downloadMimeType?: string;
-
   // ai.summarize configuration properties
   fileVariable?: string;
   apiKey?: string;
   outputVariable?: string;
 
+  // audit.log configuration properties
+  logLimit?: number;
+  logFilter?: "all" | "app" | "user" | "action";
+  logAction?: string;
+  logUserId?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  outputFormat?: "formatted" | "raw" | "json";
+
   // roleIs configuration properties
   checkMultiple?: boolean;
   roles?: string[];
+
+  // isFilled configuration properties
+  showToastOnFail?: boolean;
+  failureMessage?: string;
+  failureTitle?: string;
 }
 
 const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
@@ -649,7 +804,7 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
   selected,
 }) => {
   const { setNodes } = useReactFlow();
-  const { formGroups: formGroupsFromContext } = useCanvasWorkflow();
+  const { formGroups: formGroupsFromContext, pages: canvasPages } = useCanvasWorkflow();
   const [formGroups, setFormGroups] = useState<
     Array<{ id: string; name: string; elementIds: string[] }>
   >([]);
@@ -658,6 +813,8 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
   >([]);
   const [appId, setAppId] = useState<string | null>(null);
   const [pages, setPages] = useState<Array<{ id: string; name: string }>>([]);
+  const [appRoles, setAppRoles] = useState<string[]>([]);
+
   const [isConfigOpen, setIsConfigOpen] = useState(false);
 
   // State for all canvas elements (for onDrop and dateValid dropdowns)
@@ -670,6 +827,9 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
       pageName: string;
     }>
   >([]);
+
+  const [customDateFieldInput, setCustomDateFieldInput] = useState("");
+  const [selectedInListFieldId, setSelectedInListFieldId] = useState("");
 
   // State for db.find simple mode
   const [dbFindSimpleState, setDbFindSimpleState] = useState<DbFindSimpleState>(
@@ -686,6 +846,25 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
       };
     }
   );
+
+  // State for db.update simple mode
+  const [dbUpdateSimpleState, setDbUpdateSimpleState] =
+    useState<DbUpdateSimpleState>(() => {
+      // Initialize from existing data if available
+      if (
+        data.label === "db.update" &&
+        (data.updateData || data.whereConditions)
+      ) {
+        return convertDbUpdateBackendToSimple(data);
+      }
+      // Default state for new db.update blocks
+      return {
+        mode: "simple",
+        tableName: "",
+        updateFields: [],
+        whereConditions: [],
+      };
+    });
 
   // Helper function to update node data
   const updateNodeData = (key: string, value: any) => {
@@ -769,6 +948,32 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
         if (!currentAppId) return;
 
         setAppId(currentAppId);
+
+        // Fetch App Roles
+        try {
+          const token = localStorage.getItem("authToken");
+
+          const roleRes = await fetch(`/api/apps/${currentAppId}/roles`, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+          });
+
+          const roleData = await roleRes.json();
+
+          if (roleData.success && roleData.roles) {
+            setAppRoles(roleData.roles);
+            console.log("🎭 [WF-NODE] App Roles Loaded:", roleData.roles);
+          } else {
+            console.warn("⚠️ No roles found for app");
+          }
+        } catch (err) {
+          console.error("❌ Failed to fetch roles:", err);
+        }
+
+        // Pages are now loaded from canvas context (useCanvasWorkflow().pages)
+        // No need to fetch separately - they sync automatically from Canvas
 
         // Fetch canvas data to get form groups and elements
         const token = localStorage.getItem("authToken");
@@ -1103,6 +1308,7 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
   // Get suggestions hooks
   const { pages: pageSuggestions } = usePageSuggestions();
   const { tables: tableSuggestions } = useTableSuggestions();
+  const { columns: columnSuggestions } = useColumnSuggestions(data.tableName);
 
   // Helper function to render block-specific configuration
   const renderBlockConfiguration = () => {
@@ -1333,6 +1539,72 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
           </div>
         );
 
+      case "onWebhook":
+        // Get appId from component state (set from URL params)
+        const webhookAppId = appId || "1";
+        const backendUrl =
+          process.env.NEXT_PUBLIC_BACKEND_URL || "http://backend:5000";
+        const webhookUrl = `${backendUrl}/api/workflow/webhook/${webhookAppId}`;
+
+        return (
+          <div className="space-y-4">
+            <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+              <div className="space-y-3">
+                <div>
+                  <label className="text-sm font-medium text-blue-700 dark:text-blue-300">
+                    Webhook URL:
+                  </label>
+                  <div className="mt-1 flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={webhookUrl}
+                      className="flex-1 px-3 py-2 text-sm border rounded-md bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(webhookUrl);
+                        // You might want to show a toast here
+                      }}
+                      className="px-3 py-2 text-sm bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
+
+                <div className="text-xs text-blue-600 dark:text-blue-400 space-y-1">
+                  <p className="font-medium">How to use:</p>
+                  <ul className="list-disc list-inside space-y-1 ml-2">
+                    <li>Send a POST request to this URL</li>
+                    <li>
+                      Include header:{" "}
+                      <code className="bg-blue-100 dark:bg-blue-900 px-1 rounded">
+                        x-algo-secret: YOUR_SECRET
+                      </code>
+                    </li>
+                    <li>Send JSON payload in request body</li>
+                    <li>Payload will be available in workflow context</li>
+                  </ul>
+                </div>
+
+                <div className="p-2 bg-yellow-50 dark:bg-yellow-900/20 rounded text-xs text-yellow-700 dark:text-yellow-300 border border-yellow-200 dark:border-yellow-800">
+                  <p className="font-medium mb-1">⚠️ Security Note:</p>
+                  <p>
+                    Set{" "}
+                    <code className="bg-yellow-100 dark:bg-yellow-900 px-1 rounded">
+                      ALGORITHM_WEBHOOK_SECRET
+                    </code>{" "}
+                    in your backend environment variables to enable secret
+                    validation.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+
       case "notify.toast":
         return (
           <div className="space-y-4">
@@ -1438,6 +1710,103 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
         );
 
       case "onRecordCreate":
+        return (
+          <div className="space-y-4">
+            {/* Enable/Disable Toggle */}
+            <div className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                checked={data.enabled !== false}
+                onChange={(e) => {
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: { ...node.data, enabled: e.target.checked },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-4 h-4"
+              />
+              <label className="text-sm font-medium">
+                Enable trigger
+              </label>
+            </div>
+
+            {/* Table Selection */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Select Table:</label>
+              <select
+                value={data.tableName || ""}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: { ...node.data, tableName: value },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">
+                  {tableSuggestions.length === 0
+                    ? "Loading tables..."
+                    : "Select table..."}
+                </option>
+                {tableSuggestions.map((table) => (
+                  <option key={table.value} value={table.value}>
+                    {table.label} {table.description ? `(${table.description})` : ""}
+                  </option>
+                ))}
+              </select>
+              {tableSuggestions.length === 0 && (
+                <div className="text-xs text-muted-foreground">
+                  No tables found. Create tables in the Database section first.
+                </div>
+              )}
+              <div className="text-xs text-muted-foreground">
+                Automatically runs when a new row is inserted into this table
+              </div>
+            </div>
+
+            {/* Field Preview */}
+            {data.tableName && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Table Fields Preview:</label>
+                {columnSuggestions.length > 0 ? (
+                  <>
+                    <div className="border rounded-md px-3 py-2 max-h-48 overflow-y-auto space-y-1 bg-muted/30">
+                      {columnSuggestions.map((col) => (
+                        <div key={col.value} className="flex items-center justify-between text-sm py-1">
+                          <span className="font-mono text-xs font-medium">{col.value}</span>
+                          <span className="text-xs text-muted-foreground ml-2">
+                            {col.description || col.metadata?.type || "field"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      The created record data will be available in the next workflow block as <code className="bg-muted px-1 rounded">{"{{record}}"}</code> or individual fields like <code className="bg-muted px-1 rounded">{"{{fieldName}}"}</code>
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-xs text-muted-foreground p-2 bg-muted/30 rounded border">
+                    {data.tableName ? "Loading fields..." : "Select a table to preview fields"}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+
       case "onRecordUpdate":
         return (
           <div className="space-y-4">
@@ -1490,44 +1859,41 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
                 />
               )}
               <div className="text-xs text-muted-foreground">
-                Table to monitor for{" "}
-                {data.label === "onRecordCreate" ? "new" : "updated"} records
+                Table to monitor for updated records
               </div>
             </div>
 
-            {data.label === "onRecordUpdate" && (
-              <div className="space-y-2">
-                <label className="text-sm font-medium">
-                  Watch Columns (Optional):
-                </label>
-                <input
-                  type="text"
-                  placeholder="column1, column2, column3"
-                  value={(data.watchColumns || []).join(", ")}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    const columns = value
-                      .split(",")
-                      .map((c) => c.trim())
-                      .filter(Boolean);
-                    setNodes((nodes) =>
-                      nodes.map((node) =>
-                        node.id === id
-                          ? {
-                              ...node,
-                              data: { ...node.data, watchColumns: columns },
-                            }
-                          : node
-                      )
-                    );
-                  }}
-                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <div className="text-xs text-muted-foreground">
-                  Comma-separated list of columns to watch for changes
-                </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">
+                Watch Columns (Optional):
+              </label>
+              <input
+                type="text"
+                placeholder="column1, column2, column3"
+                value={(data.watchColumns || []).join(", ")}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  const columns = value
+                    .split(",")
+                    .map((c) => c.trim())
+                    .filter(Boolean);
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: { ...node.data, watchColumns: columns },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <div className="text-xs text-muted-foreground">
+                Comma-separated list of columns to watch for changes
               </div>
-            )}
+            </div>
           </div>
         );
 
@@ -1601,83 +1967,129 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
               </div>
               <div className="space-y-2 max-h-48 overflow-y-auto">
                 {(data.insertData ? Object.entries(data.insertData) : []).map(
-                  ([column, value], index) => (
-                    <div key={index} className="flex gap-2">
-                      <input
-                        type="text"
-                        placeholder="column name"
-                        value={column || ""}
-                        onChange={(e) => {
-                          const newData = { ...(data.insertData || {}) };
-                          const oldColumn = column;
-                          const newColumn = e.target.value;
+                  ([column, fieldData], index) => {
+                    // Support both old format (string value) and new format (object with value and type)
+                    const isNewFormat = typeof fieldData === 'object' && fieldData !== null && 'value' in fieldData;
+                    const value = isNewFormat ? (fieldData as any).value : (fieldData as string);
+                    const fieldType = isNewFormat ? (fieldData as any).type || 'TEXT' : 'TEXT';
+                    
+                    return (
+                      <div key={index} className="flex gap-2">
+                        <input
+                          type="text"
+                          placeholder="column name"
+                          value={column || ""}
+                          onChange={(e) => {
+                            const newData = { ...(data.insertData || {}) };
+                            const oldColumn = column;
+                            const newColumn = e.target.value;
 
-                          // Remove old key and add new key with same value
-                          delete newData[oldColumn];
-                          newData[newColumn] = value;
+                            // Remove old key and add new key with same value
+                            const fieldValue = newData[oldColumn];
+                            delete newData[oldColumn];
+                            newData[newColumn] = fieldValue;
 
-                          setNodes((nodes) =>
-                            nodes.map((node) =>
-                              node.id === id
-                                ? {
-                                    ...node,
-                                    data: { ...node.data, insertData: newData },
-                                  }
-                                : node
-                            )
-                          );
-                        }}
-                        className="flex-1 px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
-                      <input
-                        type="text"
-                        placeholder="value"
-                        value={(value as string) || ""}
-                        onChange={(e) => {
-                          const newData = { ...(data.insertData || {}) };
-                          newData[column] = e.target.value;
-                          setNodes((nodes) =>
-                            nodes.map((node) =>
-                              node.id === id
-                                ? {
-                                    ...node,
-                                    data: { ...node.data, insertData: newData },
-                                  }
-                                : node
-                            )
-                          );
-                        }}
-                        className="flex-1 px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
-                      <button
-                        onClick={() => {
-                          const newData = { ...(data.insertData || {}) };
-                          delete newData[column];
-                          setNodes((nodes) =>
-                            nodes.map((node) =>
-                              node.id === id
-                                ? {
-                                    ...node,
-                                    data: { ...node.data, insertData: newData },
-                                  }
-                                : node
-                            )
-                          );
-                        }}
-                        className="px-2 py-2 text-sm border rounded-md hover:bg-red-500/10 hover:border-red-500 transition-colors"
-                        title="Remove field"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  )
+                            setNodes((nodes) =>
+                              nodes.map((node) =>
+                                node.id === id
+                                  ? {
+                                      ...node,
+                                      data: { ...node.data, insertData: newData },
+                                    }
+                                  : node
+                              )
+                            );
+                          }}
+                          className="flex-1 px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                        <select
+                          value={fieldType}
+                          onChange={(e) => {
+                            const newData = { ...(data.insertData || {}) };
+                            const currentValue = isNewFormat ? (fieldData as any).value : (fieldData as string);
+                            newData[column] = {
+                              value: currentValue,
+                              type: e.target.value,
+                            };
+                            setNodes((nodes) =>
+                              nodes.map((node) =>
+                                node.id === id
+                                  ? {
+                                      ...node,
+                                      data: { ...node.data, insertData: newData },
+                                    }
+                                  : node
+                              )
+                            );
+                          }}
+                          className="w-32 px-2 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                          <option value="TEXT">TEXT</option>
+                          <option value="VARCHAR(255)">VARCHAR(255)</option>
+                          <option value="INTEGER">INTEGER</option>
+                          <option value="DECIMAL(10,2)">DECIMAL</option>
+                          <option value="BOOLEAN">BOOLEAN</option>
+                          {/* DATE and TIMESTAMP removed due to complexity - use TEXT for date strings */}
+                          <option value="TIME">TIME</option>
+                        </select>
+                        <input
+                          type="text"
+                          placeholder="value"
+                          value={value || ""}
+                          onChange={(e) => {
+                            const newData = { ...(data.insertData || {}) };
+                            const currentType = isNewFormat ? (fieldData as any).type || 'TEXT' : 'TEXT';
+                            newData[column] = {
+                              value: e.target.value,
+                              type: currentType,
+                            };
+                            setNodes((nodes) =>
+                              nodes.map((node) =>
+                                node.id === id
+                                  ? {
+                                      ...node,
+                                      data: { ...node.data, insertData: newData },
+                                    }
+                                  : node
+                              )
+                            );
+                          }}
+                          className="flex-1 px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                        <button
+                          onClick={() => {
+                            const newData = { ...(data.insertData || {}) };
+                            delete newData[column];
+                            setNodes((nodes) =>
+                              nodes.map((node) =>
+                                node.id === id
+                                  ? {
+                                      ...node,
+                                      data: { ...node.data, insertData: newData },
+                                    }
+                                  : node
+                              )
+                            );
+                          }}
+                          className="px-2 py-2 text-sm border rounded-md hover:bg-red-500/10 hover:border-red-500 transition-colors"
+                          title="Remove field"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    );
+                  }
                 )}
               </div>
               <button
                 onClick={() => {
                   const newData = { ...(data.insertData || {}) };
                   const newKey = `field_${Object.keys(newData).length + 1}`;
-                  newData[newKey] = "";
+                  // Use new format with value and type
+                  newData[newKey] = {
+                    value: "",
+                    type: "TEXT",
+                  };
                   setNodes((nodes) =>
                     nodes.map((node) =>
                       node.id === id
@@ -1800,313 +2212,6 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
             </div>
           </div>
         );
-
-      case "file.upload": {
-        const fileElements = getFileUploadElements();
-        return (
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Input Source:</label>
-              <select
-                value={data.fileUploadElementId || ""}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  setNodes((nodes) =>
-                    nodes.map((node) =>
-                      node.id === id
-                        ? {
-                            ...node,
-                            data: {
-                              ...node.data,
-                              fileUploadElementId: value || undefined,
-                            },
-                          }
-                        : node
-                    )
-                  );
-                }}
-                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="">
-                  {fileElements.length === 0
-                    ? "No file inputs found..."
-                    : "Select file input element..."}
-                </option>
-                {fileElements.map((element) => (
-                  <option key={element.id} value={element.id}>
-                    {element.name || element.id} — {element.type}
-                  </option>
-                ))}
-              </select>
-              <div className="text-xs text-muted-foreground">
-                Files from this element will be uploaded when the workflow runs.
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-sm font-medium">
-                Allowed File Types (comma separated):
-              </label>
-              <input
-                type="text"
-                placeholder="image/*, .pdf, application/pdf"
-                value={(data.allowedFileTypes || []).join(", ")}
-                onChange={(e) => {
-                  const types = e.target.value
-                    .split(",")
-                    .map((item) => item.trim())
-                    .filter(Boolean);
-                  setNodes((nodes) =>
-                    nodes.map((node) =>
-                      node.id === id
-                        ? {
-                            ...node,
-                            data: {
-                              ...node.data,
-                              allowedFileTypes: types.length ? types : undefined,
-                            },
-                          }
-                        : node
-                    )
-                  );
-                }}
-                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <div className="text-xs text-muted-foreground">
-                Supports MIME types (image/png) or extensions (.png).
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Max File Size (MB):</label>
-              <input
-                type="number"
-                min={1}
-                placeholder="10"
-                value={data.fileUploadMaxSizeMB ?? ""}
-                onChange={(e) => {
-                  const value = parseInt(e.target.value, 10);
-                  setNodes((nodes) =>
-                    nodes.map((node) =>
-                      node.id === id
-                        ? {
-                            ...node,
-                            data: {
-                              ...node.data,
-                              fileUploadMaxSizeMB: Number.isNaN(value)
-                                ? undefined
-                                : value,
-                            },
-                          }
-                        : node
-                    )
-                  );
-                }}
-                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-sm font-medium">
-                Save Result To Variable:
-              </label>
-              <input
-                type="text"
-                placeholder="uploadedFile"
-                value={data.fileUploadOutputVariable || "uploadedFile"}
-                onChange={(e) => {
-                  const value = e.target.value.trim();
-                  setNodes((nodes) =>
-                    nodes.map((node) =>
-                      node.id === id
-                        ? {
-                            ...node,
-                            data: {
-                              ...node.data,
-                              fileUploadOutputVariable: value || undefined,
-                            },
-                          }
-                        : node
-                    )
-                  );
-                }}
-                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <div className="text-xs text-muted-foreground">
-                Result (URL, type, size) will be in context using this variable name.
-              </div>
-            </div>
-          </div>
-        );
-      }
-
-      case "file.download": {
-        const sourceType = data.downloadSourceType || "url";
-        return (
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Source Type:</label>
-              <select
-                value={sourceType}
-                onChange={(e) => {
-                  const value = e.target.value as "url" | "context" | "path";
-                  setNodes((nodes) =>
-                    nodes.map((node) =>
-                      node.id === id
-                        ? {
-                            ...node,
-                            data: { ...node.data, downloadSourceType: value },
-                          }
-                        : node
-                    )
-                  );
-                }}
-                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="url">Direct URL</option>
-                <option value="context">Context Variable</option>
-                <option value="path">Server Path</option>
-              </select>
-            </div>
-
-            {sourceType === "url" && (
-              <div className="space-y-2">
-                <label className="text-sm font-medium">File URL:</label>
-                <input
-                  type="text"
-                  placeholder="https://example.com/file.pdf"
-                  value={data.downloadUrl || ""}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    setNodes((nodes) =>
-                      nodes.map((node) =>
-                        node.id === id
-                          ? {
-                              ...node,
-                              data: { ...node.data, downloadUrl: value || undefined },
-                            }
-                          : node
-                      )
-                    );
-                  }}
-                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-            )}
-
-            {sourceType === "context" && (
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Context Key:</label>
-                <input
-                  type="text"
-                  placeholder="uploadedFile"
-                  value={data.downloadContextKey || ""}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    setNodes((nodes) =>
-                      nodes.map((node) =>
-                        node.id === id
-                          ? {
-                              ...node,
-                              data: {
-                                ...node.data,
-                                downloadContextKey: value || undefined,
-                              },
-                            }
-                          : node
-                      )
-                    );
-                  }}
-                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <div className="text-xs text-muted-foreground">
-                  Supports nested keys like files.latest.url
-                </div>
-              </div>
-            )}
-
-            {sourceType === "path" && (
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Server Path:</label>
-                <input
-                  type="text"
-                  placeholder="../uploads/file.pdf"
-                  value={data.downloadPath || ""}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    setNodes((nodes) =>
-                      nodes.map((node) =>
-                        node.id === id
-                          ? {
-                              ...node,
-                              data: { ...node.data, downloadPath: value || undefined },
-                            }
-                          : node
-                      )
-                    );
-                  }}
-                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-            )}
-
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Download File Name:</label>
-              <input
-                type="text"
-                placeholder="invoice.pdf"
-                value={data.downloadFileName || ""}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  setNodes((nodes) =>
-                    nodes.map((node) =>
-                      node.id === id
-                        ? {
-                            ...node,
-                            data: {
-                              ...node.data,
-                              downloadFileName: value || undefined,
-                            },
-                          }
-                        : node
-                    )
-                  );
-                }}
-                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <div className="text-xs text-muted-foreground">
-                Optional. Leave blank to use source file name.
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-sm font-medium">MIME Type (Optional):</label>
-              <input
-                type="text"
-                placeholder="application/pdf"
-                value={data.downloadMimeType || ""}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  setNodes((nodes) =>
-                    nodes.map((node) =>
-                      node.id === id
-                        ? {
-                            ...node,
-                            data: {
-                              ...node.data,
-                              downloadMimeType: value || undefined,
-                            },
-                          }
-                        : node
-                    )
-                  );
-                }}
-                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-          </div>
-        );
-      }
 
       case "http.request":
         return (
@@ -2796,6 +2901,541 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
         );
 
       case "db.update":
+        // Helper function to update simple state and sync to backend
+        const updateDbUpdateSimpleState = (
+          updates: Partial<DbUpdateSimpleState>
+        ) => {
+          const newState = { ...dbUpdateSimpleState, ...updates };
+          setDbUpdateSimpleState(newState);
+
+          // Convert to backend format and update node data
+          const backendConfig = convertDbUpdateSimpleToBackend(newState);
+          setNodes((nodes) =>
+            nodes.map((node) =>
+              node.id === id
+                ? {
+                    ...node,
+                    data: { ...node.data, ...backendConfig },
+                  }
+                : node
+            )
+          );
+        };
+
+        return (
+          <div className="space-y-4">
+            {/* Mode Toggle */}
+            <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+              <div className="text-sm font-medium">Configuration Mode:</div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => updateDbUpdateSimpleState({ mode: "simple" })}
+                  className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                    dbUpdateSimpleState.mode === "simple"
+                      ? "bg-blue-500 text-white"
+                      : "bg-background border hover:bg-muted"
+                  }`}
+                >
+                  Simple
+                </button>
+                <button
+                  onClick={() =>
+                    updateDbUpdateSimpleState({ mode: "advanced" })
+                  }
+                  className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                    dbUpdateSimpleState.mode === "advanced"
+                      ? "bg-blue-500 text-white"
+                      : "bg-background border hover:bg-muted"
+                  }`}
+                >
+                  Advanced
+                </button>
+              </div>
+            </div>
+
+            {/* Simple Mode UI */}
+            {dbUpdateSimpleState.mode === "simple" && (
+              <div className="space-y-4">
+                {/* Quick Start Hint */}
+                {dbUpdateSimpleState.updateFields.length === 0 &&
+                  dbUpdateSimpleState.whereConditions.length === 0 && (
+                    <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                      <div className="flex items-start gap-2">
+                        <span className="text-blue-600 dark:text-blue-400 text-lg">
+                          💡
+                        </span>
+                        <div className="flex-1 text-xs text-blue-800 dark:text-blue-200">
+                          <p className="font-medium mb-1">Quick Start:</p>
+                          <ol className="list-decimal list-inside space-y-0.5 ml-1">
+                            <li>Select the table you want to update</li>
+                            <li>
+                              Add fields you want to change (e.g., status, name)
+                            </li>
+                            <li>
+                              Add conditions to target specific records (e.g.,
+                              id = 123)
+                            </li>
+                          </ol>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                {/* Table Selection */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">
+                    📊 Update table:
+                  </label>
+                  {tableSuggestions.length > 0 ? (
+                    <select
+                      value={dbUpdateSimpleState.tableName || ""}
+                      onChange={(e) =>
+                        updateDbUpdateSimpleState({ tableName: e.target.value })
+                      }
+                      className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">Select table...</option>
+                      {tableSuggestions.map((table) => (
+                        <option key={table.value} value={table.value}>
+                          {table.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      placeholder="Enter table name..."
+                      value={dbUpdateSimpleState.tableName || ""}
+                      onChange={(e) =>
+                        updateDbUpdateSimpleState({ tableName: e.target.value })
+                      }
+                      className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  )}
+                </div>
+
+                {/* Update Fields Section */}
+                <div className="space-y-3">
+                  <label className="text-sm font-medium">
+                    ✏️ Fields to update:
+                  </label>
+
+                  {dbUpdateSimpleState.updateFields.length === 0 && (
+                    <div className="p-4 border-2 border-dashed rounded-lg text-center text-muted-foreground">
+                      <p className="text-sm">No fields added yet</p>
+                      <p className="text-xs mt-1">
+                        Click "+ Add Field" below to start
+                      </p>
+                    </div>
+                  )}
+
+                  {dbUpdateSimpleState.updateFields.map((field, index) => (
+                    <div
+                      key={field.id}
+                      className="p-3 border rounded-lg bg-blue-50 dark:bg-blue-900/20 space-y-2"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-blue-900 dark:text-blue-100">
+                          Field {index + 1}
+                        </span>
+                        <button
+                          onClick={() => {
+                            const newFields =
+                              dbUpdateSimpleState.updateFields.filter(
+                                (f) => f.id !== field.id
+                              );
+                            updateDbUpdateSimpleState({
+                              updateFields: newFields,
+                            });
+                          }}
+                          className="text-red-500 hover:text-red-700 text-sm"
+                        >
+                          ×
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <label className="text-xs">Field name:</label>
+                          <input
+                            type="text"
+                            placeholder={
+                              index === 0 ? "e.g., status" : "e.g., updated_at"
+                            }
+                            value={field.field}
+                            onChange={(e) => {
+                              const newFields =
+                                dbUpdateSimpleState.updateFields.map((f) =>
+                                  f.id === field.id
+                                    ? { ...f, field: e.target.value }
+                                    : f
+                                );
+                              updateDbUpdateSimpleState({
+                                updateFields: newFields,
+                              });
+                            }}
+                            className="w-full px-2 py-1 text-sm border rounded-md bg-background"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs">New value:</label>
+                          <input
+                            type="text"
+                            placeholder={
+                              index === 0
+                                ? "active or {{formData.status}}"
+                                : "{{now}} or 2024-01-01"
+                            }
+                            value={field.value}
+                            onChange={(e) => {
+                              const newFields =
+                                dbUpdateSimpleState.updateFields.map((f) =>
+                                  f.id === field.id
+                                    ? { ...f, value: e.target.value }
+                                    : f
+                                );
+                              updateDbUpdateSimpleState({
+                                updateFields: newFields,
+                              });
+                            }}
+                            className="w-full px-2 py-1 text-sm border rounded-md bg-background font-mono"
+                          />
+                        </div>
+                      </div>
+                      <div className="text-xs text-blue-700 dark:text-blue-300">
+                        💡 Use {`{{variableName}}`} for dynamic values (e.g.,{" "}
+                        {`{{formData.userName}}`}, {`{{dbFindResult[0].id}}`})
+                      </div>
+                    </div>
+                  ))}
+
+                  <button
+                    onClick={() => {
+                      const newField = {
+                        id: `field-${Date.now()}`,
+                        field: "",
+                        value: "",
+                      };
+                      updateDbUpdateSimpleState({
+                        updateFields: [
+                          ...dbUpdateSimpleState.updateFields,
+                          newField,
+                        ],
+                      });
+                    }}
+                    className="w-full px-3 py-2 text-sm border-2 border-dashed rounded-md hover:bg-muted transition-colors"
+                  >
+                    + Add Field
+                  </button>
+                </div>
+
+                {/* Where Conditions Section */}
+                <div className="space-y-3">
+                  <label className="text-sm font-medium">
+                    🎯 Update records where:
+                  </label>
+
+                  {dbUpdateSimpleState.whereConditions.length === 0 && (
+                    <div className="p-4 border-2 border-yellow-300 dark:border-yellow-700 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg">
+                      <div className="flex items-start gap-2">
+                        <span className="text-yellow-600 dark:text-yellow-400 text-lg">
+                          ⚠️
+                        </span>
+                        <div className="flex-1">
+                          <p className="text-sm font-medium text-yellow-800 dark:text-yellow-200">
+                            No conditions added
+                          </p>
+                          <p className="text-xs text-yellow-700 dark:text-yellow-300 mt-1">
+                            Without conditions, ALL records in the table will be
+                            updated! Add at least one condition to target
+                            specific records.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {dbUpdateSimpleState.whereConditions.map(
+                    (condition, index) => (
+                      <div
+                        key={condition.id}
+                        className="p-3 border rounded-lg bg-green-50 dark:bg-green-900/20 space-y-2"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-medium text-green-900 dark:text-green-100">
+                            Condition {index + 1}
+                          </span>
+                          <button
+                            onClick={() => {
+                              const newConditions =
+                                dbUpdateSimpleState.whereConditions.filter(
+                                  (c) => c.id !== condition.id
+                                );
+                              updateDbUpdateSimpleState({
+                                whereConditions: newConditions,
+                              });
+                            }}
+                            className="text-red-500 hover:text-red-700 text-sm"
+                          >
+                            ×
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2">
+                          <div className="space-y-1">
+                            <label className="text-xs">Field:</label>
+                            <input
+                              type="text"
+                              placeholder={
+                                index === 0 ? "e.g., id" : "e.g., status"
+                              }
+                              value={condition.field}
+                              onChange={(e) => {
+                                const newConditions =
+                                  dbUpdateSimpleState.whereConditions.map((c) =>
+                                    c.id === condition.id
+                                      ? { ...c, field: e.target.value }
+                                      : c
+                                  );
+                                updateDbUpdateSimpleState({
+                                  whereConditions: newConditions,
+                                });
+                              }}
+                              className="w-full px-2 py-1 text-sm border rounded-md bg-background"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs">Condition:</label>
+                            <select
+                              value={condition.operator}
+                              onChange={(e) => {
+                                const newConditions =
+                                  dbUpdateSimpleState.whereConditions.map((c) =>
+                                    c.id === condition.id
+                                      ? { ...c, operator: e.target.value }
+                                      : c
+                                  );
+                                updateDbUpdateSimpleState({
+                                  whereConditions: newConditions,
+                                });
+                              }}
+                              className="w-full px-2 py-1 text-sm border rounded-md bg-background"
+                            >
+                              <option value="equals">equals</option>
+                              <option value="not equals">not equals</option>
+                              <option value="greater than">greater than</option>
+                              <option value="less than">less than</option>
+                              <option value="greater than or equal to">
+                                ≥
+                              </option>
+                              <option value="less than or equal to">≤</option>
+                              <option value="contains">contains</option>
+                              <option value="does not contain">
+                                not contains
+                              </option>
+                            </select>
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs">Value:</label>
+                            <input
+                              type="text"
+                              placeholder={
+                                index === 0
+                                  ? "123 or {{dbFindResult[0].id}}"
+                                  : "active or {{formData.status}}"
+                              }
+                              value={condition.value}
+                              onChange={(e) => {
+                                const newConditions =
+                                  dbUpdateSimpleState.whereConditions.map((c) =>
+                                    c.id === condition.id
+                                      ? { ...c, value: e.target.value }
+                                      : c
+                                  );
+                                updateDbUpdateSimpleState({
+                                  whereConditions: newConditions,
+                                });
+                              }}
+                              className="w-full px-2 py-1 text-sm border rounded-md bg-background font-mono"
+                            />
+                          </div>
+                        </div>
+                        {index <
+                          dbUpdateSimpleState.whereConditions.length - 1 && (
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-muted-foreground">
+                              Then:
+                            </span>
+                            <select
+                              value={condition.logic}
+                              onChange={(e) => {
+                                const newConditions =
+                                  dbUpdateSimpleState.whereConditions.map((c) =>
+                                    c.id === condition.id
+                                      ? {
+                                          ...c,
+                                          logic: e.target.value as "AND" | "OR",
+                                        }
+                                      : c
+                                  );
+                                updateDbUpdateSimpleState({
+                                  whereConditions: newConditions,
+                                });
+                              }}
+                              className="px-2 py-1 text-xs border rounded-md bg-background"
+                            >
+                              <option value="AND">AND (all must match)</option>
+                              <option value="OR">OR (any can match)</option>
+                            </select>
+                          </div>
+                        )}
+                        <div className="text-xs text-green-700 dark:text-green-300">
+                          💡 Tip: Use {`{{variableName}}`} for dynamic values
+                        </div>
+                      </div>
+                    )
+                  )}
+
+                  <button
+                    onClick={() => {
+                      const newCondition = {
+                        id: `condition-${Date.now()}`,
+                        field: "",
+                        operator: "equals",
+                        value: "",
+                        logic: "AND" as "AND" | "OR",
+                      };
+                      updateDbUpdateSimpleState({
+                        whereConditions: [
+                          ...dbUpdateSimpleState.whereConditions,
+                          newCondition,
+                        ],
+                      });
+                    }}
+                    className="w-full px-3 py-2 text-sm border-2 border-dashed rounded-md hover:bg-muted transition-colors"
+                  >
+                    + Add Condition
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Advanced Mode UI - Original JSON editor */}
+            {dbUpdateSimpleState.mode === "advanced" && (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Table Name:</label>
+                  {tableSuggestions.length > 0 ? (
+                    <select
+                      value={data.tableName || ""}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setNodes((nodes) =>
+                          nodes.map((node) =>
+                            node.id === id
+                              ? {
+                                  ...node,
+                                  data: { ...node.data, tableName: value },
+                                }
+                              : node
+                          )
+                        );
+                      }}
+                      className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">Select table...</option>
+                      {tableSuggestions.map((table) => (
+                        <option key={table.value} value={table.value}>
+                          {table.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      placeholder="Enter table name..."
+                      value={data.tableName || ""}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setNodes((nodes) =>
+                          nodes.map((node) =>
+                            node.id === id
+                              ? {
+                                  ...node,
+                                  data: { ...node.data, tableName: value },
+                                }
+                              : node
+                          )
+                        );
+                      }}
+                      className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Update Data:</label>
+                  <textarea
+                    placeholder='{"status": "inactive", "updated_at": "{{now}}"}'
+                    value={
+                      typeof data.updateData === "string"
+                        ? data.updateData
+                        : JSON.stringify(data.updateData || {}, null, 2)
+                    }
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setNodes((nodes) =>
+                        nodes.map((node) =>
+                          node.id === id
+                            ? {
+                                ...node,
+                                data: { ...node.data, updateData: value },
+                              }
+                            : node
+                        )
+                      );
+                    }}
+                    rows={3}
+                    className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">
+                    Where Conditions:
+                  </label>
+                  <textarea
+                    placeholder='[{"field": "id", "operator": "=", "value": "{{context.userId}}"}]'
+                    value={
+                      typeof data.whereConditions === "string"
+                        ? data.whereConditions
+                        : JSON.stringify(data.whereConditions || [], null, 2)
+                    }
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setNodes((nodes) =>
+                        nodes.map((node) =>
+                          node.id === id
+                            ? {
+                                ...node,
+                                data: { ...node.data, whereConditions: value },
+                              }
+                            : node
+                        )
+                      );
+                    }}
+                    rows={3}
+                    className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                  />
+                  <div className="text-xs text-muted-foreground">
+                    Array of condition objects with field, operator, value,
+                    logic
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+
+      case "db.upsert":
         return (
           <div className="space-y-4">
             <div className="space-y-2">
@@ -2849,9 +3489,115 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium">Update Data:</label>
+              <label className="text-sm font-medium">Unique Fields:</label>
+              <div className="text-xs text-muted-foreground mb-2">
+                Comma-separated list of fields to use for matching records
+                (e.g., "email,username")
+              </div>
+              <input
+                type="text"
+                placeholder='["email", "username"] or email,username'
+                value={
+                  Array.isArray(data.uniqueFields)
+                    ? data.uniqueFields.join(",")
+                    : typeof data.uniqueFields === "string"
+                    ? data.uniqueFields
+                    : ""
+                }
+                onChange={(e) => {
+                  const value = e.target.value;
+                  // Store as string while user is typing to allow commas
+                  // Only parse when we need to (on save/validation)
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: { ...node.data, uniqueFields: value },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                onBlur={(e) => {
+                  // Parse and normalize when user leaves the field
+                  const value = e.target.value.trim();
+                  if (!value) {
+                    return;
+                  }
+
+                  let parsedValue;
+                  try {
+                    // Try to parse as JSON array
+                    parsedValue = JSON.parse(value);
+                    if (!Array.isArray(parsedValue)) {
+                      throw new Error("Not an array");
+                    }
+                  } catch {
+                    // If not valid JSON, split by comma and trim
+                    parsedValue = value
+                      .split(",")
+                      .map((f) => f.trim())
+                      .filter((f) => f.length > 0);
+                  }
+
+                  // Update with parsed value
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: { ...node.data, uniqueFields: parsedValue },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+              />
+              <div className="text-xs text-muted-foreground">
+                💡 These fields will be used to check if a record already exists
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Insert Data:</label>
+              <div className="text-xs text-muted-foreground mb-2">
+                Data to insert when record doesn't exist
+              </div>
               <textarea
-                placeholder='{"status": "inactive", "updated_at": "{{now}}"}'
+                placeholder='{"name": "John", "email": "john@example.com"}'
+                value={
+                  typeof data.insertData === "string"
+                    ? data.insertData
+                    : JSON.stringify(data.insertData || {}, null, 2)
+                }
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: { ...node.data, insertData: value },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                rows={4}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Update Data:</label>
+              <div className="text-xs text-muted-foreground mb-2">
+                Data to update when record exists (optional - will use
+                insertData if not provided)
+              </div>
+              <textarea
+                placeholder='{"status": "active", "updated_at": "{{now}}"}'
                 value={
                   typeof data.updateData === "string"
                     ? data.updateData
@@ -2870,36 +3616,35 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
                     )
                   );
                 }}
-                rows={3}
+                rows={4}
                 className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
               />
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium">Where Conditions:</label>
-              <textarea
-                placeholder='{"id": "{{context.userId}}"}'
-                value={
-                  typeof data.whereConditions === "string"
-                    ? data.whereConditions
-                    : JSON.stringify(data.whereConditions || {}, null, 2)
-                }
-                onChange={(e) => {
-                  const value = e.target.value;
-                  setNodes((nodes) =>
-                    nodes.map((node) =>
-                      node.id === id
-                        ? {
-                            ...node,
-                            data: { ...node.data, whereConditions: value },
-                          }
-                        : node
-                    )
-                  );
-                }}
-                rows={2}
-                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
-              />
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={data.returnRecord !== false}
+                  onChange={(e) => {
+                    setNodes((nodes) =>
+                      nodes.map((node) =>
+                        node.id === id
+                          ? {
+                              ...node,
+                              data: {
+                                ...node.data,
+                                returnRecord: e.target.checked,
+                              },
+                            }
+                          : node
+                      )
+                    );
+                  }}
+                  className="w-4 h-4"
+                />
+                Return the created/updated record
+              </label>
             </div>
           </div>
         );
@@ -2982,33 +3727,640 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
           </div>
         );
 
-      case "roleIs":
+      // case "roleIs":
+      //   return (
+      //     <div className="space-y-4">
+      //       {/* ---- Enter Role Name Manually ---- */}
+      //       <div className="space-y-2">
+      //         <label className="text-sm font-medium">Required Role:</label>
+      //         <input
+      //           type="text"
+      //           placeholder="admin / manager / custom-role"
+      //           value={data.requiredRole || ""}
+      //           onChange={(e) => {
+      //             const value = e.target.value.trim().toLowerCase();
+
+      //             setNodes((nodes) =>
+      //               nodes.map((node) =>
+      //                 node.id === id
+      //                   ? {
+      //                       ...node,
+      //                       data: {
+      //                         ...node.data,
+      //                         requiredRole: value || "user", // default
+      //                       },
+      //                     }
+      //                   : node
+      //               )
+      //             );
+      //           }}
+      //           className="w-full px-3 py-2 text-sm border rounded-md bg-background"
+      //         />
+
+      //         <p className="text-xs text-muted-foreground">
+      //           If empty → default role = user. Admin role is predefined.
+      //         </p>
+      //       </div>
+
+      //       {/* ---- Page Access Checkboxes ---- */}
+      //       <div className="space-y-2">
+      //         <label className="text-sm font-medium">Allowed Pages:</label>
+
+      //         <div className="border rounded-md px-3 py-2 space-y-1 max-h-48 overflow-y-auto">
+      //           {appPages?.map((page) => (
+      //             <div key={page.id} className="flex items-center space-x-2">
+      //               <input
+      //                 type="checkbox"
+      //                 checked={data.requiredPages?.includes(page.slug) || false}
+      //                 onChange={(e) => {
+      //                   const isChecked = e.target.checked;
+
+      //                   let updated = data.requiredPages || [];
+
+      //                   if (isChecked) {
+      //                     updated.push(page.slug);
+      //                   } else {
+      //                     updated = updated.filter((x) => x !== page.slug);
+      //                   }
+
+      //                   setNodes((nodes) =>
+      //                     nodes.map((node) =>
+      //                       node.id === id
+      //                         ? {
+      //                             ...node,
+      //                             data: {
+      //                               ...node.data,
+      //                               requiredPages: updated,
+      //                             },
+      //                           }
+      //                         : node
+      //                     )
+      //                   );
+      //                 }}
+      //               />
+      //               <label className="text-sm">{page.title}</label>
+      //             </div>
+      //           ))}
+      //         </div>
+
+      //         <p className="text-xs text-muted-foreground">
+      //           Select all pages this role can access.
+      //         </p>
+      //       </div>
+
+      //       {/* ---- Multi Role Mode ---- */}
+      //       <div className="flex items-center space-x-2">
+      //         <input
+      //           type="checkbox"
+      //           checked={data.checkMultiple || false}
+      //           onChange={(e) => {
+      //             const checked = e.target.checked;
+
+      //             setNodes((nodes) =>
+      //               nodes.map((node) =>
+      //                 node.id === id
+      //                   ? {
+      //                       ...node,
+      //                       data: { ...node.data, checkMultiple: checked },
+      //                     }
+      //                   : node
+      //               )
+      //             );
+      //           }}
+      //         />
+      //         <label className="text-sm">Allow multiple roles</label>
+      //       </div>
+      //     </div>
+      //   );
+      case "inList": {
+        const listMode = data.inListMode || "static";
+        const updateField = (field: string, value: any) => {
+          setNodes((nodes) =>
+            nodes.map((node) =>
+              node.id === id
+                ? { ...node, data: { ...node.data, [field]: value } }
+                : node
+            )
+          );
+        };
+
+        const TEXT_INPUT_TYPES = [
+          "textfield",
+          "text_field",
+          "text",
+          "input",
+          "textarea",
+          "textarea_field",
+        ];
+
+        const formTextFields =
+          formGroups.length > 0
+            ? formGroups.flatMap((group) => {
+                const groupElements = formElements.filter((el) =>
+                  group.elementIds?.includes(el.id)
+                );
+                return groupElements
+                  .filter((element) =>
+                    TEXT_INPUT_TYPES.includes(
+                      (element.type || "").toLowerCase()
+                    )
+                  )
+                  .map((element) => ({
+                    value: element.id,
+                    label: `${group.name || "Form"} • ${
+                      element.name || element.id
+                    }`,
+                  }));
+              })
+            : formElements
+                .filter((element) =>
+                  TEXT_INPUT_TYPES.includes((element.type || "").toLowerCase())
+                )
+                .map((element) => ({
+                  value: element.id,
+                  label: element.name || element.id,
+                }));
+
+        const handleInsertSelectedField = () => {
+          if (!selectedInListFieldId) return;
+          const template = `{{context.formData["${selectedInListFieldId}"]}}`;
+          updateField("inListValue", template);
+          setSelectedInListFieldId("");
+        };
+
         return (
           <div className="space-y-4">
+            <div className="text-xs text-muted-foreground">
+              Determine whether a value exists within a static list, workflow
+              context array, or database table before continuing.
+            </div>
+
             <div className="space-y-2">
-              <label className="text-sm font-medium">Required Role:</label>
+              <label className="text-sm font-medium">Value to check</label>
               <input
                 type="text"
-                placeholder="admin"
-                value={data.requiredRole || ""}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  setNodes((nodes) =>
-                    nodes.map((node) =>
-                      node.id === id
-                        ? {
-                            ...node,
-                            data: { ...node.data, requiredRole: value },
-                          }
-                        : node
-                    )
-                  );
-                }}
+                placeholder="{{context.formData.name}}"
+                value={data.inListValue || ""}
+                onChange={(e) => updateField("inListValue", e.target.value)}
                 className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
               <div className="text-xs text-muted-foreground">
-                User must have this role to proceed
+                Accepts plain text or context variables (e.g.{" "}
+                {`{{context.dbFindResult[0].name}}`}).
               </div>
+            </div>
+
+            {formTextFields.length > 0 ? (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Form text fields</label>
+                <div className="flex gap-2">
+                  <select
+                    value={selectedInListFieldId}
+                    onChange={(e) => setSelectedInListFieldId(e.target.value)}
+                    className="flex-1 px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">Select form field…</option>
+                    {formTextFields.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={handleInsertSelectedField}
+                    disabled={!selectedInListFieldId}
+                    className="px-3 py-2 text-sm font-medium border rounded-md bg-muted hover:bg-muted/80 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Insert
+                  </button>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Inserts {`{{context.formData["fieldId"]}}`} so you don’t have to
+                  remember element IDs.
+                </div>
+              </div>
+            ) : (
+              <div className="text-xs text-muted-foreground">
+                Add a form group with text fields to enable quick insertion.
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">List source</label>
+              <select
+                value={listMode}
+                onChange={(e) => {
+                  const nextMode = e.target.value;
+                  updateField("inListMode", nextMode);
+                  if (nextMode === "table" && !data.inListTableColumn) {
+                    updateField("inListTableColumn", "name");
+                  }
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="static">Static list (comma separated)</option>
+                <option value="context">Context / record field</option>
+                <option value="table">Database table column</option>
+              </select>
+            </div>
+
+            {listMode === "static" && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">List values</label>
+                <textarea
+                  rows={3}
+                  placeholder="Rahul, John, Shobhit"
+                  value={data.inListStaticList || ""}
+                  onChange={(e) => updateField("inListStaticList", e.target.value)}
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                />
+                <div className="text-xs text-muted-foreground">
+                  Separate entries with commas or new lines. You can embed
+                  variables like {`{{context.allowedNames}}`}.
+                </div>
+              </div>
+            )}
+
+            {listMode === "context" && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Context path</label>
+                <input
+                  type="text"
+                  placeholder="context.dbFindResult[0].name"
+                  value={data.inListContextPath || ""}
+                  onChange={(e) => updateField("inListContextPath", e.target.value)}
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <div className="text-xs text-muted-foreground">
+                  Use dot/bracket notation or wrap in {`{{ }}`} (e.g.{" "}
+                  {`{{context.formData.favoriteColors}}`}). Arrays and CSV
+                  strings are supported.
+                </div>
+              </div>
+            )}
+
+            {listMode === "table" && (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Table name</label>
+                  <input
+                    type="text"
+                    placeholder="app_3_demo or demo"
+                    value={data.inListTableName || ""}
+                    onChange={(e) => updateField("inListTableName", e.target.value)}
+                    className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <div className="text-xs text-muted-foreground">
+                    Enter the full table name or a short name to auto-prefix with
+                    your app ID.
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Column name</label>
+                  <input
+                    type="text"
+                    placeholder="name"
+                    value={data.inListTableColumn || ""}
+                    onChange={(e) =>
+                      updateField("inListTableColumn", e.target.value)
+                    }
+                    className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <div className="text-xs text-muted-foreground">
+                    Column searched for the matching value (defaults to "name").
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={data.inListIgnoreCase !== false}
+                  onChange={(e) =>
+                    updateField("inListIgnoreCase", e.target.checked)
+                  }
+                  className="rounded"
+                />
+                Ignore letter casing
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={data.inListTrimValues !== false}
+                  onChange={(e) =>
+                    updateField("inListTrimValues", e.target.checked)
+                  }
+                  className="rounded"
+                />
+                Trim whitespace
+              </label>
+            </div>
+
+            <div className="text-xs text-muted-foreground space-y-1">
+              <div>• Static/context lists run locally.</div>
+              <div>
+                • Table mode performs a fast `SELECT 1` lookup on the specified
+                column.
+              </div>
+              <div>
+                • Route "yes" for allowed items and "no" for fallback logic.
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      case "roleIs":
+        return (
+          <div className="space-y-4">
+            {/* ================== USER CREATION SECTION ================== */}
+            <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+              <div className="text-sm font-medium text-blue-900 dark:text-blue-100 mb-3">
+                👤 Create User & Generate Credentials (Optional)
+              </div>
+              
+              <div className="space-y-3">
+                {/* Username/Email Field */}
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-blue-800 dark:text-blue-200">
+                    Username/Email:
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="user@example.com or username"
+                    value={data.userEmail || ""}
+                    onChange={(e) => {
+                      const value = e.target.value.trim();
+                      setNodes((nodes) =>
+                        nodes.map((node) =>
+                          node.id === id
+                            ? {
+                                ...node,
+                                data: {
+                                  ...node.data,
+                                  userEmail: value,
+                                },
+                              }
+                            : node
+                        )
+                      );
+                    }}
+                    className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Enter email or username for the new user
+                  </p>
+                </div>
+
+                {/* Password Field */}
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-blue-800 dark:text-blue-200">
+                    Password:
+                  </label>
+                  <input
+                    type="password"
+                    placeholder="Enter password"
+                    value={data.userPassword || ""}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setNodes((nodes) =>
+                        nodes.map((node) =>
+                          node.id === id
+                            ? {
+                                ...node,
+                                data: {
+                                  ...node.data,
+                                  userPassword: value,
+                                },
+                              }
+                            : node
+                        )
+                      );
+                    }}
+                    className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Password for the new user account
+                  </p>
+                </div>
+
+                {/* Custom Role Field - Used when creating user */}
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-blue-800 dark:text-blue-200">
+                    Role for New User:
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="admin / manager / staff"
+                    value={data.customRole || ""}
+                    onChange={(e) => {
+                      const value = e.target.value.trim().toLowerCase();
+                      setNodes((nodes) =>
+                        nodes.map((node) =>
+                          node.id === id
+                            ? {
+                                ...node,
+                                data: {
+                                  ...node.data,
+                                  customRole: value,
+                                },
+                              }
+                            : node
+                        )
+                      );
+                    }}
+                    className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Role to assign when creating user. Will be created if it doesn't exist.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-3 p-2 bg-blue-100 dark:bg-blue-900/30 rounded text-xs text-blue-800 dark:text-blue-200">
+                💡 <strong>Note:</strong> If username/email and password are provided, a new AppUser will be created for this app (appId: {appId || 'N/A'}) with the specified role when this block executes.
+              </div>
+            </div>
+
+            {/* ================== ROLE CHECK SECTION ================== */}
+            <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
+              <div className="text-sm font-medium text-green-900 dark:text-green-100 mb-3">
+                🔐 Role Check Configuration
+              </div>
+
+              {/* ---- Multi Role Toggle ---- */}
+              <div className="flex items-center space-x-2 mb-3">
+                <input
+                  type="checkbox"
+                  checked={data.checkMultiple || false}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+
+                    setNodes((nodes) =>
+                      nodes.map((node) =>
+                        node.id === id
+                          ? {
+                              ...node,
+                              data: {
+                                ...node.data,
+                                checkMultiple: checked,
+                                // Reset fields automatically
+                                requiredRole: checked
+                                  ? ""
+                                  : data.requiredRole || "user",
+                                roles: checked ? [] : undefined,
+                              },
+                            }
+                          : node
+                      )
+                    );
+                  }}
+                />
+                <label className="text-sm">Allow multiple roles</label>
+              </div>
+
+              {/* ================== SINGLE ROLE MODE ================== */}
+              {!data.checkMultiple && (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Required Role to Check:</label>
+                  <input
+                    type="text"
+                    placeholder="admin / manager / user"
+                    value={data.requiredRole || ""}
+                    onChange={(e) => {
+                      const value = e.target.value.trim().toLowerCase();
+
+                      setNodes((nodes) =>
+                        nodes.map((node) =>
+                          node.id === id
+                            ? {
+                                ...node,
+                                data: {
+                                  ...node.data,
+                                  requiredRole: value || "user",
+                                },
+                              }
+                            : node
+                        )
+                      );
+                    }}
+                    className="w-full px-3 py-2 text-sm border rounded-md bg-background"
+                  />
+
+                  <p className="text-xs text-muted-foreground">
+                    Only continue if user has this role. Used for checking existing users.
+                  </p>
+                </div>
+              )}
+
+              {/* ================== MULTIPLE ROLES MODE ================== */}
+              {data.checkMultiple && (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Allowed Roles:</label>
+
+                  <div className="border rounded-md px-3 py-2 space-y-1 max-h-48 overflow-y-auto">
+                    {appRoles?.length > 0 ? (
+                      appRoles.map((role) => (
+                        <div key={role} className="flex items-center space-x-2">
+                          <input
+                            type="checkbox"
+                            checked={data.roles?.includes(role) || false}
+                            onChange={(e) => {
+                              const isChecked = e.target.checked;
+
+                              let updated = data.roles || [];
+
+                              if (isChecked) {
+                                updated.push(role);
+                              } else {
+                                updated = updated.filter((x) => x !== role);
+                              }
+
+                              setNodes((nodes) =>
+                                nodes.map((node) =>
+                                  node.id === id
+                                    ? {
+                                        ...node,
+                                        data: { ...node.data, roles: updated },
+                                      }
+                                    : node
+                                )
+                              );
+                            }}
+                          />
+                          <label className="text-sm">{role}</label>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        No roles found…
+                      </p>
+                    )}
+                  </div>
+
+                  <p className="text-xs text-muted-foreground">
+                    Select all roles that are allowed to pass this condition.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* ================== PAGE ACCESS CHECKBOXES ================== */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Required Page Access:</label>
+
+              <div className="border rounded-md px-3 py-2 space-y-1 max-h-48 overflow-y-auto">
+                {canvasPages && canvasPages.length > 0 ? (
+                  canvasPages.map((page) => {
+                    // Use page name as slug if slug doesn't exist
+                    const pageSlug = (page as any).slug || page.name.toLowerCase().replace(/\s+/g, "-");
+                    return (
+                      <div key={page.id} className="flex items-center space-x-2">
+                        <input
+                          type="checkbox"
+                          checked={data.requiredPages?.includes(pageSlug) || false}
+                          onChange={(e) => {
+                            const isChecked = e.target.checked;
+                            let updated = data.requiredPages || [];
+
+                            if (isChecked) {
+                              updated.push(pageSlug);
+                            } else {
+                              updated = updated.filter((x) => x !== pageSlug);
+                            }
+
+                            setNodes((nodes) =>
+                              nodes.map((node) =>
+                                node.id === id
+                                  ? {
+                                      ...node,
+                                      data: {
+                                        ...node.data,
+                                        requiredPages: updated,
+                                      },
+                                    }
+                                  : node
+                              )
+                            );
+                          }}
+                        />
+                        <label className="text-sm">{page.name}</label>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    No pages found. Create pages in the Canvas first.
+                  </p>
+                )}
+              </div>
+
+              <p className="text-xs text-muted-foreground">
+                Select pages the user must have access to (checked via role or direct assignment).
+              </p>
             </div>
           </div>
         );
@@ -3169,7 +4521,6 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
         );
 
       case "onSubmit":
-      case "isFilled":
         return (
           <div className="space-y-4">
             <div className="space-y-2">
@@ -3202,60 +4553,461 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
           </div>
         );
 
-      case "dateValid":
+      case "isFilled":
+        // Get elements for the selected form group
+        const selectedFormGroupData = formGroups.find(
+          (g) => g.id === data.selectedFormGroup
+        );
+        const formGroupElementIds = selectedFormGroupData?.elementIds || [];
+        const formGroupElements = formElements.filter((el) =>
+          formGroupElementIds.includes(el.id)
+        );
+
         return (
           <div className="space-y-4">
             <div className="space-y-2">
-              <label className="text-sm font-medium">Date Elements:</label>
-              <div className="text-xs text-muted-foreground mb-2">
-                Select date input elements to validate
+              <label className="text-sm font-medium">Form Group:</label>
+              <select
+                value={data.selectedFormGroup || ""}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  // Clear selected elements when form group changes
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: {
+                              ...node.data,
+                              selectedFormGroup: value,
+                              selectedElementIds: [],
+                            },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">Select a form group...</option>
+                {formGroups.map((group) => (
+                  <option key={group.id} value={group.id}>
+                    {group.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {data.selectedFormGroup && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Form Elements:</label>
+                <div className="text-xs text-muted-foreground mb-2">
+                  Select which elements to check if filled
+                </div>
+                {formGroupElements.length === 0 ? (
+                  <div className="p-3 text-sm text-yellow-600 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md">
+                    ⚠️ No form elements found in this form group
+                  </div>
+                ) : (
+                  <div className="max-h-60 overflow-y-auto border rounded-md p-2 space-y-1">
+                    {formGroupElements.map((element) => (
+                      <label
+                        key={element.id}
+                        className="flex items-center gap-2 p-2 hover:bg-muted rounded cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={(data.selectedElementIds || []).includes(
+                            element.id
+                          )}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            const currentIds = data.selectedElementIds || [];
+                            const newIds = checked
+                              ? [...currentIds, element.id]
+                              : currentIds.filter((id) => id !== element.id);
+                            setNodes((nodes) =>
+                              nodes.map((node) =>
+                                node.id === id
+                                  ? {
+                                      ...node,
+                                      data: {
+                                        ...node.data,
+                                        selectedElementIds: newIds,
+                                      },
+                                    }
+                                  : node
+                              )
+                            );
+                          }}
+                          className="rounded"
+                        />
+                        <span className="text-sm">
+                          {element.name || element.id} ({element.type})
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
               </div>
-              <div className="max-h-40 overflow-y-auto border rounded-md p-2 space-y-1">
-                {formElements
-                  .filter(
-                    (el) => el.type === "date" || el.type === "datetime-local"
-                  )
-                  .map((element) => (
-                    <label
-                      key={element.id}
-                      className="flex items-center gap-2 p-2 hover:bg-muted rounded cursor-pointer"
+            )}
+
+            {/* Optional: Show toast configuration */}
+            <div className="space-y-2 pt-2 border-t">
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={data.showToastOnFail || false}
+                  onChange={(e) => {
+                    setNodes((nodes) =>
+                      nodes.map((node) =>
+                        node.id === id
+                          ? {
+                              ...node,
+                              data: {
+                                ...node.data,
+                                showToastOnFail: e.target.checked,
+                              },
+                            }
+                          : node
+                      )
+                    );
+                  }}
+                  className="w-4 h-4"
+                />
+                Show toast notification on validation failure
+              </label>
+              {data.showToastOnFail && (
+                <div className="space-y-2 ml-6">
+                  <input
+                    type="text"
+                    placeholder="Failure message (optional)"
+                    value={data.failureMessage || ""}
+                    onChange={(e) => {
+                      setNodes((nodes) =>
+                        nodes.map((node) =>
+                          node.id === id
+                            ? {
+                                ...node,
+                                data: {
+                                  ...node.data,
+                                  failureMessage: e.target.value,
+                                },
+                              }
+                            : node
+                        )
+                      );
+                    }}
+                    className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        );
+
+      case "dateValid": {
+        const dateElements = formElements.filter((element) => {
+          const type = (element.type || "").toLowerCase();
+          return [
+            "date",
+            "datetime",
+            "datetime-local",
+            "datepicker",
+            "date_picker",
+            "calendar",
+            "date_field",
+          ].includes(type);
+        });
+        const selectedIds = data.selectedElementIds || [];
+        const customFields = data.customDateFields || [];
+
+        const toggleDateElement = (elementId: string, isChecked: boolean) => {
+          const currentIds = data.selectedElementIds || [];
+          const newIds = isChecked
+            ? Array.from(new Set([...currentIds, elementId]))
+            : currentIds.filter((idValue) => idValue !== elementId);
+
+          setNodes((nodes) =>
+            nodes.map((node) =>
+              node.id === id
+                ? {
+                    ...node,
+                    data: {
+                      ...node.data,
+                      selectedElementIds: newIds,
+                    },
+                  }
+                : node
+            )
+          );
+        };
+
+        const handleAddCustomField = () => {
+          const value = customDateFieldInput.trim();
+          if (!value) return;
+          if (customFields.includes(value)) {
+            setCustomDateFieldInput("");
+            return;
+          }
+
+          setNodes((nodes) =>
+            nodes.map((node) =>
+              node.id === id
+                ? {
+                    ...node,
+                    data: {
+                      ...node.data,
+                      customDateFields: [...customFields, value],
+                    },
+                  }
+                : node
+            )
+          );
+          setCustomDateFieldInput("");
+        };
+
+        const handleRemoveCustomField = (field: string) => {
+          setNodes((nodes) =>
+            nodes.map((node) =>
+              node.id === id
+                ? {
+                    ...node,
+                    data: {
+                      ...node.data,
+                      customDateFields: customFields.filter(
+                        (item) => item !== field
+                      ),
+                    },
+                  }
+                : node
+            )
+          );
+        };
+
+        const updateValidationRule = (
+          ruleKey: keyof NonNullable<WorkflowNodeData["validationRules"]>,
+          value: string | boolean
+        ) => {
+          setNodes((nodes) =>
+            nodes.map((node) => {
+              if (node.id !== id) return node;
+              const nextRules = { ...(node.data.validationRules || {}) };
+
+              const shouldRemove =
+                value === "" ||
+                value === null ||
+                value === undefined ||
+                (typeof value === "boolean" && !value);
+
+              if (shouldRemove) {
+                delete nextRules[ruleKey];
+              } else {
+                nextRules[ruleKey] = value;
+              }
+
+              return {
+                ...node,
+                data: {
+                  ...node.data,
+                  validationRules:
+                    Object.keys(nextRules).length > 0 ? nextRules : undefined,
+                },
+              };
+            })
+          );
+        };
+
+        return (
+          <div className="space-y-5">
+            <div className="text-xs text-muted-foreground">
+              Validate one or more date fields before letting the workflow
+              continue. Combine form inputs with values pulled from database
+              records or previous steps.
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium">
+                  Form Date Elements
+                </label>
+                <span className="text-xs text-muted-foreground">
+                  {selectedIds.length} selected
+                </span>
+              </div>
+              {dateElements.length === 0 ? (
+                <div className="w-full px-3 py-2 text-sm border rounded-md bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800 text-yellow-800 dark:text-yellow-200">
+                  No date inputs detected on your canvas. Add a Date Picker or
+                  Date/Time element to enable form validation.
+                </div>
+              ) : (
+                <div className="max-h-44 overflow-y-auto border rounded-md p-2 space-y-1">
+                  {dateElements.map((element) => {
+                    const isChecked = selectedIds.includes(element.id);
+                    return (
+                      <label
+                        key={element.id}
+                        className="flex items-center gap-2 p-2 hover:bg-muted rounded cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(event) =>
+                            toggleDateElement(element.id, event.target.checked)
+                          }
+                          className="rounded"
+                        />
+                        <span className="text-sm">
+                          {element.name || element.id}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">
+                Record / Context Fields
+              </label>
+              <div className="flex flex-col gap-2">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={customDateFieldInput}
+                    onChange={(e) => setCustomDateFieldInput(e.target.value)}
+                    placeholder="e.g., context.dbFindResult[0].dateOfBirth"
+                    className="flex-1 px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddCustomField}
+                    className="px-3 py-2 text-sm font-medium border rounded-md bg-muted hover:bg-muted/80"
+                  >
+                    Add
+                  </button>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Reference values returned from previous blocks (e.g.
+                  {` {{context.dbFindResult[0].dob}} `} or{" "}
+                  {`context.record.enrollmentDate`}). These will be validated
+                  alongside form inputs.
+                </div>
+              </div>
+              {customFields.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {customFields.map((field) => (
+                    <span
+                      key={field}
+                      className="inline-flex items-center gap-2 px-2 py-1 text-xs border rounded-full bg-muted"
                     >
-                      <input
-                        type="checkbox"
-                        checked={(data.selectedElementIds || []).includes(
-                          element.id
-                        )}
-                        onChange={(e) => {
-                          const checked = e.target.checked;
-                          const currentIds = data.selectedElementIds || [];
-                          const newIds = checked
-                            ? [...currentIds, element.id]
-                            : currentIds.filter((id) => id !== element.id);
-                          setNodes((nodes) =>
-                            nodes.map((node) =>
-                              node.id === id
-                                ? {
-                                    ...node,
-                                    data: {
-                                      ...node.data,
-                                      selectedElementIds: newIds,
-                                    },
-                                  }
-                                : node
-                            )
-                          );
-                        }}
-                        className="rounded"
-                      />
-                      <span className="text-sm">
-                        {element.name || element.id}
-                      </span>
-                    </label>
+                      {field}
+                      <button
+                        type="button"
+                        className="text-muted-foreground hover:text-foreground"
+                        onClick={() => handleRemoveCustomField(field)}
+                        aria-label={`Remove ${field}`}
+                      >
+                        ×
+                      </button>
+                    </span>
                   ))}
+                </div>
+              )}
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Date Format</label>
+                <select
+                  value={data.dateFormat || "auto-detect"}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setNodes((nodes) =>
+                      nodes.map((node) =>
+                        node.id === id
+                          ? {
+                              ...node,
+                              data: { ...node.data, dateFormat: value },
+                            }
+                          : node
+                      )
+                    );
+                  }}
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="auto-detect">Auto detect (recommended)</option>
+                  <option value="YYYY-MM-DD">YYYY-MM-DD</option>
+                  <option value="MM/DD/YYYY">MM/DD/YYYY</option>
+                  <option value="DD/MM/YYYY">DD/MM/YYYY</option>
+                  <option value="DD-MM-YYYY">DD-MM-YYYY</option>
+                </select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Require a value?</label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(data.validationRules?.required)}
+                    onChange={(e) =>
+                      updateValidationRule("required", e.target.checked)
+                    }
+                    className="rounded"
+                  />
+                  Must provide a valid date
+                </label>
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">
+                  Min Date (optional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="YYYY-MM-DD or {{context.minDate}}"
+                  value={data.validationRules?.minDate || ""}
+                  onChange={(e) =>
+                    updateValidationRule("minDate", e.target.value)
+                  }
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">
+                  Max Date (optional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="YYYY-MM-DD or {{context.maxDate}}"
+                  value={data.validationRules?.maxDate || ""}
+                  onChange={(e) =>
+                    updateValidationRule("maxDate", e.target.value)
+                  }
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            <div className="text-xs text-muted-foreground space-y-1 pt-1">
+              <div>
+                • Use with <code>onSubmit → dateValid → notify.toast</code> to
+                block invalid submissions.
+              </div>
+              <div>
+                • Chain <code>dateValid → db.create</code> to only persist valid
+                records.
+              </div>
+              <div>
+                • Route <code>dateValid → page.redirect</code> to guide users to
+                the next step when the date is acceptable.
               </div>
             </div>
           </div>
         );
+      }
 
       case "ai.summarize":
         return (
@@ -3382,6 +5134,238 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({
                   <li>• Returns concise summary in output variable</li>
                   <li>• Supports files up to 50MB</li>
                 </ul>
+              </div>
+            </div>
+          </div>
+        );
+
+      case "audit.log":
+        return (
+          <div className="space-y-4">
+            {/* Info Box */}
+            <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+              <div className="text-sm text-blue-900 dark:text-blue-100">
+                <div className="font-medium mb-2">📋 Audit Log Block</div>
+                <div className="text-xs text-blue-700 dark:text-blue-300">
+                  Retrieves audit logs from the system. Use a Text Display
+                  element with binding path{" "}
+                  <code className="bg-blue-100 dark:bg-blue-800 px-1 rounded">
+                    {`{{context.auditLogsFormatted}}`}
+                  </code>{" "}
+                  to display the logs.
+                </div>
+              </div>
+            </div>
+
+            {/* Log Limit */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Max Logs to Retrieve:</label>
+              <input
+                type="number"
+                min="1"
+                max="1000"
+                placeholder="100"
+                value={data.logLimit || 100}
+                onChange={(e) => {
+                  const value = parseInt(e.target.value) || 100;
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: { ...node.data, logLimit: value },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <div className="text-xs text-muted-foreground">
+                Maximum number of log entries to retrieve (1-1000)
+              </div>
+            </div>
+
+            {/* Filter Type */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Filter Type:</label>
+              <select
+                value={data.logFilter || "all"}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: { ...node.data, logFilter: value },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="all">All logs</option>
+                <option value="app">This app only</option>
+                <option value="user">Specific user</option>
+                <option value="action">Specific action</option>
+              </select>
+            </div>
+
+            {/* Action Filter (if filter type is "action") */}
+            {data.logFilter === "action" && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Action Name:</label>
+                <input
+                  type="text"
+                  placeholder="e.g., FETCH_QUOTE, UPDATE_STATUS"
+                  value={data.logAction || ""}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setNodes((nodes) =>
+                      nodes.map((node) =>
+                        node.id === id
+                          ? {
+                              ...node,
+                              data: { ...node.data, logAction: value },
+                            }
+                          : node
+                      )
+                    );
+                  }}
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            )}
+
+            {/* User Filter (if filter type is "user") */}
+            {data.logFilter === "user" && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">User ID:</label>
+                <input
+                  type="text"
+                  placeholder="e.g., 123 or {{context.userId}}"
+                  value={data.logUserId || ""}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setNodes((nodes) =>
+                      nodes.map((node) =>
+                        node.id === id
+                          ? {
+                              ...node,
+                              data: { ...node.data, logUserId: value },
+                            }
+                          : node
+                      )
+                    );
+                  }}
+                  className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                />
+                <div className="text-xs text-muted-foreground">
+                  Use {`{{context.userId}}`} for dynamic user ID
+                </div>
+              </div>
+            )}
+
+            {/* Date Range Filters */}
+            <div className="space-y-3">
+              <label className="text-sm font-medium">Date Range (Optional):</label>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">From:</label>
+                  <input
+                    type="date"
+                    value={data.dateFrom || ""}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setNodes((nodes) =>
+                        nodes.map((node) =>
+                          node.id === id
+                            ? {
+                                ...node,
+                                data: { ...node.data, dateFrom: value },
+                              }
+                            : node
+                        )
+                      );
+                    }}
+                    className="w-full px-2 py-1 text-sm border rounded-md bg-background"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">To:</label>
+                  <input
+                    type="date"
+                    value={data.dateTo || ""}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setNodes((nodes) =>
+                        nodes.map((node) =>
+                          node.id === id
+                            ? {
+                                ...node,
+                                data: { ...node.data, dateTo: value },
+                              }
+                            : node
+                        )
+                      );
+                    }}
+                    className="w-full px-2 py-1 text-sm border rounded-md bg-background"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Output Format */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Output Format:</label>
+              <select
+                value={data.outputFormat || "formatted"}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setNodes((nodes) =>
+                    nodes.map((node) =>
+                      node.id === id
+                        ? {
+                            ...node,
+                            data: { ...node.data, outputFormat: value },
+                          }
+                        : node
+                    )
+                  );
+                }}
+                className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="formatted">Formatted (human-readable)</option>
+                <option value="raw">Raw (original log lines)</option>
+                <option value="json">JSON (structured data)</option>
+              </select>
+              <div className="text-xs text-muted-foreground">
+                Choose how logs are formatted in the output
+              </div>
+            </div>
+
+            {/* Usage Instructions */}
+            <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
+              <div className="text-sm text-green-900 dark:text-green-100">
+                <div className="font-medium mb-2">💡 How to Display Logs:</div>
+                <ol className="list-decimal list-inside space-y-1 text-xs text-green-700 dark:text-green-300">
+                  <li>Add a Text Display element to your canvas</li>
+                  <li>
+                    Set the binding path to{" "}
+                    <code className="bg-green-100 dark:bg-green-800 px-1 rounded">
+                      {`{{context.auditLogsFormatted}}`}
+                    </code>
+                  </li>
+                  <li>
+                    Connect this audit.log block before the page with the Text
+                    Display
+                  </li>
+                  <li>
+                    Logs will be available in context after this block executes
+                  </li>
+                </ol>
               </div>
             </div>
           </div>

@@ -1,10 +1,13 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { initializeSocket, getSocket } from "@/lib/socket";
+import { useSearchParams, useRouter } from "next/navigation";
+import { useToast } from "@/hooks/use-toast";
 import {
   Table,
   TableBody,
@@ -32,8 +35,6 @@ import {
   Plus,
   Trash,
 } from "lucide-react";
-import { useSearchParams, useRouter } from "next/navigation";
-import { useToast } from "@/hooks/use-toast";
 import {
   Dialog,
   DialogContent,
@@ -72,21 +73,25 @@ export function DatabaseScreen() {
   const [totalPages, setTotalPages] = useState(1);
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [selectedRecord, setSelectedRecord] = useState<any | null>(null);
+  const [showRecordDetailsModal, setShowRecordDetailsModal] = useState(false);
+  const [visibleColumnsCount, setVisibleColumnsCount] = useState(4); // Show first 4 columns by default
 
   // Create Table Modal State
   const [showCreateTableModal, setShowCreateTableModal] = useState(false);
   const [newTableName, setNewTableName] = useState("");
   const [newTableColumns, setNewTableColumns] = useState<
-    Array<{
-      name: string;
-      type: string;
-      required: boolean;
-    }>
+    Array<{ name: string; type: string; required: boolean }>
   >([
     { name: "id", type: "Number", required: true },
     { name: "Name", type: "Text", required: true },
   ]);
   const [creatingTable, setCreatingTable] = useState(false);
+
+  // Add Record Modal State
+  const [showAddRecordModal, setShowAddRecordModal] = useState(false);
+  const [newRecordData, setNewRecordData] = useState<Record<string, any>>({});
+  const [addingRecord, setAddingRecord] = useState(false);
 
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -94,7 +99,40 @@ export function DatabaseScreen() {
   const appName = searchParams.get("appName") || "Unknown App";
   const { toast } = useToast();
 
-  // Load tables for the current app with auto-refresh
+  // ✅ Initialize socket connection and join app room
+  useEffect(() => {
+    if (!appId) return;
+
+    try {
+      const socket = initializeSocket();
+      console.log("✅ Socket initialized for database screen:", socket.id);
+      
+      // Join the app room for real-time database updates
+      socket.on("connect", () => {
+        socket.emit("database:join-app", appId);
+        console.log("🔄 Joined database room for app:", appId);
+      });
+
+      // If already connected, join immediately
+      if (socket.connected) {
+        socket.emit("database:join-app", appId);
+        console.log("🔄 Joined database room for app (already connected):", appId);
+      }
+    } catch (err) {
+      console.warn("⚠️ Socket initialization failed:", err);
+    }
+
+    // Cleanup: leave room on unmount
+    return () => {
+      const socket = getSocket();
+      if (socket && socket.connected) {
+        socket.emit("database:leave-app", appId);
+        console.log("🔄 Left database room for app:", appId);
+      }
+    };
+  }, [appId]);
+
+  // ✅ Load tables for the current app with auto-refresh
   useEffect(() => {
     if (!appId) {
       setError("No app ID provided");
@@ -102,16 +140,116 @@ export function DatabaseScreen() {
       return;
     }
 
-    // Initial load
     loadTables();
 
-    // Auto-refresh every 10 seconds to detect new tables
     const interval = setInterval(() => {
       loadTables();
     }, 10000);
 
     return () => clearInterval(interval);
   }, [appId]);
+
+  // ✅ Real-time database updates (debounced to prevent duplicate calls)
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) {
+      console.warn("⚠️ Socket not connected, skipping DB listener setup");
+      return;
+    }
+
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const DEBOUNCE_DELAY = 500; // 500ms debounce
+
+    const handleDBEvent = (event: CustomEvent) => {
+      const { tableName, action, appId: eventAppId } = event.detail;
+      
+      // Only process events for the current app
+      if (eventAppId && eventAppId.toString() !== appId) {
+        return;
+      }
+
+      console.log(`📡 Real-time DB event [${action}] for table:`, tableName);
+
+      // Clear existing debounce timer
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+      }
+
+      // Debounce the reload to prevent multiple rapid calls
+      debounceTimer = setTimeout(() => {
+        // Reload tables list if table was created
+        if (action === "created" && event.type === "db_table_created") {
+          loadTables();
+          toast({
+            title: "Table Created",
+            description: `Table "${tableName}" has been created.`,
+          });
+          return;
+        }
+
+        // Get current selectedTable from state (use functional update to avoid stale closure)
+        const currentSelectedTable = selectedTable;
+        
+        // Reload table data if current table was updated
+        if (currentSelectedTable && currentSelectedTable.name === tableName) {
+          // Use a fresh table object to avoid triggering useEffect loops
+          loadTableData({ ...currentSelectedTable }, currentPage);
+          toast({
+            title: "Database Updated",
+            description: `Table "${tableName}" has been ${action}.`,
+          });
+        } else if (tableName) {
+          // Table was updated but not currently selected, just reload tables list
+          loadTables();
+        }
+      }, DEBOUNCE_DELAY);
+    };
+
+    // Attach listeners for database events
+    window.addEventListener(
+      "db_record_updated",
+      handleDBEvent as EventListener
+    );
+    window.addEventListener(
+      "db_record_created",
+      handleDBEvent as EventListener
+    );
+    window.addEventListener(
+      "db_record_deleted",
+      handleDBEvent as EventListener
+    );
+    window.addEventListener(
+      "db_table_created",
+      handleDBEvent as EventListener
+    );
+
+    console.log("🧩 Real-time DB event listeners registered");
+
+    return () => {
+      // Clear debounce timer on cleanup
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+      }
+      
+      window.removeEventListener(
+        "db_record_updated",
+        handleDBEvent as EventListener
+      );
+      window.removeEventListener(
+        "db_record_created",
+        handleDBEvent as EventListener
+      );
+      window.removeEventListener(
+        "db_record_deleted",
+        handleDBEvent as EventListener
+      );
+      window.removeEventListener(
+        "db_table_created",
+        handleDBEvent as EventListener
+      );
+      console.log("🧹 Real-time DB event listeners removed");
+    };
+  }, [appId]); // Removed selectedTable and currentPage from dependencies to prevent loops
 
   const loadTables = async () => {
     try {
@@ -120,11 +258,15 @@ export function DatabaseScreen() {
         throw new Error("Authentication token not found");
       }
 
-      const response = await fetch(`/api/database/${appId}/tables`, {
+      // Add timestamp to prevent caching
+      const timestamp = Date.now();
+      const response = await fetch(`/api/database/${appId}?_t=${timestamp}`, {
+        method: "GET",
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
+        cache: "no-store", // Prevent browser caching
       });
 
       const data = await response.json();
@@ -144,32 +286,90 @@ export function DatabaseScreen() {
   };
 
   const loadTableData = async (table: DatabaseTable, page = 1) => {
+    console.log("🟢 [LOAD TABLE DATA] Starting...");
+    console.log("🟢 [LOAD TABLE DATA] Table:", table.name);
+    console.log("🟢 [LOAD TABLE DATA] Page:", page);
+
     try {
       const token = localStorage.getItem("authToken");
       if (!token) {
         throw new Error("Authentication token not found");
       }
 
-      const response = await fetch(
-        `/api/database/${appId}/tables/${table.name}/data?page=${page}&limit=50`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
+      // Add timestamp to prevent caching
+      const timestamp = Date.now();
+      const url = `/api/database/${appId}/tables/${table.name}/data?page=${page}&limit=50&_t=${timestamp}`;
+      console.log("🟢 [LOAD TABLE DATA] Fetching:", url);
+
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        cache: "no-store",
+      });
 
       const data = await response.json();
+      console.log("🟢 [LOAD TABLE DATA] Response received:", data);
 
       if (!response.ok) {
         throw new Error(data.message || "Failed to load table data");
       }
 
+      console.log(
+        "🟢 [LOAD TABLE DATA] Data array length:",
+        data.data?.length || 0
+      );
+      console.log(
+        "🟢 [LOAD TABLE DATA] First 3 records:",
+        data.data?.slice(0, 3)
+      );
+
       setTableData(data.data || []);
       setCurrentPage(data.pagination.page);
       setTotalPages(data.pagination.totalPages);
-      setSelectedTable(table);
+      
+      // Update selectedTable with columns from API response
+      // Backend should always return columns as an array: [{name: "col1", type: "TEXT"}, ...]
+      let normalizedColumns = [];
+      
+      if (data.columns) {
+        if (Array.isArray(data.columns)) {
+          // Columns are already in array format - use directly
+          normalizedColumns = data.columns;
+        } else if (typeof data.columns === 'object' && data.columns !== null) {
+          // Convert object to array format (fallback for old data)
+          normalizedColumns = Object.entries(data.columns).map(([name, def]: [string, any]) => ({
+            name,
+            type: (def && typeof def === 'object' && def.type) ? def.type : (def || "TEXT"),
+            required: (def && typeof def === 'object') ? (def.required || false) : false,
+          }));
+        }
+      } else if (table.columns && Array.isArray(table.columns)) {
+        // Fallback to table.columns if API doesn't return columns
+        normalizedColumns = table.columns;
+      } else if (table.columns && typeof table.columns === 'object') {
+        // Fallback: convert object to array
+        normalizedColumns = Object.entries(table.columns).map(([name, def]: [string, any]) => ({
+          name,
+          type: (def && typeof def === 'object' && def.type) ? def.type : (def || "TEXT"),
+          required: (def && typeof def === 'object') ? (def.required || false) : false,
+        }));
+      }
+      
+      // Ensure all columns have a type
+      normalizedColumns = normalizedColumns.map((col: any) => ({
+        ...col,
+        type: col.type || "TEXT",
+      }));
+      
+      setSelectedTable({
+        ...table,
+        columns: normalizedColumns,
+      });
+
+      // Columns loaded and normalized successfully
     } catch (err) {
       console.error("❌ [DATABASE] Error loading table data:", err);
       toast({
@@ -219,21 +419,17 @@ export function DatabaseScreen() {
         throw new Error("Authentication token not found");
       }
 
-      // Map column types to database types
-      const columnTypeMap: Record<string, string> = {
-        Text: "TEXT",
-        Number: "INTEGER",
-        Boolean: "BOOLEAN",
-        Date: "TIMESTAMP",
-      };
-
+      // Send UI types to backend - backend will map them to SQL types
+      // DO NOT convert to SQL types here - let backend handle it
       const columns = newTableColumns.map((col) => ({
         name: col.name.toLowerCase().replace(/\s+/g, "_"),
-        type: columnTypeMap[col.type] || "TEXT",
+        type: col.type, // Send UI type (Text, Number, Boolean, Date, etc.)
         required: col.required,
         elementId: col.name.toLowerCase().replace(/\s+/g, "_"),
         originalName: col.name,
       }));
+      
+      console.log("🔨 [CREATE TABLE] Sending columns to backend:", JSON.stringify(columns, null, 2));
 
       const response = await fetch(`/api/database/${appId}/tables/create`, {
         method: "POST",
@@ -267,7 +463,7 @@ export function DatabaseScreen() {
       ]);
 
       // Reload tables
-      loadTables();
+      await loadTables();
     } catch (err) {
       console.error("❌ [DATABASE] Error creating table:", err);
       toast({
@@ -278,6 +474,166 @@ export function DatabaseScreen() {
       });
     } finally {
       setCreatingTable(false);
+    }
+  };
+
+  const handleAddRecord = async () => {
+    if (!selectedTable) {
+      toast({
+        title: "Error",
+        description: "No table selected",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setAddingRecord(true);
+
+    try {
+      const token = localStorage.getItem("authToken");
+      if (!token) {
+        throw new Error("Authentication token not found");
+      }
+
+      // Ensure all columns are included in the record data
+      // This is especially important for boolean columns that might be false
+      const completeRecordData: Record<string, any> = { ...newRecordData };
+      
+      if (selectedTable.columns) {
+        selectedTable.columns.forEach((column) => {
+          // Skip system columns
+          if (
+            column.name === "id" ||
+            column.name === "created_at" ||
+            column.name === "updated_at" ||
+            column.name === "app_id"
+          ) {
+            return;
+          }
+          
+          // If column is not in recordData, set default value based on type
+          if (!(column.name in completeRecordData)) {
+            const columnType = (column.type || "").toUpperCase();
+            if (columnType.includes("BOOLEAN") || columnType.includes("BOOL")) {
+              completeRecordData[column.name] = false;
+            } else if (columnType.includes("NUMBER") || columnType.includes("INTEGER")) {
+              completeRecordData[column.name] = null;
+            } else {
+              completeRecordData[column.name] = "";
+            }
+          }
+        });
+      }
+
+      const response = await fetch(
+        `/api/database/${appId}/tables/${selectedTable.name}/records`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(completeRecordData),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to add record");
+      }
+
+      toast({
+        title: "Success",
+        description: "Record added successfully",
+      });
+
+      // Reset form
+      setShowAddRecordModal(false);
+      setNewRecordData({});
+
+      // Force refresh by calling loadTableData with a fresh timestamp
+      // Reset to page 1 to see the newly inserted record (newest first)
+      await loadTableData(selectedTable, 1);
+      
+      // Also reload tables list to update row counts
+      await loadTables();
+    } catch (err) {
+      console.error("❌ [DATABASE] Error adding record:", err);
+      toast({
+        title: "Error",
+        description:
+          err instanceof Error ? err.message : "Failed to add record",
+        variant: "destructive",
+      });
+    } finally {
+      setAddingRecord(false);
+    }
+  };
+
+  const handleDeleteTable = async (tableName: string) => {
+    // Show confirmation dialog
+    if (
+      !confirm(
+        `Are you sure you want to delete the table "${tableName}"? This action cannot be undone.`
+      )
+    ) {
+      return;
+    }
+
+    console.log("🔴 [DELETE TABLE] Starting table deletion...");
+    console.log("🔴 [DELETE TABLE] Table name:", tableName);
+
+    try {
+      const token = localStorage.getItem("authToken");
+      if (!token) {
+        throw new Error("Authentication token not found");
+      }
+
+      console.log("🔴 [DELETE TABLE] Sending DELETE request...");
+      const response = await fetch(
+        `/api/database/${appId}/tables/${tableName}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      const data = await response.json();
+      console.log("🔴 [DELETE TABLE] Response:", data);
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to delete table");
+      }
+
+      console.log("✅ [DELETE TABLE] Table deleted successfully");
+
+      toast({
+        title: "Success",
+        description: `Table "${tableName}" deleted successfully`,
+      });
+
+      // If the deleted table was selected, clear the selection
+      if (selectedTable?.name === tableName) {
+        setSelectedTable(null);
+        setTableData([]);
+      }
+
+      // Reload tables list
+      console.log("🔴 [DELETE TABLE] Reloading tables list...");
+      await loadTables();
+      console.log("✅ [DELETE TABLE] Tables list reloaded");
+    } catch (err) {
+      console.error("❌ [DATABASE] Error deleting table:", err);
+      toast({
+        title: "Error",
+        description:
+          err instanceof Error ? err.message : "Failed to delete table",
+        variant: "destructive",
+      });
     }
   };
 
@@ -300,6 +656,28 @@ export function DatabaseScreen() {
     const updated = [...newTableColumns];
     updated[index] = { ...updated[index], [field]: value };
     setNewTableColumns(updated);
+  };
+
+  // Helper function to normalize SQL types to UI types for comparison
+  const normalizeColumnType = (type: string): string => {
+    if (!type) return "Text";
+    const upperType = type.toUpperCase();
+    
+    // Map SQL types to UI types
+    if (upperType.includes("BOOLEAN")) return "Boolean";
+    if (upperType.includes("INTEGER") || upperType.includes("INT") || upperType.includes("SERIAL")) return "Number";
+    if (upperType.includes("DECIMAL") || upperType.includes("NUMERIC") || upperType.includes("FLOAT") || upperType.includes("DOUBLE") || upperType.includes("REAL")) return "Number";
+    if (upperType.includes("DATE") && !upperType.includes("TIME")) return "Date";
+    if (upperType.includes("TIMESTAMP") || upperType.includes("DATETIME")) return "DateTime";
+    if (upperType.includes("TEXT") || upperType.includes("VARCHAR") || upperType.includes("CHAR")) return "Text";
+    
+    // If it's already in UI format, return as is
+    if (type === "Boolean" || type === "Number" || type === "Text" || type === "Date" || type === "DateTime") {
+      return type;
+    }
+    
+    // Default to Text
+    return "Text";
   };
 
   // Helper function to format cell values based on type
@@ -421,6 +799,40 @@ export function DatabaseScreen() {
           {value.substring(0, 100)}...
         </span>
       );
+    }
+
+    // Try to parse JSON strings that start with { or [
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if ((trimmed.startsWith("{") || trimmed.startsWith("[")) && trimmed.length > 2) {
+        try {
+          const parsed = JSON.parse(value);
+          if (typeof parsed === "object" && parsed !== null) {
+            // If it's an array, show it nicely
+            if (Array.isArray(parsed)) {
+              return (
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs text-gray-500">Array ({parsed.length} items):</span>
+                  <pre className="text-xs bg-gray-100 p-2 rounded max-w-md overflow-auto max-h-32">
+                    {JSON.stringify(parsed, null, 2)}
+                  </pre>
+                </div>
+              );
+            }
+            // If it's an object, show it nicely
+            return (
+              <div className="flex flex-col gap-1">
+                <span className="text-xs text-gray-500">Object:</span>
+                <pre className="text-xs bg-gray-100 p-2 rounded max-w-md overflow-auto max-h-32">
+                  {JSON.stringify(parsed, null, 2)}
+                </pre>
+              </div>
+            );
+          }
+        } catch {
+          // Not valid JSON, continue to default
+        }
+      }
     }
 
     // Default: convert to string
@@ -1019,20 +1431,36 @@ export function DatabaseScreen() {
             </h2>
             <div className="space-y-2">
               {tables.map((table) => (
-                <button
+                <div
                   key={table.name}
-                  onClick={() => loadTableData(table)}
-                  className={`w-full text-left p-3 rounded-lg transition-colors ${
+                  className={`group relative w-full text-left p-3 rounded-lg transition-colors ${
                     selectedTable?.name === table.name
                       ? "bg-blue-100 dark:bg-blue-900/30 text-blue-900 dark:text-blue-100"
                       : "hover:bg-gray-100 dark:hover:bg-gray-800"
                   }`}
                 >
-                  <div className="font-medium truncate">{table.name}</div>
-                  <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">
-                    {table.rowCount} rows • {table.columns.length} columns
-                  </div>
-                </button>
+                  <button
+                    onClick={() => loadTableData(table)}
+                    className="w-full text-left"
+                  >
+                    <div className="font-medium truncate pr-8">
+                      {table.name}
+                    </div>
+                    <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                      {table.rowCount} rows • {table.columns.length} columns
+                    </div>
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteTable(table.name);
+                    }}
+                    className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-100 dark:hover:bg-red-900/30 rounded"
+                    title="Delete table"
+                  >
+                    <Trash className="w-4 h-4 text-red-600 dark:text-red-400" />
+                  </button>
+                </div>
               ))}
             </div>
           </div>
@@ -1051,14 +1479,26 @@ export function DatabaseScreen() {
                       {selectedTable.rowCount} total rows
                     </p>
                   </div>
-                  <Button
-                    onClick={() => loadTableData(selectedTable)}
-                    variant="outline"
-                    size="sm"
-                  >
-                    <RefreshCw className="w-4 h-4 mr-2" />
-                    Refresh
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      onClick={() => {
+                        setNewRecordData({});
+                        setShowAddRecordModal(true);
+                      }}
+                      size="sm"
+                    >
+                      <Plus className="w-4 h-4 mr-2" />
+                      Add Record
+                    </Button>
+                    <Button
+                      onClick={() => loadTableData(selectedTable)}
+                      variant="outline"
+                      size="sm"
+                    >
+                      <RefreshCw className="w-4 h-4 mr-2" />
+                      Refresh
+                    </Button>
+                  </div>
                 </div>
 
                 {/* Search */}
@@ -1076,56 +1516,117 @@ export function DatabaseScreen() {
 
               {/* Table */}
               <div className="flex-1 overflow-auto p-4">
+                {/* Column Visibility Toggle */}
+                <div className="mb-4 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-gray-600 dark:text-gray-400">
+                      Showing {Math.min(visibleColumnsCount, selectedTable.columns.length)} of {selectedTable.columns.length} columns
+                    </span>
+                    {selectedTable.columns.length > visibleColumnsCount && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setVisibleColumnsCount(selectedTable.columns.length)}
+                      >
+                        Show All
+                      </Button>
+                    )}
+                    {visibleColumnsCount === selectedTable.columns.length && selectedTable.columns.length > 4 && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setVisibleColumnsCount(4)}
+                      >
+                        Show Less
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
                 <div className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 overflow-hidden">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        {selectedTable.columns.map((column) => (
-                          <TableHead
-                            key={column.name}
-                            className="cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800"
-                            onClick={() => handleSort(column.name)}
-                          >
-                            <div className="flex items-center gap-2">
-                              <span className="font-semibold">
-                                {column.name}
-                              </span>
-                              <Badge variant="outline" className="text-xs">
-                                {column.type}
-                              </Badge>
-                              {sortColumn === column.name && (
-                                <span className="text-xs">
-                                  {sortDirection === "asc" ? "↑" : "↓"}
-                                </span>
-                              )}
-                            </div>
-                          </TableHead>
-                        ))}
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {sortedData.length === 0 ? (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
                         <TableRow>
-                          <TableCell
-                            colSpan={selectedTable.columns.length}
-                            className="text-center py-8 text-gray-500"
-                          >
-                            No data found
-                          </TableCell>
+                          <TableHead className="w-12">#</TableHead>
+                          {selectedTable.columns.slice(0, visibleColumnsCount).map((column) => (
+                            <TableHead
+                              key={column.name}
+                              className="cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 min-w-[150px]"
+                              onClick={() => handleSort(column.name)}
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold">
+                                  {column.name}
+                                </span>
+                                <Badge variant="outline" className="text-xs">
+                                  {column.type}
+                                </Badge>
+                                {sortColumn === column.name && (
+                                  <span className="text-xs">
+                                    {sortDirection === "asc" ? "↑" : "↓"}
+                                  </span>
+                                )}
+                              </div>
+                            </TableHead>
+                          ))}
+                          {selectedTable.columns.length > visibleColumnsCount && (
+                            <TableHead className="w-24">Actions</TableHead>
+                          )}
                         </TableRow>
-                      ) : (
-                        sortedData.map((row, index) => (
-                          <TableRow key={index}>
-                            {selectedTable.columns.map((column) => (
-                              <TableCell key={column.name}>
-                                {formatCellValue(row[column.name], column.type)}
-                              </TableCell>
-                            ))}
+                      </TableHeader>
+                      <TableBody>
+                        {sortedData.length === 0 ? (
+                          <TableRow>
+                            <TableCell
+                              colSpan={visibleColumnsCount + 2}
+                              className="text-center py-8 text-gray-500"
+                            >
+                              No data found
+                            </TableCell>
                           </TableRow>
-                        ))
-                      )}
-                    </TableBody>
-                  </Table>
+                        ) : (
+                          sortedData.map((row, index) => (
+                            <TableRow 
+                              key={index}
+                              className="cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
+                              onClick={() => {
+                                setSelectedRecord(row);
+                                setShowRecordDetailsModal(true);
+                              }}
+                            >
+                              <TableCell className="text-gray-500">
+                                {index + 1 + (currentPage - 1) * 50}
+                              </TableCell>
+                              {selectedTable.columns.slice(0, visibleColumnsCount).map((column) => (
+                                <TableCell key={column.name} className="max-w-[200px]">
+                                  <div className="truncate" title={String(row[column.name] || '')}>
+                                    {formatCellValue(row[column.name], column.type)}
+                                  </div>
+                                </TableCell>
+                              ))}
+                              {selectedTable.columns.length > visibleColumnsCount && (
+                                <TableCell>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedRecord(row);
+                                      setShowRecordDetailsModal(true);
+                                    }}
+                                    className="text-blue-600 hover:text-blue-700"
+                                  >
+                                    View All
+                                  </Button>
+                                </TableCell>
+                              )}
+                            </TableRow>
+                          ))
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
                 </div>
 
                 {/* Pagination */}
@@ -1179,6 +1680,301 @@ export function DatabaseScreen() {
           )}
         </div>
       </div>
+
+      {/* Create Table Modal */}
+      <Dialog
+        open={showCreateTableModal}
+        onOpenChange={setShowCreateTableModal}
+      >
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Create New Table</DialogTitle>
+            <DialogDescription>
+              Define your table structure with columns and data types
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            {/* Table Name */}
+            <div className="space-y-2">
+              <Label htmlFor="tableName">Table Name</Label>
+              <Input
+                id="tableName"
+                placeholder="demo"
+                value={newTableName}
+                onChange={(e) => setNewTableName(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Final table: app_{appId}_
+                {newTableName.toLowerCase().replace(/\s+/g, "_")}
+              </p>
+            </div>
+
+            {/* Columns */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label>Columns</Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={addColumn}
+                  className="gap-2"
+                >
+                  <Plus className="w-4 h-4" />
+                  Add Column
+                </Button>
+              </div>
+
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {newTableColumns.map((column, index) => (
+                  <div
+                    key={index}
+                    className="flex items-center gap-2 p-3 border rounded-lg"
+                  >
+                    <div className="flex-1">
+                      <Input
+                        placeholder="Column name"
+                        value={column.name}
+                        onChange={(e) =>
+                          updateColumn(index, "name", e.target.value)
+                        }
+                      />
+                    </div>
+                    <div className="w-32">
+                      <Select
+                        value={column.type}
+                        onValueChange={(value) =>
+                          updateColumn(index, "type", value)
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="Text">Text</SelectItem>
+                          <SelectItem value="Number">Number</SelectItem>
+                          <SelectItem value="Boolean">Boolean</SelectItem>
+                          <SelectItem value="Date">Date</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        checked={column.required}
+                        onCheckedChange={(checked) =>
+                          updateColumn(index, "required", checked as boolean)
+                        }
+                      />
+                      <Label className="text-xs">Required</Label>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => removeColumn(index)}
+                      disabled={newTableColumns.length <= 1}
+                    >
+                      <Trash className="w-4 h-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowCreateTableModal(false)}
+              disabled={creatingTable}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleCreateTable} disabled={creatingTable}>
+              {creatingTable ? (
+                <>
+                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                "Create Table"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Record Modal */}
+      <Dialog open={showAddRecordModal} onOpenChange={setShowAddRecordModal}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Add New Record</DialogTitle>
+            <DialogDescription>
+              Add a new record to {selectedTable?.name}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            {selectedTable?.columns
+              ?.filter(
+                (col) =>
+                  col.name !== "id" &&
+                  col.name !== "created_at" &&
+                  col.name !== "updated_at" &&
+                  col.name !== "app_id"
+              )
+              .map((column) => {
+                // Normalize the column type to handle both SQL types and UI types
+                const columnType = column.type || "TEXT";
+                const normalizedType = normalizeColumnType(columnType);
+                
+                return (
+                  <div key={column.name} className="space-y-2">
+                    <Label htmlFor={column.name}>
+                      {column.name}
+                      <span className="text-xs text-muted-foreground ml-2">
+                        ({column.type || "TEXT"})
+                      </span>
+                    </Label>
+                    {(() => {
+                      if (normalizedType === "Boolean") {
+                        return (
+                          <div className="flex items-center gap-2">
+                            <Checkbox
+                              id={column.name}
+                              checked={newRecordData[column.name] || false}
+                              onCheckedChange={(checked) =>
+                                setNewRecordData({
+                                  ...newRecordData,
+                                  [column.name]: checked,
+                                })
+                              }
+                            />
+                            <Label htmlFor={column.name} className="text-sm">
+                              {newRecordData[column.name] ? "True" : "False"}
+                            </Label>
+                          </div>
+                        );
+                      } else if (normalizedType === "Date" || normalizedType === "DateTime") {
+                        return (
+                          <Input
+                            id={column.name}
+                            type="datetime-local"
+                            value={newRecordData[column.name] || ""}
+                            onChange={(e) =>
+                              setNewRecordData({
+                                ...newRecordData,
+                                [column.name]: e.target.value,
+                              })
+                            }
+                          />
+                        );
+                      } else if (normalizedType === "Number") {
+                        return (
+                          <Input
+                            id={column.name}
+                            type="number"
+                            placeholder={`Enter ${column.name}`}
+                            value={newRecordData[column.name] || ""}
+                            onChange={(e) =>
+                              setNewRecordData({
+                                ...newRecordData,
+                                [column.name]: e.target.value,
+                              })
+                            }
+                          />
+                        );
+                      } else {
+                        // Default to text input
+                        return (
+                          <Input
+                            id={column.name}
+                            type="text"
+                            placeholder={`Enter ${column.name}`}
+                            value={newRecordData[column.name] || ""}
+                            onChange={(e) =>
+                              setNewRecordData({
+                                ...newRecordData,
+                                [column.name]: e.target.value,
+                              })
+                            }
+                          />
+                        );
+                      }
+                    })()}
+                  </div>
+                );
+              })}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowAddRecordModal(false)}
+              disabled={addingRecord}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleAddRecord} disabled={addingRecord}>
+              {addingRecord ? (
+                <>
+                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                  Adding...
+                </>
+              ) : (
+                "Add Record"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Record Details Modal */}
+      <Dialog open={showRecordDetailsModal} onOpenChange={setShowRecordDetailsModal}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Record Details</DialogTitle>
+            <DialogDescription>
+              Full details for record from {selectedTable?.name}
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedRecord && selectedTable && (
+            <div className="space-y-4 py-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {selectedTable.columns.map((column) => (
+                  <div
+                    key={column.name}
+                    className="space-y-2 p-4 border rounded-lg bg-gray-50 dark:bg-gray-800/50"
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <Label className="font-semibold text-sm">
+                        {column.name}
+                      </Label>
+                      <Badge variant="outline" className="text-xs">
+                        {column.type}
+                      </Badge>
+                    </div>
+                    <div className="min-h-[40px] break-words">
+                      {formatCellValue(selectedRecord[column.name], column.type)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowRecordDetailsModal(false)}
+            >
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -1,424 +1,279 @@
 const express = require("express");
-const { PrismaClient, Prisma } = require("@prisma/client");
+const { PrismaClient } = require("@prisma/client");
 const { authenticateToken } = require("../middleware/auth");
-const {
-  assertAppAccess,
-  isValidColumnName,
-  isValidTableName,
-  normalizeColumns,
-  parseAppId,
-} = require("../utils/databaseHelpers");
 
-const prisma = new PrismaClient();
 const router = express.Router();
+const prisma = new PrismaClient();
 
-const { sql, raw, join } = Prisma;
-const empty = Prisma.empty || Prisma.sql``;
+const isValidIdentifier = (value = "") => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value);
+const sanitizeIdentifier = (value) => value.replace(/"/g, "\"\"");
 
-const CHART_TYPES = new Set(["line", "bar", "pie", "donut"]);
-const DEFAULT_LIMIT = 500;
-const MAX_LIMIT = 5000;
-const AGGREGATION_MAP = {
-  sum: "SUM",
-  avg: "AVG",
-  average: "AVG",
-  count: "COUNT",
-  min: "MIN",
-  max: "MAX",
-};
-const COMPARATOR_MAP = {
-  eq: "=",
-  ne: "!=",
-  gt: ">",
-  gte: ">=",
-  lt: "<",
-  lte: "<=",
-};
-
-const sanitizeLimit = (value = DEFAULT_LIMIT) => {
-  const num = Number(value);
-  if (!Number.isFinite(num)) return DEFAULT_LIMIT;
-  return Math.min(Math.max(Math.trunc(num), 1), MAX_LIMIT);
-};
-
-const sanitizeDirection = (direction = "asc") =>
-  direction && direction.toString().toLowerCase() === "desc" ? "desc" : "asc";
-
-const coerceNumber = (value) => {
-  if (value === null || value === undefined) return null;
-  if (typeof value === "number") return value;
-  if (typeof value === "bigint") return Number(value);
-  const parsed = Number(value);
-  return Number.isNaN(parsed) ? null : parsed;
-};
-
-const tableIdentifier = (tableName) => raw(`"${tableName}"`);
-
-function ensureColumn(columns, targetName, { requireNumeric = false } = {}) {
-  const normalized = (targetName || "").trim();
-  if (!normalized) {
-    const err = new Error("Column name is required");
-    err.status = 400;
-    throw err;
+const parseAppId = (appIdParam) => {
+  const id = Number(appIdParam);
+  if (!Number.isInteger(id) || id <= 0) {
+    return null;
   }
+  return id;
+};
 
-  if (!isValidColumnName(normalized)) {
-    const err = new Error(`Invalid column name: ${normalized}`);
-    err.status = 400;
-    throw err;
-  }
+async function assertAppAccess(appId, userId) {
+  const app = await prisma.app.findUnique({
+    where: { id: appId },
+    select: { id: true, ownerId: true },
+  });
 
-  const columnMeta = columns.find(
-    (col) =>
-      col.name === normalized ||
-      col.name?.toLowerCase() === normalized.toLowerCase()
-  );
-
-  if (!columnMeta) {
-    const err = new Error(`Column "${normalized}" not found in metadata`);
+  if (!app) {
+    const err = new Error("App not found");
     err.status = 404;
     throw err;
   }
 
-  if (requireNumeric && !columnMeta.isNumeric) {
-    const err = new Error(
-      `Column "${normalized}" must be numeric for this chart`
-    );
-    err.status = 400;
+  if (app.ownerId !== userId) {
+    const err = new Error("Access denied to this app");
+    err.status = 403;
     throw err;
   }
 
-  return {
-    name: columnMeta.name,
-    meta: columnMeta,
-    identifier: raw(`"${columnMeta.name}"`),
-  };
+  return app;
 }
 
-function buildFilterClauses(filters = [], columns = []) {
-  if (!Array.isArray(filters) || filters.length === 0) {
-    return [];
-  }
-
-  const clauses = [];
-  filters.slice(0, 10).forEach((filter) => {
-    if (!filter || !filter.column) return;
-
-    const operatorKey = (filter.operator || "eq").toLowerCase();
-    const comparator = COMPARATOR_MAP[operatorKey];
-    if (!comparator) return;
-
-    const { identifier } = ensureColumn(columns, filter.column);
-    if (filter.value === undefined || filter.value === null) return;
-
-    clauses.push(sql`${identifier} ${raw(comparator)} ${filter.value}`);
-  });
-
-  return clauses;
-}
-
-function buildWhereClause(requiredColumns = [], filterClauses = []) {
-  const base = requiredColumns.map((column) => sql`${column} IS NOT NULL`);
-  const allClauses = [...base, ...filterClauses];
-
-  if (!allClauses.length) {
-    return empty;
-  }
-
-  return sql`WHERE ${join(allClauses, sql` AND `)}`;
-}
-
-function buildOrderClause(identifier, direction = "asc") {
-  if (!identifier) return empty;
-  const normalized = sanitizeDirection(direction);
-  const directionSql = normalized === "desc" ? raw("DESC") : raw("ASC");
-  return sql`ORDER BY ${identifier} ${directionSql}`;
-}
-
-function buildAggregatorExpression(aggregation = "sum", columnName) {
-  const key = aggregation?.toLowerCase?.() || "sum";
-  const sqlFunction = AGGREGATION_MAP[key] || AGGREGATION_MAP.sum;
-  return {
-    key: AGGREGATION_MAP[key] ? key : "sum",
-    expression: raw(`${sqlFunction}("${columnName}")::double precision`),
-  };
-}
-
-async function fetchTableMetadata(appId, tableName) {
-  const table = await prisma.userTable.findFirst({
-    where: { appId, tableName },
-  });
-
-  if (!table) {
-    const err = new Error(`Table "${tableName}" not found in metadata`);
-    err.status = 404;
-    throw err;
-  }
-
-  const columns = normalizeColumns(table.columns);
-  if (!columns.length) {
-    const err = new Error(
-      `Table "${tableName}" has no column metadata. Define columns before binding charts.`
-    );
-    err.status = 400;
-    throw err;
-  }
-
-  return { table, columns };
-}
-
-async function runLineChartQuery({
-  tableName,
-  columns,
-  xAxis,
-  yAxis,
-  filters,
-  limit,
-  sortDirection,
-}) {
-  const xColumn = ensureColumn(columns, xAxis);
-  const yColumn = ensureColumn(columns, yAxis, { requireNumeric: true });
-  const tbl = tableIdentifier(tableName);
-  const filterClauses = buildFilterClauses(filters, columns);
-  const whereClause = buildWhereClause(
-    [xColumn.identifier, yColumn.identifier],
-    filterClauses
-  );
-  const orderClause = buildOrderClause(xColumn.identifier, sortDirection);
-
-  const query = sql`
-    SELECT ${xColumn.identifier} AS x_value, ${yColumn.identifier} AS y_value
-    FROM ${tbl}
-    ${whereClause}
-    ${orderClause}
-    LIMIT ${limit}
-  `;
-
-  const rows = await prisma.$queryRaw(query);
-  const data = rows.map((row) => ({
-    [xColumn.name]: row.x_value,
-    [yColumn.name]: coerceNumber(row.y_value),
-  }));
-
-  return {
-    data,
-    meta: {
-      xAxis: xColumn.name,
-      yAxis: yColumn.name,
-      sortDirection: sanitizeDirection(sortDirection),
-    },
-  };
-}
-
-async function runGroupedChartQuery({
-  tableName,
-  columns,
-  categoryColumn,
-  valueColumn,
-  filters,
-  limit,
-  sortDirection,
-  aggregation,
-}) {
-  const xColumn = ensureColumn(columns, categoryColumn);
-  const yColumn = ensureColumn(columns, valueColumn, { requireNumeric: true });
-  const tbl = tableIdentifier(tableName);
-  const filterClauses = buildFilterClauses(filters, columns);
-  const whereClause = buildWhereClause(
-    [xColumn.identifier, yColumn.identifier],
-    filterClauses
-  );
-  const { key: resolvedAggregation, expression } = buildAggregatorExpression(
-    aggregation,
-    yColumn.name
-  );
-  const orderClause = buildOrderClause(raw("value"), sortDirection);
-
-  const query = sql`
-    SELECT ${xColumn.identifier} AS category, ${expression} AS value
-    FROM ${tbl}
-    ${whereClause}
-    GROUP BY ${xColumn.identifier}
-    ${orderClause}
-    LIMIT ${limit}
-  `;
-
-  const rows = await prisma.$queryRaw(query);
-  const data = rows.map((row) => ({
-    [xColumn.name]: row.category,
-    [yColumn.name]: coerceNumber(row.value),
-  }));
-
-  return {
-    data,
-    meta: {
-      categoryColumn: xColumn.name,
-      valueColumn: yColumn.name,
-      aggregation: resolvedAggregation,
-      sortDirection: sanitizeDirection(sortDirection),
-    },
-  };
-}
-
-router.get("/:appId/tables", authenticateToken, async (req, res) => {
-  try {
-    const appIdInt = parseAppId(req.params.appId);
-    if (!appIdInt) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid appId supplied" });
+const parseColumns = (columns) => {
+  if (typeof columns === "string") {
+    try {
+      const parsed = JSON.parse(columns);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (error) {
+      console.warn("[CHART-DATA] Failed to parse column metadata", error.message);
+      return [];
     }
-
-    await assertAppAccess(prisma, appIdInt, req.user.id);
-
-    const tables = await prisma.userTable.findMany({
-      where: { appId: appIdInt },
-      orderBy: { createdAt: "desc" },
-    });
-
-    const payload = tables.map((table) => {
-      const columns = normalizeColumns(table.columns);
-      return {
-        id: table.id,
-        name: table.tableName,
-        columns,
-        numericColumns: columns.filter((col) => col.isNumeric).map((col) => col.name),
-        totalColumns: columns.length,
-        createdAt: table.createdAt,
-        updatedAt: table.updatedAt,
-      };
-    });
-
-    return res.json({
-      success: true,
-      tables: payload,
-      totalTables: payload.length,
-    });
-  } catch (error) {
-    const status = error.status || 500;
-    console.error("[CHARTS] Failed to load tables", error);
-    return res.status(status).json({
-      success: false,
-      message: error.message || "Failed to load tables",
-    });
   }
-});
 
-router.post("/:appId/query", authenticateToken, async (req, res) => {
-  try {
-    const appIdInt = parseAppId(req.params.appId);
-    if (!appIdInt) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid appId supplied" });
-    }
+  if (Array.isArray(columns)) {
+    return columns;
+  }
 
-    await assertAppAccess(prisma, appIdInt, req.user.id);
+  if (typeof columns === "object" && columns !== null) {
+    return Object.entries(columns).map(([name, definition]) => ({
+      name,
+      type: definition?.type || definition || "TEXT",
+      required: Boolean(definition?.required),
+    }));
+  }
 
-    const {
-      chartType,
-      tableName,
-      xAxis,
-      yAxis,
-      labelColumn,
-      valueColumn,
-      filters = [],
-      limit = DEFAULT_LIMIT,
-      sortDirection,
-      aggregation = "sum",
-    } = req.body || {};
+  return [];
+};
 
-    const normalizedChartType = chartType?.toString().toLowerCase();
-    if (!normalizedChartType || !CHART_TYPES.has(normalizedChartType)) {
-      return res.status(400).json({
-        success: false,
-        message: "Unsupported chart type",
-      });
-    }
+const hasColumn = async (tableName, columnName) => {
+  const query = `SELECT EXISTS (
+      SELECT 1 FROM information_schema.columns 
+      WHERE table_schema = 'public'
+      AND table_name = '${tableName}'
+      AND column_name = '${columnName}'
+    ) as exists`;
 
-    if (!tableName || !isValidTableName(tableName)) {
-      return res.status(400).json({
-        success: false,
-        message: "Valid tableName is required",
-      });
-    }
+  const result = await prisma.$queryRawUnsafe(query);
+  return Boolean(result?.[0]?.exists);
+};
 
-    const { columns } = await fetchTableMetadata(appIdInt, tableName);
-    const limitValue = sanitizeLimit(limit);
+const toNumeric = (value) => {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+};
 
-    let queryResult;
-    if (normalizedChartType === "line") {
-      if (!xAxis || !yAxis) {
-        return res.status(400).json({
-          success: false,
-          message: "Line charts require xAxis and yAxis columns",
-        });
+router.get(
+  "/:appId/tables/:tableName",
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const { tableName } = req.params;
+      const { xKey, yKey, chartType = "chart-line", limit = "500" } = req.query;
+      const appId = parseAppId(req.params.appId);
+      const userId = req.user.id;
+
+      if (!appId) {
+        return res.status(400).json({ success: false, message: "Invalid appId" });
       }
 
-      queryResult = await runLineChartQuery({
-        tableName,
-        columns,
-        xAxis,
-        yAxis,
-        filters,
-        limit: limitValue,
-        sortDirection: sortDirection || "asc",
-      });
-    } else {
-      const categoryColumn = xAxis || labelColumn;
-      const metricColumn = yAxis || valueColumn;
-
-      if (!categoryColumn || !metricColumn) {
-        return res.status(400).json({
-          success: false,
-          message: "Bar, pie, and donut charts require both category and value columns",
-        });
+      if (!isValidIdentifier(tableName)) {
+        return res.status(400).json({ success: false, message: "Invalid table name" });
       }
 
-      queryResult = await runGroupedChartQuery({
-        tableName,
-        columns,
-        categoryColumn,
-        valueColumn: metricColumn,
-        filters,
-        limit: limitValue,
-        sortDirection: sortDirection || "desc",
-        aggregation,
+      if (!xKey || !isValidIdentifier(xKey)) {
+        return res.status(400).json({ success: false, message: "Invalid x-axis column" });
+      }
+
+      if (!yKey || !isValidIdentifier(yKey)) {
+        return res.status(400).json({ success: false, message: "Invalid y-axis column" });
+      }
+
+      const normalizedChartType = chartType?.toString().toLowerCase();
+      const limitInt = Math.min(Math.max(parseInt(limit, 10) || 500, 1), 2000);
+
+      await assertAppAccess(appId, userId);
+
+      const userTable = await prisma.userTable.findFirst({
+        where: { appId, tableName },
+      });
+
+      if (!userTable) {
+        return res.status(404).json({ success: false, message: "Table not found" });
+      }
+
+      const tableColumns = parseColumns(userTable.columns);
+      const xMeta = tableColumns.find((column) => column.name === xKey);
+      const yMeta = tableColumns.find((column) => column.name === yKey);
+
+      if (!xMeta) {
+        return res.status(400).json({ success: false, message: `Column "${xKey}" does not exist on ${tableName}` });
+      }
+
+      if (!yMeta) {
+        return res.status(400).json({ success: false, message: `Column "${yKey}" does not exist on ${tableName}` });
+      }
+
+      const safeTableName = sanitizeIdentifier(tableName);
+      const safeXKey = sanitizeIdentifier(xKey);
+      const safeYKey = sanitizeIdentifier(yKey);
+
+      const tableHasAppId = await hasColumn(safeTableName, "app_id");
+      const whereClause = tableHasAppId ? `WHERE app_id = ${appId}` : "";
+
+      const query = `SELECT "${safeXKey}" as x_value, "${safeYKey}" as y_value FROM "${safeTableName}" ${whereClause} ORDER BY id ASC LIMIT ${limitInt}`;
+      const rawRows = await prisma.$queryRawUnsafe(query);
+      const mappedRows = rawRows.map((row) => ({
+        [xKey]: row.x_value,
+        [yKey]: row.y_value,
+      }));
+
+      const warnings = [];
+      let nonNumericCount = 0;
+      let processedData = mappedRows;
+
+      if (!mappedRows.length) {
+        warnings.push("No data available");
+      }
+
+      if (mappedRows.length) {
+        if (normalizedChartType === "chart-bar") {
+          const grouped = new Map();
+
+          mappedRows.forEach((row) => {
+            const xValue = row[xKey];
+            const key = xValue === null || xValue === undefined || xValue === "" ? "(empty)" : String(xValue);
+            if (!grouped.has(key)) {
+              grouped.set(key, {
+                displayValue: xValue === null || xValue === undefined || xValue === "" ? "(empty)" : xValue,
+                total: 0,
+                count: 0,
+                numericCount: 0,
+              });
+            }
+
+            const entry = grouped.get(key);
+            const numericY = toNumeric(row[yKey]);
+
+            if (numericY === null && row[yKey] !== null && row[yKey] !== undefined && row[yKey] !== "") {
+              nonNumericCount += 1;
+            } else if (numericY !== null) {
+              entry.total += numericY;
+              entry.numericCount += 1;
+            }
+
+            entry.count += 1;
+          });
+
+          processedData = Array.from(grouped.values()).map((group) => ({
+            [xKey]: group.displayValue,
+            [yKey]: group.numericCount > 0 ? group.total : group.count,
+          }));
+        } else if (normalizedChartType === "chart-pie" || normalizedChartType === "chart-donut") {
+          const grouped = new Map();
+
+          mappedRows.forEach((row) => {
+            const xValue = row[xKey];
+            const key = xValue === null || xValue === undefined || xValue === "" ? "(empty)" : String(xValue);
+            if (!grouped.has(key)) {
+              grouped.set(key, {
+                displayValue: xValue === null || xValue === undefined || xValue === "" ? "(empty)" : xValue,
+                total: 0,
+              });
+            }
+
+            const entry = grouped.get(key);
+            const numericY = toNumeric(row[yKey]);
+
+            if (numericY === null && row[yKey] !== null && row[yKey] !== undefined && row[yKey] !== "") {
+              nonNumericCount += 1;
+              return;
+            }
+
+            entry.total += numericY || 0;
+          });
+
+          const totalValue = Array.from(grouped.values()).reduce(
+            (sum, group) => sum + group.total,
+            0,
+          );
+
+          processedData = Array.from(grouped.values()).map((group) => ({
+            [xKey]: group.displayValue,
+            [yKey]: group.total,
+            percentage:
+              totalValue > 0
+                ? Number(((group.total / totalValue) * 100).toFixed(2))
+                : 0,
+          }));
+        } else {
+          processedData = mappedRows.map((row) => {
+            const numericY = toNumeric(row[yKey]);
+            if (numericY === null && row[yKey] !== null && row[yKey] !== undefined && row[yKey] !== "") {
+              nonNumericCount += 1;
+            }
+
+            return {
+              [xKey]: row[xKey],
+              [yKey]: numericY,
+            };
+          });
+        }
+
+        if (nonNumericCount > 0) {
+          warnings.push("Selected Y-axis column contains non-numeric values");
+        }
+      }
+
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
+
+      res.json({
+        success: true,
+        data: processedData,
+        metadata: {
+          appId,
+          tableName,
+          chartType: normalizedChartType,
+          rowCount: mappedRows.length,
+          xKey,
+          yKey,
+          yColumnType: yMeta?.type || null,
+        },
+        warnings,
+        columns: tableColumns,
+      });
+    } catch (error) {
+      const status = error.status || 500;
+      console.error("[CHART-DATA] Failed to fetch chart data", error);
+      res.status(status).json({
+        success: false,
+        message: error.status ? error.message : "Failed to fetch chart data",
+        error: error.message,
       });
     }
-
-    const warnings = [];
-    if (queryResult.data.length === 0) {
-      warnings.push("No data returned for the selected columns.");
-    } else if (queryResult.data.length === limitValue) {
-      warnings.push(
-        `Result capped at ${limitValue} rows. Narrow filters or lower the limit for more precise data.`
-      );
-    }
-
-    return res.json({
-      success: true,
-      chartType: normalizedChartType,
-      data: queryResult.data,
-      meta: {
-        tableName,
-        limit: limitValue,
-        rowCount: queryResult.data.length,
-        ...queryResult.meta,
-      },
-      warnings,
-    });
-  } catch (error) {
-    const status =
-      error.status || (error.code === "42P01" ? 404 : 500);
-    const message =
-      error.code === "42P01"
-        ? "Table exists in metadata but has not been created yet"
-        : error.message || "Failed to build chart dataset";
-
-    console.error("[CHARTS] Query error", error);
-    return res.status(status).json({ success: false, message });
   }
-});
+);
 
 module.exports = router;

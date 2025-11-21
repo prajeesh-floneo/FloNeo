@@ -1,5 +1,5 @@
 "use client";
-import React from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -31,9 +31,17 @@ import {
   AlignCenter,
   AlignRight,
   Settings as SettingsIcon,
-  HelpCircle,
-  Info,
 } from "lucide-react";
+import { useCanvasWorkflow } from "@/lib/canvas-workflow-context";
+import { authenticatedFetch } from "@/lib/auth";
+
+const DEFAULT_CHART_COLORS = ["#2563eb", "#7c3aed", "#22c55e", "#f97316", "#14b8a6"];
+const CHART_ELEMENT_TYPES = new Set([
+  "chart-bar",
+  "chart-line",
+  "chart-pie",
+  "chart-donut",
+]);
 
 interface CanvasElement {
   id: string;
@@ -102,17 +110,6 @@ interface PropertiesPanelProps {
   onMoveElementLayer: (direction: "up" | "down") => void;
 }
 
-// Helper function to validate binding path syntax
-const isValidBindingPath = (path: string): boolean => {
-  if (!path || path.trim() === "") return true; // Empty is valid
-
-  // Basic validation: check for common patterns
-  // Valid examples: dbFindResult[0].name, formData.email, urlParams.id
-  const validPattern =
-    /^[a-zA-Z_$][a-zA-Z0-9_$]*(\[[0-9]+\]|\.[a-zA-Z_$][a-zA-Z0-9_$]*)*$/;
-  return validPattern.test(path);
-};
-
 export function PropertiesPanel({
   selectedElement,
   currentPage,
@@ -126,8 +123,145 @@ export function PropertiesPanel({
   onToggleElementLock,
   onMoveElementLayer,
 }: PropertiesPanelProps) {
-  const [showExamplesModal, setShowExamplesModal] = React.useState(false);
+  const { currentAppId } = useCanvasWorkflow();
+  const normalizedSelectedType = selectedElement?.type?.toLowerCase() || "";
+  const isChartElement = CHART_ELEMENT_TYPES.has(normalizedSelectedType);
+  const isPieOrDonut =
+    normalizedSelectedType === "chart-pie" || normalizedSelectedType === "chart-donut";
+  const isLineOrBar =
+    normalizedSelectedType === "chart-line" || normalizedSelectedType === "chart-bar";
 
+  // Database tables / columns state for chart binding
+  const [dbTables, setDbTables] = useState<Array<{ name: string; columns?: Array<{ name: string; type: string }> }>>([]);
+  const [tablesLoading, setTablesLoading] = useState(false);
+  const [tableColumns, setTableColumns] = useState<Array<{ name: string; type: string }>>([]);
+  const [tableDataLoading, setTableDataLoading] = useState(false);
+  const [dataWarning, setDataWarning] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isChartElement) {
+      setTableColumns([]);
+      setDataWarning(null);
+      setTableDataLoading(false);
+    }
+  }, [isChartElement]);
+
+  useEffect(() => {
+    // Load tables when panel mounts (if app id available)
+    const load = async () => {
+      if (!currentAppId) return;
+      try {
+        setTablesLoading(true);
+        const resp = await authenticatedFetch(`/api/database/${currentAppId}`);
+        const json = await resp.json();
+        setDbTables(json.tables || []);
+      } catch (err) {
+        console.warn("Failed to load DB tables for properties panel", err);
+      } finally {
+        setTablesLoading(false);
+      }
+    };
+
+    load();
+  }, [currentAppId]);
+
+  const fetchTableColumns = useCallback(async (tableName: string) => {
+    if (!currentAppId || !tableName || !isChartElement) return;
+    try {
+      setTableDataLoading(true);
+      const timestamp = Date.now();
+      const encodedTableName = encodeURIComponent(tableName);
+      const resp = await authenticatedFetch(
+        `/api/database/${currentAppId}/tables/${encodedTableName}/data?page=1&limit=1&_t=${timestamp}`
+      );
+      const json = await resp.json();
+      let cols: any[] = [];
+      if (json.columns && Array.isArray(json.columns)) {
+        cols = json.columns.map((c: any) => ({ name: c.name, type: c.type || "TEXT" }));
+      } else if (json.columns && typeof json.columns === "object") {
+        cols = Object.entries(json.columns).map(([k, v]) => ({ name: k, type: (v && v.type) || "TEXT" }));
+      } else if (json.data && json.data.length > 0) {
+        cols = Object.keys(json.data[0]).map((k) => ({ name: k, type: "TEXT" }));
+      } else {
+        // Fall back to dbTables metadata
+        const meta = dbTables.find((t) => t.name === tableName);
+        cols = (meta?.columns || []).map((c: any) => ({ name: c.name, type: c.type || "TEXT" }));
+      }
+
+      setTableColumns(cols);
+    } catch (err) {
+      console.warn("Failed to fetch table columns", err);
+      setTableColumns([]);
+    } finally {
+      setTableDataLoading(false);
+    }
+  }, [currentAppId, dbTables, isChartElement]);
+
+  const fetchTableData = async (tableName: string, xKey?: string, yKey?: string) => {
+    if (!currentAppId || !tableName || !isChartElement) return;
+    if (!xKey || !yKey) {
+      onUpdateElement("data", []);
+      setDataWarning(null);
+      return;
+    }
+
+    try {
+      setTableDataLoading(true);
+      setDataWarning(null);
+      const params = new URLSearchParams({
+        xKey,
+        yKey,
+        chartType: selectedElement?.type || "chart-line",
+        limit: "500",
+        _t: Date.now().toString(),
+      });
+
+      const encodedTableName = encodeURIComponent(tableName);
+      const resp = await authenticatedFetch(
+        `/api/chart-data/${currentAppId}/tables/${encodedTableName}?${params.toString()}`
+      );
+      const json = await resp.json();
+
+      if (!resp.ok || json.success === false) {
+        throw new Error(json.message || "Failed to fetch chart data");
+      }
+
+      onUpdateElement("data", json.data || []);
+
+      if (json?.metadata?.yColumnType) {
+        onUpdateElement("yColumnType", json.metadata.yColumnType);
+      }
+
+      if (Array.isArray(json.columns) && json.columns.length > 0) {
+        setTableColumns(json.columns);
+      }
+
+      if (Array.isArray(json.warnings) && json.warnings.length > 0) {
+        setDataWarning(json.warnings.join(". "));
+      } else {
+        setDataWarning(null);
+      }
+    } catch (err) {
+      console.warn("Failed to fetch chart data", err);
+      const message = err instanceof Error ? err.message : "Failed to load data";
+      setDataWarning(message);
+      onUpdateElement("data", []);
+    } finally {
+      setTableDataLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const tableName = selectedElement?.properties?.tableName;
+    if (!currentAppId || !tableName || !isChartElement) {
+      if (!tableName) {
+        setTableColumns([]);
+      }
+      return;
+    }
+
+    fetchTableColumns(tableName);
+  }, [currentAppId, fetchTableColumns, isChartElement, selectedElement?.properties?.tableName]);
   const renderGeneralProperties = () => {
     const isDisabled = !selectedElement;
     const alignHorizontally = (dir: "left" | "center" | "right") => {
@@ -823,6 +957,38 @@ export function PropertiesPanel({
         </div>
       );
     }
+
+    const resolvedChartColors =
+      Array.isArray(selectedElement.properties?.colors) &&
+      selectedElement.properties.colors.length > 0
+        ? selectedElement.properties.colors
+        : DEFAULT_CHART_COLORS;
+
+    const getMutableChartColors = () =>
+      Array.isArray(selectedElement.properties?.colors) &&
+      selectedElement.properties.colors.length > 0
+        ? [...selectedElement.properties.colors]
+        : [...DEFAULT_CHART_COLORS];
+
+    const handleSliceColorChange = (value: string, index: number) => {
+      const nextColors = getMutableChartColors();
+      nextColors[index] = value;
+      onUpdateElement("colors", nextColors);
+    };
+
+    const handleAddSliceColor = () => {
+      const basePalette = [...DEFAULT_CHART_COLORS, "#0ea5e9", "#f43f5e", "#facc15"];
+      const nextColors = getMutableChartColors();
+      const suggested = basePalette[nextColors.length % basePalette.length];
+      onUpdateElement("colors", [...nextColors, suggested]);
+    };
+
+    const handleRemoveSliceColor = (index: number) => {
+      const nextColors = getMutableChartColors();
+      if (nextColors.length <= 2) return;
+      nextColors.splice(index, 1);
+      onUpdateElement("colors", [...nextColors]);
+    };
 
     return (
       <div className="space-y-4">
@@ -3012,97 +3178,387 @@ export function PropertiesPanel({
                   </>
                 )}
 
-                {/* TEXT_DISPLAY Element Properties */}
-                {(selectedElement.type === "TEXT_DISPLAY" ||
-                  selectedElement.type === "text_display") && (
+                {/* Chart specific content */}
+                {(selectedElement.type === "chart-bar" ||
+                  selectedElement.type === "chart-line" ||
+                  selectedElement.type === "chart-pie" ||
+                  selectedElement.type === "chart-donut") && (
                   <>
-                    {/* Data Binding Path */}
+                    {/* Database binding section */}
                     <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <Label>Data Binding (Optional)</Label>
-                        <div className="group relative">
-                          <HelpCircle className="w-4 h-4 text-gray-400 cursor-help" />
-                          <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block w-64 p-2 bg-gray-900 text-white text-xs rounded shadow-lg z-50">
-                            Connect this element to data from workflows, forms,
-                            or URL parameters. Leave empty to show static
-                            fallback text.
-                          </div>
-                        </div>
-                      </div>
-                      <Input
-                        type="text"
-                        value={selectedElement.properties.bindingPath || ""}
-                        onChange={(e) =>
-                          onUpdateElement("bindingPath", e.target.value)
-                        }
-                        placeholder="Example: dbFindResult[0].name"
-                        className={
-                          selectedElement.properties.bindingPath &&
-                          !isValidBindingPath(
-                            selectedElement.properties.bindingPath
-                          )
-                            ? "border-red-500 focus:border-red-500"
-                            : ""
-                        }
-                      />
-                      <p className="text-xs text-gray-500 dark:text-gray-400">
-                        Enter the path to your data.{" "}
-                        <button
-                          type="button"
-                          onClick={() => setShowExamplesModal(true)}
-                          className="text-blue-600 dark:text-blue-400 hover:underline"
-                        >
-                          Show examples
-                        </button>
-                      </p>
-                    </div>
-
-                    {/* Format */}
-                    <div>
-                      <Label>Format</Label>
+                      <Label>Table</Label>
                       <Select
-                        value={selectedElement.properties.format || "text"}
-                        onValueChange={(value) =>
-                          onUpdateElement("format", value)
-                        }
+                        value={selectedElement.properties.tableName || ""}
+                        onValueChange={(value) => {
+                          onUpdateElement("tableName", value);
+                          onUpdateElement("xKey", undefined);
+                          onUpdateElement("valueKey", undefined);
+                          onUpdateElement("yKey", undefined);
+                          onUpdateElement("nameKey", undefined);
+                          onUpdateElement("series", undefined);
+                          onUpdateElement("data", []);
+                          setTableColumns([]);
+                          setDataWarning(null);
+                          fetchTableColumns(value);
+                        }}
+                        disabled={tablesLoading}
                       >
                         <SelectTrigger>
-                          <SelectValue />
+                          <SelectValue placeholder={tablesLoading ? "Loading tables..." : "Select table"} />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="text">Text</SelectItem>
-                          <SelectItem value="currency">Currency ($)</SelectItem>
-                          <SelectItem value="number">Number</SelectItem>
-                          <SelectItem value="percentage">
-                            Percentage (%)
-                          </SelectItem>
-                          <SelectItem value="date">Date</SelectItem>
-                          <SelectItem value="datetime">Date & Time</SelectItem>
-                          <SelectItem value="phone">Phone</SelectItem>
-                          <SelectItem value="uppercase">UPPERCASE</SelectItem>
-                          <SelectItem value="lowercase">lowercase</SelectItem>
-                          <SelectItem value="capitalize">Capitalize</SelectItem>
+                          {dbTables.length === 0 ? (
+                            <div className="px-3 py-2 text-xs text-muted-foreground">
+                              {tablesLoading ? "Loading tables..." : "No tables available"}
+                            </div>
+                          ) : (
+                            dbTables.map((table) => (
+                              <SelectItem key={table.name} value={table.name}>
+                                {table.name}
+                              </SelectItem>
+                            ))
+                          )}
                         </SelectContent>
                       </Select>
                     </div>
 
-                    {/* Fallback Text */}
+                    <div className="grid grid-cols-2 gap-2">
+                      {selectedElement.type === "chart-line" || selectedElement.type === "chart-bar" ? (
+                        <>
+                          <div>
+                            <Label>X-Axis Column</Label>
+                            <Select
+                              value={selectedElement.properties.xKey || ""}
+                              onValueChange={(value) => {
+                                onUpdateElement("xKey", value);
+                                if (selectedElement.properties.tableName && (selectedElement.properties.valueKey || selectedElement.properties.yKey)) {
+                                  fetchTableData(
+                                    selectedElement.properties.tableName,
+                                    value,
+                                    selectedElement.properties.valueKey || selectedElement.properties.yKey
+                                  );
+                                }
+                              }}
+                              disabled={!selectedElement.properties.tableName || tableColumns.length === 0}
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder={tableDataLoading ? "Loading columns..." : "Select column"} />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {tableColumns.map((column) => (
+                                  <SelectItem key={column.name} value={column.name}>
+                                    {column.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div>
+                            <Label>Y-Axis Column</Label>
+                            <Select
+                              value={selectedElement.properties.valueKey || selectedElement.properties.yKey || ""}
+                              onValueChange={(value) => {
+                                onUpdateElement("valueKey", value);
+                                onUpdateElement("yKey", value);
+                                if (selectedElement.properties.tableName && selectedElement.properties.xKey) {
+                                  fetchTableData(
+                                    selectedElement.properties.tableName,
+                                    selectedElement.properties.xKey,
+                                    value
+                                  );
+                                }
+                              }}
+                              disabled={!selectedElement.properties.tableName || tableColumns.length === 0}
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder={tableDataLoading ? "Loading columns..." : "Select column"} />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {tableColumns.map((column) => (
+                                  <SelectItem key={column.name} value={column.name}>
+                                    {column.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div>
+                            <Label>Label Column</Label>
+                            <Select
+                              value={selectedElement.properties.nameKey || ""}
+                              onValueChange={(value) => {
+                                onUpdateElement("nameKey", value);
+                                  onUpdateElement("xKey", value);
+                                if (selectedElement.properties.tableName && (selectedElement.properties.valueKey || selectedElement.properties.yKey)) {
+                                  fetchTableData(
+                                    selectedElement.properties.tableName,
+                                    value,
+                                    selectedElement.properties.valueKey || selectedElement.properties.yKey
+                                  );
+                                }
+                              }}
+                              disabled={!selectedElement.properties.tableName || tableColumns.length === 0}
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder={tableDataLoading ? "Loading columns..." : "Select column"} />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {tableColumns.map((column) => (
+                                  <SelectItem key={column.name} value={column.name}>
+                                    {column.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div>
+                            <Label>Value Column</Label>
+                            <Select
+                              value={selectedElement.properties.valueKey || selectedElement.properties.yKey || ""}
+                              onValueChange={(value) => {
+                                onUpdateElement("valueKey", value);
+                                onUpdateElement("yKey", value);
+                                const labelKey = selectedElement.properties.nameKey || selectedElement.properties.xKey;
+                                if (selectedElement.properties.tableName && labelKey) {
+                                  fetchTableData(
+                                    selectedElement.properties.tableName,
+                                    labelKey,
+                                    value
+                                  );
+                                }
+                              }}
+                              disabled={!selectedElement.properties.tableName || tableColumns.length === 0}
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder={tableDataLoading ? "Loading columns..." : "Select column"} />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {tableColumns.map((column) => (
+                                  <SelectItem key={column.name} value={column.name}>
+                                    {column.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    {selectedElement.type === "chart-line" && (
+                      <div className="space-y-2 pt-2 border-t border-dashed border-gray-200 dark:border-gray-700">
+                        <div className="flex items-center space-x-2">
+                          <Switch
+                            checked={selectedElement.properties.showMarkers ?? true}
+                            onCheckedChange={(val) => onUpdateElement("showMarkers", val)}
+                          />
+                          <Label>Show Line Markers</Label>
+                        </div>
+                        <div>
+                          <Label>Line Color</Label>
+                          <Input
+                            type="color"
+                            value={selectedElement.properties.lineColor || "#2563eb"}
+                            onChange={(e) => onUpdateElement("lineColor", e.target.value)}
+                            className="w-16 h-10 p-1 border rounded"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {selectedElement.type === "chart-bar" && (
+                      <div className="space-y-2">
+                        <div>
+                          <Label>Bar Width</Label>
+                          <Input
+                            type="number"
+                            min={4}
+                            max={100}
+                            value={selectedElement.properties.barWidth || ""}
+                            onChange={(e) =>
+                              onUpdateElement(
+                                "barWidth",
+                                e.target.value === "" ? undefined : Number(e.target.value)
+                              )
+                            }
+                            placeholder="Auto"
+                          />
+                        </div>
+                        <div>
+                          <Label>Bar Color</Label>
+                          <Input
+                            type="color"
+                            value={selectedElement.properties.barColor || "#2563eb"}
+                            onChange={(e) => onUpdateElement("barColor", e.target.value)}
+                            className="w-16 h-10 p-1 border rounded"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {(selectedElement.type === "chart-pie" || selectedElement.type === "chart-donut") && (
+                      <div className="flex items-center space-x-2">
+                        <Switch
+                          checked={selectedElement.properties.legend ?? true}
+                          onCheckedChange={(checked) => onUpdateElement("legend", checked)}
+                        />
+                        <Label>Show Legend</Label>
+                      </div>
+                    )}
+
+                    {isPieOrDonut && (
+                      <div className="space-y-2">
+                        <Label>Slice Colors</Label>
+                        <div className="space-y-2">
+                          {resolvedChartColors.map((color, index) => (
+                            <div key={`${index}-${color}`} className="flex items-center gap-2">
+                              <Input
+                                type="color"
+                                value={color}
+                                onChange={(e) => handleSliceColorChange(e.target.value, index)}
+                                className="w-16 h-10 p-1 border rounded"
+                              />
+                              <Input
+                                type="text"
+                                value={color}
+                                onChange={(e) => handleSliceColorChange(e.target.value, index)}
+                                className="flex-1"
+                              />
+                              {resolvedChartColors.length > 2 && (
+                                <Button
+                                  type="button"
+                                  size="icon"
+                                  variant="ghost"
+                                  onClick={() => handleRemoveSliceColor(index)}
+                                  aria-label="Remove color"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </Button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          onClick={handleAddSliceColor}
+                          disabled={resolvedChartColors.length >= 8}
+                        >
+                          Add Color
+                        </Button>
+                      </div>
+                    )}
+
+                    {dataWarning && (
+                      <div className="text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded-md p-2">
+                        {dataWarning}
+                      </div>
+                    )}
+
+                    {/* Chart Title */}
                     <div>
-                      <Label>Fallback Text</Label>
+                      <Label>Chart Title</Label>
                       <Input
                         type="text"
                         value={
-                          selectedElement.properties.fallbackText || "No data"
+                          selectedElement.properties.title || "Monthly Revenue"
                         }
                         onChange={(e) =>
-                          onUpdateElement("fallbackText", e.target.value)
+                          onUpdateElement("title", e.target.value)
                         }
-                        placeholder="No data"
+                        placeholder="Enter chart title..."
                       />
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                        Shown when no data is available
-                      </p>
                     </div>
+
+                    {/* Chart Description */}
+                    <div>
+                      <Label>Description</Label>
+                      <Input
+                        type="text"
+                        value={selectedElement.properties.description || ""}
+                        onChange={(e) =>
+                          onUpdateElement("description", e.target.value)
+                        }
+                        placeholder="Enter description..."
+                      />
+                    </div>
+
+                    {/* Show Header Toggle */}
+                    <div className="flex items-center space-x-2">
+                      <Switch
+                        checked={selectedElement.properties.showHeader ?? true}
+                        onCheckedChange={(checked) =>
+                          onUpdateElement("showHeader", checked)
+                        }
+                      />
+                      <Label>Show Header</Label>
+                    </div>
+
+                    {/* Show Legend Toggle */}
+                    {selectedElement.type !== "chart-pie" && selectedElement.type !== "chart-donut" && (
+                      <div className="flex items-center space-x-2">
+                        <Switch
+                          checked={selectedElement.properties.legend ?? true}
+                          onCheckedChange={(checked) =>
+                            onUpdateElement("legend", checked)
+                          }
+                        />
+                        <Label>Show Legend</Label>
+                      </div>
+                    )}
+
+                    {isLineOrBar && (
+                      <div className="flex items-center space-x-2">
+                        <Switch
+                          checked={selectedElement.properties.showAxis ?? true}
+                          onCheckedChange={(checked) =>
+                            onUpdateElement("showAxis", checked)
+                          }
+                        />
+                        <Label>Show Axes</Label>
+                      </div>
+                    )}
+
+                    {/* Show Grid Toggle */}
+                    <div className="flex items-center space-x-2">
+                      <Switch
+                        checked={selectedElement.properties.showGrid ?? true}
+                        onCheckedChange={(checked) =>
+                          onUpdateElement("showGrid", checked)
+                        }
+                      />
+                      <Label>Show Grid</Label>
+                    </div>
+
+                    {/* Chart Data - JSON input */}
+                   {/* Chart Data - JSON input */}
+<div>
+  <Label>Chart Data (JSON)</Label>
+  <textarea
+    className="w-full p-2 border rounded-md dark:bg-gray-800 dark:border-gray-600 dark:text-gray-100"
+    rows={8}
+    value={
+      selectedElement.properties.data
+        ? JSON.stringify(selectedElement.properties.data, null, 2)
+        : ''
+    }
+    onChange={(e) => {
+      try {
+        const parsedData = JSON.parse(e.target.value);
+        onUpdateElement('data', parsedData);  // ✅ Pass parsed object, not string
+      } catch (error) {
+        // Invalid JSON - you can optionally show error message
+        console.log('Invalid JSON:', error);
+      }
+    }}
+    placeholder='[{"month": "Jan", "desktop": 186, "mobile": 80}]'
+  />
+</div>
+
                   </>
                 )}
               </CardContent>
@@ -3114,157 +3570,15 @@ export function PropertiesPanel({
   };
 
   return (
-    <>
-      <div className="w-80 bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 p-4 overflow-y-auto h-full flex-shrink-0">
-        <div className="space-y-4">
-          {renderGeneralProperties()}
-          {selectedElement
-            ? renderElementProperties()
-            : showCanvasProperties
-            ? renderCanvasProperties()
-            : null}
-        </div>
+    <div className="w-80 bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 p-4 overflow-y-auto h-full flex-shrink-0">
+      <div className="space-y-4">
+        {renderGeneralProperties()}
+        {selectedElement
+          ? renderElementProperties()
+          : showCanvasProperties
+          ? renderCanvasProperties()
+          : null}
       </div>
-
-      {/* Data Binding Examples Modal */}
-      {showExamplesModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
-            <div className="p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
-                  Data Binding Examples
-                </h2>
-                <button
-                  onClick={() => setShowExamplesModal(false)}
-                  className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-                >
-                  <svg
-                    className="w-6 h-6"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M6 18L18 6M6 6l12 12"
-                    />
-                  </svg>
-                </button>
-              </div>
-
-              <div className="space-y-6">
-                {/* Database Query Results */}
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2 flex items-center gap-2">
-                    <Info className="w-5 h-5 text-blue-500" />
-                    Database Query Results (db.find)
-                  </h3>
-                  <div className="bg-gray-50 dark:bg-gray-900 rounded p-4 space-y-2">
-                    <div>
-                      <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                        First item from query:
-                      </p>
-                      <code className="block mt-1 p-2 bg-white dark:bg-gray-800 rounded text-sm text-blue-600 dark:text-blue-400 border border-gray-200 dark:border-gray-700">
-                        dbFindResult[0].fieldName
-                      </code>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                        Example: <code>dbFindResult[0].name</code> or{" "}
-                        <code>dbFindResult[0].price</code>
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                        Second item from query:
-                      </p>
-                      <code className="block mt-1 p-2 bg-white dark:bg-gray-800 rounded text-sm text-blue-600 dark:text-blue-400 border border-gray-200 dark:border-gray-700">
-                        dbFindResult[1].fieldName
-                      </code>
-                    </div>
-                    <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
-                      <p className="text-xs text-gray-600 dark:text-gray-400">
-                        💡 <strong>Tip:</strong> For displaying all items, use a
-                        repeater element instead of Text Display
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Form Inputs */}
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2 flex items-center gap-2">
-                    <Info className="w-5 h-5 text-green-500" />
-                    Form Input Values
-                  </h3>
-                  <div className="bg-gray-50 dark:bg-gray-900 rounded p-4 space-y-2">
-                    <div>
-                      <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                        Get value from form input:
-                      </p>
-                      <code className="block mt-1 p-2 bg-white dark:bg-gray-800 rounded text-sm text-green-600 dark:text-green-400 border border-gray-200 dark:border-gray-700">
-                        formData.inputName
-                      </code>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                        Example: <code>formData.email</code> or{" "}
-                        <code>formData.username</code>
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* URL Parameters */}
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2 flex items-center gap-2">
-                    <Info className="w-5 h-5 text-purple-500" />
-                    URL Parameters
-                  </h3>
-                  <div className="bg-gray-50 dark:bg-gray-900 rounded p-4 space-y-2">
-                    <div>
-                      <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                        Get value from URL parameter:
-                      </p>
-                      <code className="block mt-1 p-2 bg-white dark:bg-gray-800 rounded text-sm text-purple-600 dark:text-purple-400 border border-gray-200 dark:border-gray-700">
-                        urlParams.paramName
-                      </code>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                        Example: <code>urlParams.id</code> or{" "}
-                        <code>urlParams.category</code>
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Common Mistakes */}
-                <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded p-4">
-                  <h3 className="text-sm font-semibold text-yellow-800 dark:text-yellow-200 mb-2">
-                    ⚠️ Common Mistakes to Avoid
-                  </h3>
-                  <ul className="text-xs text-yellow-700 dark:text-yellow-300 space-y-1 list-disc list-inside">
-                    <li>Don't use spaces in binding paths</li>
-                    <li>
-                      Array indices must be numbers: <code>[0]</code> not{" "}
-                      <code>[first]</code>
-                    </li>
-                    <li>Field names are case-sensitive</li>
-                    <li>
-                      Make sure the workflow block has executed before the data
-                      is available
-                    </li>
-                  </ul>
-                </div>
-              </div>
-
-              <div className="mt-6 flex justify-end">
-                <Button onClick={() => setShowExamplesModal(false)}>
-                  Close
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
+    </div>
   );
 }

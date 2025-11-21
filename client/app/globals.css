@@ -153,6 +153,46 @@
   }
 }
 
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+@layer utilities {
+  /* Ultra-thin minimal scrollbar */
+  .custom-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(156, 163, 175, 0.2) transparent; /* Light gray thumb */
+  }
+
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 1px;    /* Super thin */
+    height: 1px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background-color: rgba(156, 163, 175, 0.2); /* Very light gray */
+    border-radius: 9999px;
+    transition: background-color 0.2s ease, opacity 0.2s ease;
+    opacity: 0.5;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(156, 163, 175, 0.5); /* Slightly darker on hover */
+    opacity: 1;
+  }
+}
+
+
 /* Runtime CSS reset for preview mode */
 .runtime-reset * {
   box-sizing: border-box;

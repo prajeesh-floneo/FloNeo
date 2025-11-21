@@ -24,6 +24,7 @@ COPY package*.json ./
 ## will tolerate small mismatches and still produce a working node_modules for
 ## production. We keep the same flags to avoid dev deps and auditing during build.
 RUN npm install --omit=dev --prefer-offline --no-audit
+# RUN npm install --only=production --no-cache --prefer-offline
 
 # Copy source code
 COPY . .

@@ -2,33 +2,25 @@
 
 import React, { useState, useRef } from "react";
 import ReactDOM from "react-dom";
+import { Eye, EyeOff, Download } from "lucide-react";
+import { CanvasElement } from "./ElementManager";
+import { useCanvasWorkflow } from "@/lib/canvas-workflow-context";
+import { toRuntimeStyle, logElementRender } from "@/runtime/styleMap";
+import { normalizeMediaUrl, detectMediaKind } from "@/lib/utils";
+import { TextDisplay } from "./elements/TextDisplay";
+import { getSocket } from "@/lib/socket";
+
+import { ChartElement } from "./ChartElement";
 import {
-  Eye,
-  EyeOff,
-  Download,
-  Minimize2,
-  Maximize2,
+  Minimize,
+  Maximize,
   X,
   Settings,
   RefreshCw,
   Info,
   HelpCircle,
   Search,
-  Plus,
-  Edit,
-  Trash2,
-  Save,
-  Upload,
-  Home,
-  ArrowLeft,
-  Forward,
 } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
-import { CanvasElement } from "./ElementManager";
-import { useCanvasWorkflow } from "@/lib/canvas-workflow-context";
-import { toRuntimeStyle, logElementRender } from "@/runtime/styleMap";
-import { normalizeMediaUrl, detectMediaKind } from "@/lib/utils";
-import { TextDisplay } from "./elements/TextDisplay";
 
 export interface CanvasRendererProps {
   elements: CanvasElement[];
@@ -83,35 +75,18 @@ const resolveMediaThumbnail = (
 
 const resolveMediaMimeType = (element: CanvasElement): string | undefined =>
   element.runtime?.media?.mimeType || element.properties?.mimeType;
-
-const iconComponentMap: Record<string, LucideIcon> = {
-  ICON_MINIMIZE: Minimize2,
-  ICON_MAXIMIZE: Maximize2,
-  ICON_CLOSE: X,
-  ICON_SETTINGS: Settings,
-  ICON_REFRESH: RefreshCw,
-  ICON_INFO: Info,
-  ICON_HELP: HelpCircle,
-  ICON_SEARCH: Search,
-  ICON_ADD: Plus,
-  ICON_EDIT: Edit,
-  ICON_DELETE: Trash2,
-  ICON_SAVE: Save,
-  ICON_DOWNLOAD: Download,
-  ICON_UPLOAD: Upload,
-  ICON_HOME: Home,
-  ICON_BACK: ArrowLeft,
-  ICON_FORWARD: Forward,
+// Icon mapping
+const iconMap: Record<string, React.ComponentType<any>> = {
+  minimize: Minimize,
+  maximize: Maximize,
+  close: X,
+  settings: Settings,
+  refresh: RefreshCw,
+  info: Info,
+  help: HelpCircle,
+  search: Search,
 };
 
-const getIconComponent = (type: string): LucideIcon | null => {
-  if (!type) return null;
-
-  const normalized = type.replace(/-/g, "_").toUpperCase();
-  if (!normalized.startsWith("ICON")) return null;
-
-  return iconComponentMap[normalized] ?? null;
-};
 export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
   elements,
   selectedElement = null,
@@ -164,6 +139,52 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
       (window as any).__canvasFormValues = values;
     }
   }, [values, mode]);
+
+  // Debug: Log workflow context changes
+  React.useEffect(() => {
+    if (mode === "preview") {
+      console.log("🔄 [CANVAS-RENDERER] Workflow context updated:", {
+        contextKeys: Object.keys(workflowContext),
+        fullContext: workflowContext,
+      });
+    }
+  }, [workflowContext, mode]);
+  // Helper function to render icons
+  function renderIcon(
+    iconType: string,
+    size: number = 24,
+    color: string = "#000000",
+    strokeWidth: number = 2
+  ) {
+    // Extract the icon name from types like "icon-close", "ICON_CLOSE", etc.
+    const iconName = iconType
+      .toLowerCase()
+      .replace("icon-", "")
+      .replace("icon_", "");
+
+    const IconComponent = iconMap[iconName];
+
+    if (!IconComponent) {
+      // Fallback for unknown icons
+      return (
+        <div
+          style={{
+            fontSize: size * 0.7,
+            color,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          ?
+        </div>
+      );
+    }
+
+    return (
+      <IconComponent size={size} color={color} strokeWidth={strokeWidth} />
+    );
+  }
 
   // Phase 7: Logging for parity verification
   React.useEffect(() => {
@@ -347,83 +368,6 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
           onDrop: handleDrop,
         }
       : {};
-
-    const iconComponent = getIconComponent(element.type);
-
-    if (iconComponent) {
-      const IconComponent = iconComponent;
-      const iconSize = element.properties?.iconSize || 24;
-      const iconColor = element.properties?.iconColor || "#6b7280";
-      const rawOpacity = element.properties?.iconOpacity;
-      const iconOpacity =
-        rawOpacity === undefined || rawOpacity === null || rawOpacity === ""
-          ? 1
-          : Number(rawOpacity);
-      const iconRotation = element.properties?.iconRotation || 0;
-      const baseBorderWidth = element.properties?.borderWidth || 0;
-      const borderColor = element.properties?.borderColor || "#d1d5db";
-
-      const iconWrapperStyle: React.CSSProperties = {
-        ...interactiveStyle,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        backgroundColor:
-          element.properties?.backgroundColor ??
-          (interactiveStyle.backgroundColor as string) ??
-          "transparent",
-        borderRadius:
-          element.properties?.borderRadius ?? interactiveStyle.borderRadius ?? 0,
-        padding: element.properties?.padding ?? interactiveStyle.padding ?? 0,
-        border:
-          baseBorderWidth > 0
-            ? `${baseBorderWidth}px solid ${borderColor}`
-            : interactiveStyle.border,
-      };
-
-      const iconWrapperProps: React.HTMLAttributes<HTMLDivElement> = {
-        style: iconWrapperStyle,
-        ...dropProps,
-      };
-
-      if (isInPreviewMode && elementHasClickWorkflow) {
-        iconWrapperProps.onClick = handleClick;
-        iconWrapperProps.role = "button";
-        iconWrapperProps.tabIndex = 0;
-        iconWrapperProps.style = {
-          ...iconWrapperProps.style,
-          cursor: "pointer",
-        };
-      } else if (!isInPreviewMode) {
-        iconWrapperProps.onClick = handleClick;
-        iconWrapperProps.onDoubleClick = handleDoubleClick;
-        iconWrapperProps.onMouseDown = handleMouseDown;
-      }
-
-      if (mode === "preview" && elementHasHoverWorkflow) {
-        iconWrapperProps.onMouseEnter = () => onEvent?.(element.id, "hover");
-      }
-
-      if (mode === "preview" && elementHasFocusWorkflow) {
-        iconWrapperProps.onFocus = () => onEvent?.(element.id, "focus");
-        iconWrapperProps.tabIndex = 0;
-      }
-
-      return (
-        <div key={element.id} {...iconWrapperProps}>
-          <IconComponent
-            size={iconSize}
-            color={iconColor}
-            style={{
-              opacity: Number.isFinite(iconOpacity)
-                ? Number(iconOpacity)
-                : 1,
-              transform: `rotate(${iconRotation}deg)`,
-            }}
-          />
-        </div>
-      );
-    }
 
     switch (element.type) {
       case "BUTTON":
@@ -797,6 +741,247 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             <span>{element.properties?.label || "Checkbox"}</span>
           </label>
         );
+      case "chart-bar":
+      case "chart-line":
+      case "chart-pie":
+      case "chart-donut":
+      case "CHART_BAR":
+      case "CHART_LINE":
+      case "CHART_PIE":
+      case "CHART_DONUT":
+      case "KPI_CARD":
+      case "kpi-card":
+      case "TABLE":
+      case "table":
+      case "MATRIX_CHART":
+      case "matrix-chart":
+        return (
+          <div
+            key={element.id}
+            style={interactiveStyle}
+            {...dropProps}
+            onClick={mode === "preview" ? undefined : handleClick}
+            onDoubleClick={isInPreviewMode ? undefined : handleDoubleClick}
+            onMouseDown={isInPreviewMode ? undefined : handleMouseDown}
+          >
+            <ChartElement
+              type={element.type}
+              properties={element.properties}
+              showHeader={element.properties?.showHeader ?? true}
+            />
+          </div>
+        );
+      case "triangle":
+      case "TRIANGLE": {
+        const triangleStrokeColor =
+          element.properties?.borderColor || "transparent";
+        const triangleStrokeWidth = element.properties?.borderWidth || 0;
+        return (
+          <svg
+            key={element.id}
+            width="100%"
+            height="100%"
+            viewBox={`0 0 ${element.width} ${element.height}`}
+            style={{
+              ...interactiveStyle,
+              background: "transparent", // Critical: no background on SVG
+              border: "none", // Critical: no border on SVG
+            }}
+            {...dropProps}
+            onClick={mode === "preview" ? undefined : handleClick}
+            onDoubleClick={isInPreviewMode ? undefined : handleDoubleClick}
+            onMouseDown={isInPreviewMode ? undefined : handleMouseDown}
+          >
+            <polygon
+              points={`${element.width / 2},0 0,${element.height} ${
+                element.width
+              },${element.height}`}
+              fill={element.properties?.backgroundColor || "#ffffff"}
+              stroke={triangleStrokeWidth > 0 ? triangleStrokeColor : "none"}
+              strokeWidth={triangleStrokeWidth}
+              strokeLinejoin="round"
+            />
+          </svg>
+        );
+      }
+
+      case "star":
+      case "STAR": {
+        const starStrokeColor =
+          element.properties?.borderColor || "transparent";
+        const starStrokeWidth = element.properties?.borderWidth || 0;
+        return (
+          <svg
+            key={element.id}
+            width="100%"
+            height="100%"
+            viewBox="0 0 24 24"
+            style={{
+              ...interactiveStyle,
+              background: "transparent",
+              border: "none",
+            }}
+            {...dropProps}
+            onClick={mode === "preview" ? undefined : handleClick}
+            onDoubleClick={isInPreviewMode ? undefined : handleDoubleClick}
+            onMouseDown={isInPreviewMode ? undefined : handleMouseDown}
+          >
+            <path
+              d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"
+              fill={element.properties?.backgroundColor || "#fbbf24"}
+              stroke={starStrokeWidth > 0 ? starStrokeColor : "none"}
+              strokeWidth={starStrokeWidth}
+              strokeLinejoin="round"
+            />
+          </svg>
+        );
+      }
+
+      case "heart":
+      case "HEART": {
+        const heartStrokeColor =
+          element.properties?.borderColor || "transparent";
+        const heartStrokeWidth = element.properties?.borderWidth || 0;
+        return (
+          <svg
+            key={element.id}
+            width="100%"
+            height="100%"
+            viewBox="0 0 24 24"
+            style={{
+              ...interactiveStyle,
+              background: "transparent",
+              border: "none",
+            }}
+            {...dropProps}
+            onClick={mode === "preview" ? undefined : handleClick}
+            onDoubleClick={isInPreviewMode ? undefined : handleDoubleClick}
+            onMouseDown={isInPreviewMode ? undefined : handleMouseDown}
+          >
+            <path
+              d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
+              fill={element.properties?.backgroundColor || "#ef4444"}
+              stroke={heartStrokeWidth > 0 ? heartStrokeColor : "none"}
+              strokeWidth={heartStrokeWidth}
+              strokeLinejoin="round"
+            />
+          </svg>
+        );
+      }
+      case "circle":
+      case "CIRCLE":
+        return (
+          <div
+            key={element.id}
+            style={{
+              ...interactiveStyle,
+              borderRadius: "50%",
+              backgroundColor: element.properties?.backgroundColor || "#ffffff",
+              border: element.properties?.borderWidth
+                ? `${element.properties.borderWidth}px solid ${
+                    element.properties.borderColor || "#d1d5db"
+                  }`
+                : "none",
+            }}
+            className="w-full h-full"
+            {...dropProps}
+            onClick={mode === "preview" ? undefined : handleClick}
+            onDoubleClick={isInPreviewMode ? undefined : handleDoubleClick}
+            onMouseDown={isInPreviewMode ? undefined : handleMouseDown}
+          />
+        );
+      case "arrow":
+      case "ARROW": {
+        const arrowStrokeWidth = element.properties?.strokeWidth || 2;
+        const arrowStrokeColor = element.properties?.strokeColor || "#1f2937";
+        const arrowStrokeStyle = element.properties?.strokeStyle || "solid";
+        const arrowOpacity = element.properties?.strokeOpacity || 1;
+        const arrowHeadSize = element.properties?.arrowHeadSize || 8;
+
+        return (
+          <div
+            key={element.id}
+            className="flex items-center w-full h-full"
+            style={{
+              ...interactiveStyle,
+              opacity: arrowOpacity,
+            }}
+            {...dropProps}
+            onClick={mode === "preview" ? undefined : handleClick}
+            onDoubleClick={isInPreviewMode ? undefined : handleDoubleClick}
+            onMouseDown={isInPreviewMode ? undefined : handleMouseDown}
+          >
+            <div
+              style={{
+                flex: 1,
+                height: `${arrowStrokeWidth}px`,
+                backgroundColor:
+                  arrowStrokeStyle === "solid"
+                    ? arrowStrokeColor
+                    : "transparent",
+                borderStyle:
+                  arrowStrokeStyle === "dashed"
+                    ? "dashed"
+                    : arrowStrokeStyle === "dotted"
+                    ? "dotted"
+                    : "solid",
+                borderWidth:
+                  arrowStrokeStyle !== "solid"
+                    ? `${arrowStrokeWidth}px 0 0 0`
+                    : "0",
+                borderColor:
+                  arrowStrokeStyle !== "solid"
+                    ? arrowStrokeColor
+                    : "transparent",
+              }}
+            />
+            <div
+              style={{
+                width: 0,
+                height: 0,
+                borderLeft: `${arrowHeadSize}px solid ${arrowStrokeColor}`,
+                borderTop: `${arrowHeadSize / 2}px solid transparent`,
+                borderBottom: `${arrowHeadSize / 2}px solid transparent`,
+              }}
+            />
+          </div>
+        );
+      }
+      case "line":
+      case "LINE": {
+        const lineStrokeColor =
+          element.properties?.borderColor ||
+          element.properties?.backgroundColor ||
+          "#000000";
+        const lineStrokeWidth = element.properties?.borderWidth || 2;
+        return (
+          <svg
+            key={element.id}
+            width="100%"
+            height="100%"
+            viewBox={`0 0 ${element.width} ${element.height}`}
+            style={{
+              ...interactiveStyle,
+              background: "transparent",
+              border: "none",
+            }}
+            {...dropProps}
+            onClick={mode === "preview" ? undefined : handleClick}
+            onDoubleClick={isInPreviewMode ? undefined : handleDoubleClick}
+            onMouseDown={isInPreviewMode ? undefined : handleMouseDown}
+          >
+            <line
+              x1="0"
+              y1={element.height / 2}
+              x2={element.width}
+              y2={element.height / 2}
+              stroke={lineStrokeColor}
+              strokeWidth={lineStrokeWidth}
+              strokeLinecap="round"
+            />
+          </svg>
+        );
+      }
 
       case "RADIO_BUTTON":
         return (
@@ -1625,7 +1810,7 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
           <div key={element.id} {...textDisplayProps}>
             <TextDisplay
               element={element}
-              context={workflowContext}
+              context={workflowContext ? { context: workflowContext } : undefined}
               isPreviewMode={isInPreviewMode}
             />
           </div>
@@ -1633,6 +1818,30 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
 
       case "SHAPE":
       default:
+        // Check if this SHAPE has a bindingPath (making it a TEXT_DISPLAY)
+        const hasBindingPath = element.properties?.bindingPath;
+
+        if (hasBindingPath) {
+          // Render as TEXT_DISPLAY
+          const textDisplayShapeProps = elementHasClickWorkflow
+            ? { ...clickableProps, style }
+            : {
+                style,
+                onClick: isInPreviewMode ? undefined : handleClick,
+                onDoubleClick: isInPreviewMode ? undefined : handleDoubleClick,
+                onMouseDown: isInPreviewMode ? undefined : handleMouseDown,
+              };
+          return (
+            <div key={element.id} {...textDisplayShapeProps}>
+              <TextDisplay
+                element={element}
+                context={workflowContext ? { context: workflowContext } : undefined}
+                isPreviewMode={isInPreviewMode}
+              />
+            </div>
+          );
+        }
+
         // Use clickableProps for non-interactive elements with workflows
         const shapeProps = elementHasClickWorkflow
           ? clickableProps
@@ -1672,6 +1881,47 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             }}
           />
         );
+
+      // Add these cases in your switch statement
+      case "icon-minimize":
+      case "icon-maximize":
+      case "icon-close":
+      case "icon-settings":
+      case "icon-refresh":
+      case "icon-info":
+      case "icon-help":
+      case "icon-search":
+      case "ICON_MINIMIZE":
+      case "ICON_MAXIMIZE":
+      case "ICON_CLOSE":
+      case "ICON_SETTINGS":
+      case "ICON_REFRESH":
+      case "ICON_INFO":
+      case "ICON_HELP":
+      case "ICON_SEARCH": {
+        const iconSize = Math.min(element.width, element.height) * 0.6;
+        const iconColor = element.properties?.color || "#000000";
+        const strokeWidth = element.properties?.strokeWidth || 2;
+
+        return (
+          <div
+            key={element.id}
+            style={{
+              ...interactiveStyle,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: mode === "preview" ? "pointer" : "default",
+            }}
+            {...dropProps}
+            onClick={mode === "preview" ? undefined : handleClick}
+            onDoubleClick={isInPreviewMode ? undefined : handleDoubleClick}
+            onMouseDown={isInPreviewMode ? undefined : handleMouseDown}
+          >
+            {renderIcon(element.type, iconSize, iconColor, strokeWidth)}
+          </div>
+        );
+      }
     }
   };
 

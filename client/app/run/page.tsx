@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo, Suspense } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { CanvasRenderer } from "@/components/canvas/CanvasRenderer";
 import { CanvasElement } from "@/components/canvas/ElementManager";
@@ -45,6 +45,24 @@ function normalizeElementType(type: string): string {
     addfile: "FILE_UPLOAD",
     rectangle: "SHAPE",
     text: "TEXT_FIELD",
+    // Icon mappings
+    "icon-minimize": "ICON_MINIMIZE",
+    "icon-maximize": "ICON_MAXIMIZE",
+    "icon-close": "ICON_CLOSE",
+    "icon-settings": "ICON_SETTINGS",
+    "icon-refresh": "ICON_REFRESH",
+    "icon-info": "ICON_INFO",
+    "icon-help": "ICON_HELP",
+    "icon-search": "ICON_SEARCH",
+     // Chart mappings
+    "chart-bar": "CHART_BAR",
+    "chart-line": "CHART_LINE",
+    "chart-pie": "CHART_PIE",
+    "chart-donut": "CHART_DONUT",
+    "kpi-card": "KPI_CARD",
+    "table": "TABLE",
+    "matrix-chart": "MATRIX_CHART",
+
   };
 
   return typeMap[type.toLowerCase()] || type.toUpperCase();
@@ -175,6 +193,9 @@ function RunAppContent() {
   );
   const [loading, setLoading] = useState(true);
   const [pageStack, setPageStack] = useState<string[]>([]); // For goBack() navigation
+  const [workflowContext, setWorkflowContext] = useState<Record<string, any>>(
+    {}
+  ); // Workflow execution context
 
   // Runtime modal state for ui.openModal actions
   const [runtimeModalOpen, setRuntimeModalOpen] = useState(false);
@@ -194,6 +215,9 @@ function RunAppContent() {
 
   const appId = searchParams.get("appId") || "1";
   const pageId = searchParams.get("pageId") || "page-1";
+
+  // Track which pages have already triggered onPageLoad to prevent infinite loops
+  const pageLoadExecutedRef = useRef<Set<string>>(new Set());
 
   // Enhanced authentication check
   useEffect(() => {
@@ -1118,8 +1142,6 @@ function RunAppContent() {
             "[WF-RUN] 📤 Uploading files before workflow execution..."
           );
 
-          const resolvedUploads: Record<string, any> = {};
-
           for (const [elementId, file] of Object.entries(
             initialContext.uploadedFiles
           )) {
@@ -1160,10 +1182,7 @@ function RunAppContent() {
                 uploadResult.files &&
                 uploadResult.files.length > 0
               ) {
-                const uploadedFile = {
-                  ...uploadResult.files[0],
-                  elementId,
-                };
+                const uploadedFile = uploadResult.files[0];
                 console.log(
                   `[WF-RUN] ✅ File uploaded successfully for ${elementId}:`,
                   {
@@ -1176,7 +1195,6 @@ function RunAppContent() {
 
                 // Store the uploaded file data in context with the element ID as key
                 contextWithFiles[elementId] = uploadedFile;
-                resolvedUploads[elementId] = uploadedFile;
                 console.log(
                   `[WF-RUN] ✅ Stored file data in context[${elementId}]`
                 );
@@ -1194,12 +1212,9 @@ function RunAppContent() {
             }
           }
 
-          if (Object.keys(resolvedUploads).length > 0) {
-            contextWithFiles.uploadedFiles = resolvedUploads;
-
-            const uploadList = Object.values(resolvedUploads);
-            contextWithFiles.lastUploadedFile = uploadList[uploadList.length - 1];
-          }
+          // Remove the uploadedFiles from context before sending to backend
+          delete contextWithFiles.uploadedFiles;
+          console.log("[WF-RUN] 📤 Removed uploadedFiles from context");
         }
 
         console.log("[WF-RUN] Context before workflow execution:", {
@@ -1233,7 +1248,87 @@ function RunAppContent() {
         console.log("[WF-RUN] Backend execution completed:", {
           resultsCount: result.results?.length,
           success: result.success,
+          hasResults: !!result.results,
+          isArray: Array.isArray(result.results),
+          hasContext: !!result.context,
+          contextKeys: result.context ? Object.keys(result.context) : [],
         });
+
+        // Update workflow context with results
+        console.log(
+          "[WF-RUN] BEFORE context update check - result.results:",
+          result.results
+        );
+
+        // Start with top-level context from backend (this includes auditLogsFormatted, etc.)
+        const newContext: Record<string, any> = {
+          ...workflowContext,
+          ...(result.context || {}),
+        };
+
+        if (result.context) {
+          console.log(
+            "[WF-RUN] Merged top-level context:",
+            Object.keys(result.context)
+          );
+        }
+
+        if (result.results && Array.isArray(result.results)) {
+          console.log(
+            "[WF-RUN] INSIDE context update block - processing results"
+          );
+
+          for (const resultItem of result.results) {
+            console.log("[WF-RUN] Processing resultItem:", resultItem);
+
+            if (!resultItem.result) {
+              console.log("[WF-RUN] Skipping - no result property");
+              continue;
+            }
+
+            const blockResult = resultItem.result;
+            const nodeLabel = resultItem.nodeLabel || "unknown";
+
+            console.log(`[WF-RUN] Processing result for ${nodeLabel}:`, {
+              success: blockResult.success,
+              type: blockResult.type,
+            });
+
+            // Merge context from block result (this includes auditLogsFormatted, etc.)
+            if (blockResult.context && typeof blockResult.context === "object") {
+              Object.assign(newContext, blockResult.context);
+              console.log(
+                `[WF-RUN] Merged context from ${nodeLabel}:`,
+                Object.keys(blockResult.context)
+              );
+            }
+
+            // Store db.find results in context
+            if (blockResult.type === "dbFind" && blockResult.success) {
+              newContext.dbFindResult = blockResult.data;
+              console.log(
+                "[WF-RUN] Stored dbFindResult in context:",
+                blockResult.data
+              );
+            }
+
+            // Store other results as needed
+            if (blockResult.data) {
+              newContext[nodeLabel] = blockResult.data;
+            }
+          }
+
+          console.log(
+            "[WF-RUN] ABOUT TO CALL setWorkflowContext with:",
+            newContext
+          );
+          setWorkflowContext(newContext);
+          console.log(
+            "[WF-RUN] AFTER setWorkflowContext call - context should be updated"
+          );
+        } else {
+          console.log("[WF-RUN] SKIPPED context update - condition failed");
+        }
 
         // Process results from backend execution
         if (result.results && Array.isArray(result.results)) {
@@ -1362,74 +1457,6 @@ function RunAppContent() {
               });
             }
 
-            if (
-              !blockResult.success &&
-              blockResult.type === "fileUpload"
-            ) {
-              toast({
-                title: "File Upload Failed",
-                description:
-                  blockResult.message ||
-                  "The uploaded file did not meet the configured rules.",
-                variant: "destructive",
-                duration: 5000,
-              });
-            }
-
-            if (
-              blockResult.success &&
-              blockResult.type === "download" &&
-              blockResult.download?.url &&
-              typeof window !== "undefined"
-            ) {
-              const { url, fileName, mimeType } = blockResult.download;
-              console.log("⬇️ [WF-RUN] Starting download:", {
-                url,
-                fileName,
-                mimeType,
-              });
-
-              try {
-                const link = document.createElement("a");
-                link.href = url;
-                if (fileName) {
-                  link.download = fileName;
-                }
-                if (mimeType) {
-                  link.type = mimeType;
-                }
-                link.style.display = "none";
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-
-                toast({
-                  title: "Download starting",
-                  description: fileName
-                    ? `Downloading ${fileName}`
-                    : "Your download is on the way",
-                  duration: 3000,
-                });
-              } catch (downloadError) {
-                console.error(
-                  "❌ [WF-RUN] Failed to trigger browser download:",
-                  downloadError
-                );
-              }
-            }
-
-            if (
-              !blockResult.success &&
-              blockResult.type === "download"
-            ) {
-              toast({
-                title: "Download Failed",
-                description: blockResult.message || "Unable to start download",
-                variant: "destructive",
-                duration: 5000,
-              });
-            }
-
             // Handle AI Summary results
             console.log("🔍 [WF-RUN] Checking AI Summary conditions:", {
               success: blockResult.success,
@@ -1506,7 +1533,7 @@ function RunAppContent() {
         });
       }
     },
-    [appId, navigateTo, goBack, toast]
+    [appId, navigateTo, goBack, toast, workflowContext]
   );
 
   // Handle element click
@@ -1852,7 +1879,7 @@ function RunAppContent() {
     }
   };
 
-  // Trigger onPageLoad workflows when page loads
+  // Trigger onPageLoad workflows when page loads (only once per page)
   useEffect(() => {
     if (!currentPageId || !currentPage || loading) {
       console.log("[PAGE-LOAD] Skipping - page not ready", {
@@ -1861,6 +1888,22 @@ function RunAppContent() {
         loading,
       });
       return;
+    }
+
+    // Check if onPageLoad has already been executed for this page
+    const pageKey = `${currentPageId}-${currentPage.name}`;
+    if (pageLoadExecutedRef.current.has(pageKey)) {
+      console.log(
+        `[PAGE-LOAD] ⏭️ Skipping - onPageLoad already executed for page ${currentPageId}`
+      );
+      return;
+    }
+
+    // Clean up old page keys (keep only last 10 pages to prevent memory leaks)
+    if (pageLoadExecutedRef.current.size > 10) {
+      const keysArray = Array.from(pageLoadExecutedRef.current);
+      const keysToRemove = keysArray.slice(0, keysArray.length - 10);
+      keysToRemove.forEach((key) => pageLoadExecutedRef.current.delete(key));
     }
 
     console.log(
@@ -1882,8 +1925,11 @@ function RunAppContent() {
         `[PAGE-LOAD] ✅ Found ${pageLoadWorkflows.length} onPageLoad workflow(s) for page ${currentPageId}`
       );
 
+      // Mark this page as executed BEFORE running workflows to prevent re-triggering
+      pageLoadExecutedRef.current.add(pageKey);
+
       // Execute each onPageLoad workflow with page context
-  pageLoadWorkflows.forEach((wf: Workflow, index: number) => {
+      pageLoadWorkflows.forEach((wf: Workflow, index: number) => {
         console.log(
           `[PAGE-LOAD] Executing workflow ${index + 1}/${
             pageLoadWorkflows.length
@@ -1902,8 +1948,10 @@ function RunAppContent() {
       console.log(
         `[PAGE-LOAD] ℹ️ No onPageLoad workflows found for page ${currentPageId}`
       );
+      // Mark as executed even if no workflows found to prevent re-checking
+      pageLoadExecutedRef.current.add(pageKey);
     }
-  }, [currentPageId, currentPage, loading, workflowIndex, runWorkflow]);
+  }, [currentPageId, currentPage?.name, loading]); // Removed workflowIndex and runWorkflow from dependencies
 
   // Debug current state
   console.log("🔍 RUN: Render state:", {
@@ -2109,6 +2157,7 @@ function RunAppContent() {
                   currentPage.groups?.filter((g: any) => g.type === "form") ||
                   []
                 }
+                workflowContext={workflowContext}
               />
             </div>
           );
