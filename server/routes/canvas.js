@@ -1413,20 +1413,18 @@ router.get(
                   ORDER BY ordinal_position
                 `);
 
-                // Get sample data
+                // Get sample data (multiple rows for preview)
                 const sampleData = await prisma.$queryRawUnsafe(
-                  `SELECT * FROM "${fullTableName}" LIMIT 1`
+                  `SELECT * FROM "${fullTableName}" ORDER BY id LIMIT 5`
                 );
 
                 const fields = columns.map((col) => {
-                  const sample =
-                    sampleData.length > 0
-                      ? sampleData[0][col.column_name]
-                      : null;
+                  const samples = sampleData.map((row) => row[col.column_name] ?? null);
                   return {
                     name: col.column_name,
                     type: mapPostgresType(col.data_type),
-                    sample: sample,
+                    sample: samples.length > 0 ? samples[0] : null, // First sample for backward compatibility
+                    samples: samples, // Array of samples for index-based preview
                   };
                 });
 
@@ -1519,6 +1517,75 @@ router.get(
         }
       }
 
+      // Add all database tables as data sources
+      let tablesCount = 0;
+      try {
+        const userTables = await prisma.userTable.findMany({
+          where: { appId: parseInt(appId) },
+          orderBy: { createdAt: "desc" },
+        });
+
+        tablesCount = userTables.length;
+        console.log(
+          `🔍 [DATA-DISCOVERY] Found ${tablesCount} database table(s) for app`
+        );
+
+        for (const userTable of userTables) {
+          const tableName = userTable.tableName;
+          
+          try {
+            // Get table columns from information_schema
+            const columns = await prisma.$queryRawUnsafe(`
+              SELECT column_name, data_type
+              FROM information_schema.columns
+              WHERE table_name = '${tableName}'
+              AND column_name NOT IN ('app_id', 'created_at', 'updated_at')
+              ORDER BY ordinal_position
+            `);
+
+            // Get sample data (multiple rows for preview - up to 5 rows)
+            const sampleData = await prisma.$queryRawUnsafe(
+              `SELECT * FROM "${tableName}" ORDER BY id LIMIT 5`
+            );
+
+            // Create fields with samples from multiple rows
+            const fields = columns.map((col) => {
+              // Return array of samples from different rows for preview
+              const samples = sampleData.map((row) => row[col.column_name] ?? null);
+              return {
+                name: col.column_name,
+                type: mapPostgresType(col.data_type),
+                sample: samples.length > 0 ? samples[0] : null, // First sample for backward compatibility
+                samples: samples, // Array of samples for index-based preview
+              };
+            });
+
+            // Extract display name from table name (remove app_ prefix)
+            const displayName = tableName.replace(/^app_\d+_/, "");
+
+            dataSources.push({
+              name: `table_${displayName}`,
+              type: "array",
+              from: `Database table: ${displayName}`,
+              workflowName: "Database",
+              fields: fields,
+              isArray: true,
+              arrayItemType: "object",
+            });
+          } catch (error) {
+            console.warn(
+              `⚠️ [DATA-DISCOVERY] Could not fetch schema for table ${tableName}:`,
+              error.message
+            );
+          }
+        }
+      } catch (error) {
+        console.error(
+          "❌ [DATA-DISCOVERY] Error fetching database tables:",
+          error.message
+        );
+      }
+
       // Add common data sources that are always available
       dataSources.push({
         name: "urlParams",
@@ -1535,8 +1602,9 @@ router.get(
         isArray: false,
       });
 
+      const workflowSourcesCount = dataSources.length - tablesCount - 1; // -1 for urlParams
       console.log(
-        `✅ [DATA-DISCOVERY] Found ${dataSources.length} data source(s)`
+        `✅ [DATA-DISCOVERY] Found ${dataSources.length} data source(s) (${tablesCount} tables + ${workflowSourcesCount} workflow sources + 1 built-in)`
       );
 
       res.json({

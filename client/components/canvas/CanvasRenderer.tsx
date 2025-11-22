@@ -1929,7 +1929,7 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
           <div key={element.id} {...textDisplayProps}>
             <TextDisplay
               element={element}
-              context={workflowContext ? { context: workflowContext } : undefined}
+              context={workflowContext || {}}
               isPreviewMode={isInPreviewMode}
             />
           </div>
@@ -1954,7 +1954,7 @@ export const CanvasRenderer: React.FC<CanvasRendererProps> = ({
             <div key={element.id} {...textDisplayShapeProps}>
               <TextDisplay
                 element={element}
-                context={workflowContext ? { context: workflowContext } : undefined}
+                context={workflowContext || {}}
                 isPreviewMode={isInPreviewMode}
               />
             </div>

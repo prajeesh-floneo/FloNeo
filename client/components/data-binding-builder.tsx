@@ -23,6 +23,7 @@ interface DataSource {
     name: string;
     type: string;
     sample: any;
+    samples?: any[]; // Array of samples for index-based preview
   }>;
   isArray: boolean;
   arrayItemType?: string;
@@ -267,6 +268,15 @@ export function DataBindingBuilder({
     const field = dataSource.fields.find((f) => f.name === segment.field);
     if (!field) return "?";
 
+    // If array index is specified and we have multiple samples, use that index
+    if (dataSource.isArray && segment.arrayIndex !== undefined && field.samples && field.samples.length > segment.arrayIndex) {
+      const sampleValue = field.samples[segment.arrayIndex];
+      if (sampleValue !== null && sampleValue !== undefined) {
+        return String(sampleValue);
+      }
+    }
+
+    // Fallback to first sample or default
     if (field.sample !== null && field.sample !== undefined) {
       return String(field.sample);
     }

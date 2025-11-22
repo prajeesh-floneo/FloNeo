@@ -829,9 +829,14 @@ function RunAppContent() {
           idx.set(pageLoadKey, [...pageLoadExisting, workflow]);
 
           console.log(
-            "[WF-INDEX] OnPageLoad indexed by page:",
+            "[WF-INDEX] ✅ OnPageLoad indexed by page:",
             pageLoadKey,
-            "for onPageLoad trigger"
+            "targetPageId:",
+            targetPageId,
+            "elementId:",
+            elementId,
+            "triggerNode.data:",
+            triggerNode.data
           );
         }
 
@@ -1270,9 +1275,19 @@ function RunAppContent() {
         );
 
         // Start with top-level context from backend (this includes auditLogsFormatted, etc.)
+        // IMPORTANT: Preserve existing table_* keys from previous workflow executions
+        const existingTableKeys: Record<string, any> = {};
+        Object.keys(workflowContext).forEach(key => {
+          if (key.startsWith('table_')) {
+            existingTableKeys[key] = workflowContext[key];
+          }
+        });
+
         const newContext: Record<string, any> = {
           ...workflowContext,
           ...(result.context || {}),
+          // Preserve existing table keys (don't let backend overwrite them)
+          ...existingTableKeys,
         };
 
         if (result.context) {
@@ -1304,20 +1319,78 @@ function RunAppContent() {
             });
 
             // Merge context from block result (this includes auditLogsFormatted, etc.)
+            // BUT preserve existing table_* keys to prevent overwriting
             if (blockResult.context && typeof blockResult.context === "object") {
-              Object.assign(newContext, blockResult.context);
+              // Extract table_* keys from blockResult.context
+              const newTableKeys: Record<string, any> = {};
+              Object.keys(blockResult.context).forEach(key => {
+                if (key.startsWith('table_')) {
+                  newTableKeys[key] = blockResult.context[key];
+                }
+              });
+              
+              // Merge non-table context first
+              Object.keys(blockResult.context).forEach(key => {
+                if (!key.startsWith('table_')) {
+                  newContext[key] = blockResult.context[key];
+                }
+              });
+              
+              // Then merge table keys (this allows multiple tables to coexist)
+              Object.assign(newContext, newTableKeys);
+              
               console.log(
                 `[WF-RUN] Merged context from ${nodeLabel}:`,
-                Object.keys(blockResult.context)
+                Object.keys(blockResult.context),
+                "New table keys:",
+                Object.keys(newTableKeys)
               );
             }
 
             // Store db.find results in context
             if (blockResult.type === "dbFind" && blockResult.success) {
+              // Don't overwrite dbFindResult if it already exists (keep the last one, or make it an array)
+              // For now, keep the last one for backward compatibility
               newContext.dbFindResult = blockResult.data;
+              
+              // Also store as table_<displayName> for data binding compatibility
+              // CRITICAL: Always store/update the specific table key (don't check if exists)
+              // This ensures each table gets its own key and they don't overwrite each other
+              let tableKey = null;
+              
+              if (blockResult.displayName) {
+                tableKey = `table_${blockResult.displayName}`;
+              } else if (blockResult.tableName) {
+                // Fallback: extract display name from tableName (e.g., "app_3_Loan" -> "Loan")
+                const displayName = blockResult.tableName.replace(/^app_\d+_/, "");
+                tableKey = `table_${displayName}`;
+              }
+              
+              if (tableKey) {
+                // Always store/update - this allows multiple tables to coexist
+                newContext[tableKey] = blockResult.data;
+                console.log(
+                  `[WF-RUN] ✅ Stored/Updated ${tableKey} in context:`,
+                  {
+                    type: typeof blockResult.data,
+                    isArray: Array.isArray(blockResult.data),
+                    length: Array.isArray(blockResult.data) ? blockResult.data.length : 'N/A',
+                    firstItem: Array.isArray(blockResult.data) && blockResult.data.length > 0 ? blockResult.data[0] : null,
+                    allTableKeys: Object.keys(newContext).filter(k => k.startsWith('table_')),
+                  }
+                );
+              }
+              
               console.log(
-                "[WF-RUN] Stored dbFindResult in context:",
-                blockResult.data
+                "[WF-RUN] ✅ Stored dbFindResult in context:",
+                {
+                  type: typeof blockResult.data,
+                  isArray: Array.isArray(blockResult.data),
+                  length: Array.isArray(blockResult.data) ? blockResult.data.length : 'N/A',
+                  firstItem: Array.isArray(blockResult.data) && blockResult.data.length > 0 ? blockResult.data[0] : null,
+                  tableKey: tableKey,
+                  allTableKeysInContext: Object.keys(newContext).filter(k => k.startsWith('table_')),
+                }
               );
             }
 
@@ -1809,6 +1882,58 @@ function RunAppContent() {
     );
     console.log("[EVENT] Looking for key:", `${elementId}:${eventType}`);
 
+    // Check if this is a submit button click that should trigger form submission
+    if (eventType === "click") {
+      // Find the clicked element to check if it's a submit button
+      const clickedElement = currentPage?.elements?.find(
+        (elem: CanvasElement) => elem.id === elementId
+      );
+
+      if (
+        clickedElement &&
+        clickedElement.type === "BUTTON" &&
+        clickedElement.properties?.isSubmitButton &&
+        clickedElement.properties?.formGroupId
+      ) {
+        const formGroupId = clickedElement.properties.formGroupId;
+        console.log(
+          `[EVENT] Submit button clicked - converting to form submission for form group: ${formGroupId}`
+        );
+
+        // Collect form data from all form fields in the form group
+        // Use the same pattern as handleElementClick (line 1725-1787)
+        const formData: Record<string, any> = {};
+        const canvasFormValues = (window as any).__canvasFormValues || {};
+        
+        currentPage?.elements?.forEach((elem: CanvasElement) => {
+          if (elem.groupId === formGroupId) {
+            // Get the input value from CanvasRenderer's state, fallback to element properties
+            const inputValue =
+              canvasFormValues[elem.id] ?? elem.properties?.value ?? "";
+            formData[elem.id] = inputValue;
+            console.log(
+              `[EVENT] Collected form data for ${elem.id}: ${inputValue} (from ${
+                canvasFormValues[elem.id] !== undefined ? "canvas" : "properties"
+              })`
+            );
+          }
+        });
+
+        // Convert click event to submit event with formGroupId and formData
+        eventType = "submit";
+        data = {
+          ...data,
+          formGroupId: formGroupId,
+          formData: formData,
+          triggerElement: clickedElement,
+        };
+        console.log(
+          `[EVENT] Converted to submit event with formGroupId: ${formGroupId}, formData keys:`,
+          Object.keys(formData)
+        );
+      }
+    }
+
     // Check workflow index for this element:event combination
     if (
       eventType === "click" ||
@@ -1997,6 +2122,12 @@ function RunAppContent() {
     const pageLoadKey = `page:${currentPageId}:pageLoad` as TriggerKey;
     const pageLoadWorkflows = workflowIndex.get(pageLoadKey);
 
+    console.log(
+      `[PAGE-LOAD] 🔍 Looking for workflows with key: ${pageLoadKey}`,
+      "Available keys:",
+      Array.from(workflowIndex.keys()).filter((k) => k.includes("pageLoad"))
+    );
+
     if (pageLoadWorkflows && pageLoadWorkflows.length > 0) {
       console.log(
         `[PAGE-LOAD] ✅ Found ${pageLoadWorkflows.length} onPageLoad workflow(s) for page ${currentPageId}`
@@ -2008,9 +2139,11 @@ function RunAppContent() {
       // Execute each onPageLoad workflow with page context
       pageLoadWorkflows.forEach((wf: Workflow, index: number) => {
         console.log(
-          `[PAGE-LOAD] Executing workflow ${index + 1}/${
+          `[PAGE-LOAD] 🚀 Executing workflow ${index + 1}/${
             pageLoadWorkflows.length
-          }`
+          }`,
+          "nodes:",
+          wf.nodes.map((n: any) => n.data?.label).join(", ")
         );
         runWorkflow(wf, {
           pageId: currentPageId,
@@ -2023,7 +2156,11 @@ function RunAppContent() {
       });
     } else {
       console.log(
-        `[PAGE-LOAD] ℹ️ No onPageLoad workflows found for page ${currentPageId}`
+        `[PAGE-LOAD] ⚠️ No onPageLoad workflows found for page ${currentPageId}`,
+        "Searched key:",
+        pageLoadKey,
+        "All workflow keys:",
+        Array.from(workflowIndex.keys())
       );
       // Mark as executed even if no workflows found to prevent re-checking
       pageLoadExecutedRef.current.add(pageKey);
@@ -2134,16 +2271,16 @@ function RunAppContent() {
   return (
     <div className="min-h-screen" style={getBackgroundStyle()}>
       {/* Live Preview Header */}
-      <div className="bg-gray-900 text-white px-4 py-2 flex items-center justify-between">
-        <div className="flex items-center space-x-4">
-          <h1 className="text-sm font-medium">
+      <div className="bg-gray-900 text-white px-2 sm:px-4 py-2 sm:py-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-0 sticky top-0 z-50">
+        <div className="flex items-center space-x-2 sm:space-x-4 flex-wrap">
+          <h1 className="text-xs sm:text-sm font-medium">
             🎥 Live App Preview - App {appId}
           </h1>
           <span className="text-xs bg-green-600 px-2 py-1 rounded">
             {currentPage.name || `Page ${currentPageId}`}
           </span>
         </div>
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-1 sm:space-x-2 flex-wrap">
           <button
             onClick={handleTestQuote}
             className="px-2 py-1 text-xs rounded bg-emerald-500 text-white hover:bg-emerald-600"
@@ -2170,7 +2307,7 @@ function RunAppContent() {
       </div>
 
       {/* Runtime Canvas - 1:1 scale, no transforms */}
-      <div className="runtime-reset w-full h-[calc(100vh-56px)] flex items-center justify-center bg-white dark:bg-gray-900 overflow-auto">
+      <div className="runtime-reset w-full min-h-[calc(100vh-64px)] sm:min-h-[calc(100vh-56px)] md:min-h-[calc(100vh-60px)] flex items-center justify-center bg-white dark:bg-gray-900 overflow-auto py-4 sm:py-6 md:py-8 lg:py-10 px-2 sm:px-4 md:px-6 lg:px-8">
         {(() => {
           // Parity verification logs
           const canvasWidth = currentPage?.canvasWidth ?? 960;

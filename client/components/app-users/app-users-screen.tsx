@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { flushSync } from "react-dom";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -67,6 +68,11 @@ export function AppUsersScreen() {
   const [users, setUsers] = useState<AppUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0); // Force re-render key
+  
+  // Ref to prevent multiple simultaneous loadUsers calls
+  const isLoadingRef = useRef(false);
+  const loadUsersTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedUser, setSelectedUser] = useState<AppUser | null>(null);
   
@@ -103,8 +109,25 @@ export function AppUsersScreen() {
   const { toast } = useToast();
 
   const loadUsers = useCallback(async () => {
-    if (!appId) return;
+    if (!appId) {
+      console.warn("⚠️ [APP-USERS] loadUsers called but no appId");
+      return;
+    }
     
+    // Prevent multiple simultaneous calls
+    if (isLoadingRef.current) {
+      console.log("⏸️ [APP-USERS] loadUsers already in progress, skipping duplicate call");
+      return;
+    }
+    
+    // Clear any pending timeout
+    if (loadUsersTimeoutRef.current) {
+      clearTimeout(loadUsersTimeoutRef.current);
+      loadUsersTimeoutRef.current = null;
+    }
+    
+    isLoadingRef.current = true;
+    console.log("🔄🔄🔄 [APP-USERS] loadUsers() called - fetching users for appId:", appId);
     setLoading(true);
     setError(null);
     
@@ -114,23 +137,37 @@ export function AppUsersScreen() {
         throw new Error("Authentication token not found");
       }
 
-      const response = await fetch(`/api/app-users/app/${appId}/list`, {
+      const url = `/api/app-users/app/${appId}/list`;
+      console.log("🔄 [APP-USERS] Fetching from:", url);
+      
+      const response = await fetch(url, {
         method: "GET",
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
+        cache: 'no-store', // Force fresh data
       });
 
       const data = await response.json();
+      console.log("🔄 [APP-USERS] Response received:", data);
 
       if (!response.ok) {
         throw new Error(data.message || "Failed to load users");
       }
 
-      setUsers(data.users || []);
+      const usersList = data.users || [];
+      console.log("✅✅✅ [APP-USERS] Setting users state with", usersList.length, "users");
+      console.log("✅ [APP-USERS] Users data:", usersList);
+      
+      // Force immediate state update and re-render using flushSync
+      flushSync(() => {
+        setUsers([...usersList]);
+        setRefreshKey(prev => prev + 1); // Force component re-render
+      });
+      console.log("✅ [APP-USERS] State updated with new array reference and refresh key - users should now be visible in UI");
     } catch (err) {
-      console.error("❌ [APP-USERS] Error loading users:", err);
+      console.error("❌❌❌ [APP-USERS] Error loading users:", err);
       setError(err instanceof Error ? err.message : "Failed to load users");
       toast({
         title: "Error",
@@ -139,115 +176,167 @@ export function AppUsersScreen() {
       });
     } finally {
       setLoading(false);
+      isLoadingRef.current = false;
+      console.log("🔄 [APP-USERS] loadUsers() completed, loading set to false");
     }
   }, [appId, toast]);
 
-  // Real-time updates via Socket.io - Using window events (same pattern as database screen)
+  // ✅ Initialize socket connection and join app room (EXACTLY like database screen)
   useEffect(() => {
     if (!appId) return;
 
-    // Ensure socket is initialized and join room
-    let socket = getSocket();
-    if (!socket || !socket.connected) {
-      try {
-        socket = initializeSocket();
-      } catch (error) {
-        console.warn("⚠️ [APP-USERS] Could not initialize socket:", error);
-        return;
+    try {
+      const socket = initializeSocket();
+      console.log("✅ [APP-USERS] Socket initialized for app users screen:", socket.id);
+      
+      // Join the app room for real-time app user updates
+      socket.on("connect", () => {
+        socket.emit("database:join-app", Number(appId));
+        console.log("🔄 [APP-USERS] Joined app room for app:", appId);
+      });
+
+      // If already connected, join immediately
+      if (socket.connected) {
+        socket.emit("database:join-app", Number(appId));
+        console.log("🔄 [APP-USERS] Joined app room (already connected):", appId);
       }
+    } catch (err) {
+      console.warn("⚠️ [APP-USERS] Socket initialization failed:", err);
     }
 
-    if (!socket) return;
-
-    // Join app room for receiving events
-    const joinRoom = () => {
+    // Cleanup: leave room on unmount
+    return () => {
+      const socket = getSocket();
       if (socket && socket.connected) {
-        socket.emit("database:join-app", Number(appId));
-        console.log(`✅ [APP-USERS] Joined app room: ${appId}`);
+        socket.emit("database:leave-app", Number(appId));
+        console.log("🔄 [APP-USERS] Left app room for app:", appId);
       }
     };
+  }, [appId]);
 
-    if (socket.connected) {
-      joinRoom();
-    } else {
-      socket.once("connect", joinRoom);
-    }
+  // ✅ Real-time app user updates via window events (EXACTLY like database screen - no socket check)
+  useEffect(() => {
+    if (!appId) return;
 
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-    const DEBOUNCE_DELAY = 100; // Reduced to 100ms for faster updates
+    let toastDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const TOAST_DEBOUNCE_DELAY = 200; // Only debounce toast notifications
 
     // Handle app user events via window events (dispatched by socket.ts)
     const handleUserCreated = (event: CustomEvent) => {
       const data = event.detail;
-      console.log("🟢 [APP-USERS] Window event received (created):", data);
-      if (data.appId?.toString() === appId) {
-        console.log("🟢 [APP-USERS] User created event matched appId:", appId);
-        if (debounceTimer) clearTimeout(debounceTimer);
-        // Call loadUsers immediately, then show toast
-        loadUsers();
-        debounceTimer = setTimeout(() => {
-          toast({
-            title: "User Created",
-            description: `User ${data.user?.email || "new user"} has been created.`,
-          });
-        }, 50);
-      } else {
-        console.log("⚠️ [APP-USERS] Event appId mismatch:", data.appId, "!=", appId);
+      const eventAppId = data.appId?.toString();
+      
+      // Only process events for the current app
+      if (eventAppId && eventAppId !== appId) {
+        return;
       }
+
+      console.log("🟢 [APP-USERS] User created event received:", data);
+      console.log("✅✅✅ [APP-USERS] Processing user created event - calling loadUsers()");
+      
+      // Debounce loadUsers to prevent multiple rapid calls (100ms debounce)
+      if (loadUsersTimeoutRef.current) {
+        clearTimeout(loadUsersTimeoutRef.current);
+      }
+      loadUsersTimeoutRef.current = setTimeout(() => {
+        console.log("🔄 [APP-USERS] Executing loadUsers() after debounce");
+        loadUsers();
+        loadUsersTimeoutRef.current = null;
+      }, 100);
+      
+      // Debounce toast notification only
+      if (toastDebounceTimer) clearTimeout(toastDebounceTimer);
+      toastDebounceTimer = setTimeout(() => {
+        toast({
+          title: "User Created",
+          description: `User ${data.user?.email || "new user"} has been created.`,
+        });
+      }, TOAST_DEBOUNCE_DELAY);
     };
 
     const handleUserUpdated = (event: CustomEvent) => {
       const data = event.detail;
-      console.log("🟢 [APP-USERS] Window event received (updated):", data);
-      if (data.appId?.toString() === appId) {
-        console.log("🟢 [APP-USERS] User updated event matched appId:", appId);
-        if (debounceTimer) clearTimeout(debounceTimer);
-        // Call loadUsers immediately, then show toast
-        loadUsers();
-        debounceTimer = setTimeout(() => {
-          toast({
-            title: "User Updated",
-            description: `User ${data.user?.email || "user"} has been updated.`,
-          });
-        }, 50);
-      } else {
-        console.log("⚠️ [APP-USERS] Event appId mismatch:", data.appId, "!=", appId);
+      const eventAppId = data.appId?.toString();
+      
+      console.log("🔵🔵🔵 [APP-USERS] Window event 'app_user_updated' received:", data);
+      console.log("🔵 [APP-USERS] Event appId:", eventAppId, "Current appId:", appId);
+      
+      // Only process events for the current app
+      if (eventAppId && eventAppId !== appId) {
+        console.log("⚠️ [APP-USERS] Skipping - appId mismatch");
+        return;
       }
+
+      console.log("✅✅✅ [APP-USERS] Processing user updated event - calling loadUsers()");
+      
+      // Debounce loadUsers to prevent multiple rapid calls (100ms debounce)
+      if (loadUsersTimeoutRef.current) {
+        clearTimeout(loadUsersTimeoutRef.current);
+      }
+      loadUsersTimeoutRef.current = setTimeout(() => {
+        console.log("🔄 [APP-USERS] Executing loadUsers() after debounce");
+        loadUsers();
+        loadUsersTimeoutRef.current = null;
+      }, 100);
+      
+      // Debounce toast notification only
+      if (toastDebounceTimer) clearTimeout(toastDebounceTimer);
+      toastDebounceTimer = setTimeout(() => {
+        toast({
+          title: "User Updated",
+          description: `User ${data.user?.email || "user"} has been updated.`,
+        });
+      }, TOAST_DEBOUNCE_DELAY);
     };
 
     const handleUserDeleted = (event: CustomEvent) => {
       const data = event.detail;
-      console.log("🟢 [APP-USERS] Window event received (deleted):", data);
-      if (data.appId?.toString() === appId) {
-        console.log("🟢 [APP-USERS] User deleted event matched appId:", appId);
-        if (debounceTimer) clearTimeout(debounceTimer);
-        // Call loadUsers immediately, then show toast
-        loadUsers();
-        debounceTimer = setTimeout(() => {
-          toast({
-            title: "User Deleted",
-            description: `User ${data.email || "user"} has been deleted.`,
-          });
-        }, 50);
-      } else {
-        console.log("⚠️ [APP-USERS] Event appId mismatch:", data.appId, "!=", appId);
+      const eventAppId = data.appId?.toString();
+      
+      console.log("🔵🔵🔵 [APP-USERS] Window event 'app_user_deleted' received:", data);
+      console.log("🔵 [APP-USERS] Event appId:", eventAppId, "Current appId:", appId);
+      
+      // Only process events for the current app
+      if (eventAppId && eventAppId !== appId) {
+        console.log("⚠️ [APP-USERS] Skipping - appId mismatch");
+        return;
       }
+
+      console.log("✅✅✅ [APP-USERS] Processing user deleted event - calling loadUsers()");
+      
+      // Debounce loadUsers to prevent multiple rapid calls (100ms debounce)
+      if (loadUsersTimeoutRef.current) {
+        clearTimeout(loadUsersTimeoutRef.current);
+      }
+      loadUsersTimeoutRef.current = setTimeout(() => {
+        console.log("🔄 [APP-USERS] Executing loadUsers() after debounce");
+        loadUsers();
+        loadUsersTimeoutRef.current = null;
+      }, 100);
+      
+      // Debounce toast notification only
+      if (toastDebounceTimer) clearTimeout(toastDebounceTimer);
+      toastDebounceTimer = setTimeout(() => {
+        toast({
+          title: "User Deleted",
+          description: `User ${data.email || "user"} has been deleted.`,
+        });
+      }, TOAST_DEBOUNCE_DELAY);
     };
 
-    // Attach window event listeners
+    // Attach window event listeners (ALWAYS, regardless of socket state - like database screen)
     window.addEventListener("app_user_created", handleUserCreated as EventListener);
     window.addEventListener("app_user_updated", handleUserUpdated as EventListener);
     window.addEventListener("app_user_deleted", handleUserDeleted as EventListener);
 
+    console.log("🧩 [APP-USERS] Real-time event listeners registered");
+
     // Cleanup
     return () => {
-      if (debounceTimer) clearTimeout(debounceTimer);
+      if (toastDebounceTimer) clearTimeout(toastDebounceTimer);
       window.removeEventListener("app_user_created", handleUserCreated as EventListener);
       window.removeEventListener("app_user_updated", handleUserUpdated as EventListener);
       window.removeEventListener("app_user_deleted", handleUserDeleted as EventListener);
-      if (socket && socket.connected) {
-        socket.emit("database:leave-app", Number(appId));
-      }
     };
   }, [appId, loadUsers, toast]);
 
@@ -615,7 +704,7 @@ export function AppUsersScreen() {
                   </TableHeader>
                   <TableBody>
                     {filteredUsers.map((user) => (
-                      <TableRow key={user.id}>
+                      <TableRow key={`${user.id}-${refreshKey}`}>
                         <TableCell className="font-medium">{user.email}</TableCell>
                         <TableCell>{user.name || "-"}</TableCell>
                         <TableCell>

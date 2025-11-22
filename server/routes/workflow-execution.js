@@ -2606,12 +2606,18 @@ const executeDbFind = async (node, context, appId, userId) => {
       `✅ [DB-FIND] Query executed successfully. Found ${results.length} rows in ${executionTime}ms`
     );
 
+    // Extract display name from table name (remove app_<appId>_ prefix)
+    // e.g., "app_3_Loan" -> "Loan"
+    const displayName = fullTableName.replace(/^app_\d+_/, "");
+    const tableKey = `table_${displayName}`;
+
     return {
       success: true,
       type: "dbFind",
       data: results,
       count: results.length,
       tableName: fullTableName,
+      displayName: displayName,
       query: {
         conditions,
         orderBy,
@@ -2624,6 +2630,7 @@ const executeDbFind = async (node, context, appId, userId) => {
         ...context,
         dbFindResult: results, // Changed from dbFindResults to dbFindResult (singular) for consistency with frontend
         dbFindCount: results.length,
+        [tableKey]: results, // Also store as table_<displayName> for data binding compatibility
       },
     };
   } catch (error) {

@@ -18,9 +18,11 @@ class SecurityValidator {
     ];
 
     // Dangerous table/column name patterns
+    // Note: Removed "password" from forbidden patterns as it's a legitimate column name
+    // Security is maintained by app-specific table prefixes (app_<appId>_)
     this.dangerousPatterns = [
       /^(pg_|information_schema|sys|mysql|sqlite_)/i,
-      /^(users|admin|password|auth|session|token)/i,
+      /^(users|admin|auth|session|token)$/i, // Only block exact matches, not prefixes
       /(drop|delete|truncate|alter|create)/i
     ];
 

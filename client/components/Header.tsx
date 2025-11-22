@@ -21,9 +21,11 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ThemeToggle } from "@/components/theme-toggle";
 import Image from "next/image";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useCanvasWorkflow } from "@/lib/canvas-workflow-context";
 import { PublishModal } from "./publish-modal";
+import { authenticatedFetch } from "@/lib/auth";
+import { useToast } from "@/components/ui/use-toast";
 
 
 export function WorkflowHeader({
@@ -35,12 +37,47 @@ export function WorkflowHeader({
   const [appName, setAppName] = useState("Untitled App");
   const [isEditingName, setIsEditingName] = useState(false);
   const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
+  const [isSavingName, setIsSavingName] = useState(false);
   // const [currentPage, setCurrentPage] = useState<string | null>(null);
   const [splitButtonName, setSplitButtonName] = useState("");
+  const originalNameRef = useRef<string>(""); // Store original name to detect changes
 
   const currentAppId = searchParams.get("appId") || "1";
+  const { toast } = useToast();
 
   const { saveCanvasWorkflow } = useCanvasWorkflow();
+
+  // Fetch app name when appId changes or on focus (to catch updates from other tabs/windows)
+  useEffect(() => {
+    const fetchAppName = async () => {
+      if (!currentAppId) return;
+      
+      try {
+        const response = await authenticatedFetch(`/api/apps/${currentAppId}`, {
+          cache: 'no-store', // Always fetch fresh data
+        });
+        const data = await response.json();
+        
+        if (data.success && data.app) {
+          const name = data.app.name || "Untitled App";
+          setAppName(name);
+          originalNameRef.current = name;
+        }
+      } catch (error) {
+        console.error("❌ [HEADER] Failed to fetch app name:", error);
+      }
+    };
+
+    fetchAppName();
+    
+    // Refetch on window focus to catch updates from other tabs
+    const handleFocus = () => {
+      fetchAppName();
+    };
+    
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [currentAppId]);
 
   useEffect(() => {
     if (pathname.includes("split-view")) {
@@ -51,6 +88,57 @@ export function WorkflowHeader({
   }, [pathname]);
 
   console.log("pathname", pathname);
+
+  // Save app name when editing is finished
+  const handleSaveName = async () => {
+    if (!currentAppId) return;
+    
+    const newName = appName.trim();
+    if (!newName) {
+      setAppName(originalNameRef.current); // Restore original if empty
+      setIsEditingName(false);
+      return;
+    }
+
+    // Don't save if name hasn't changed
+    if (newName === originalNameRef.current) {
+      setIsEditingName(false);
+      return;
+    }
+
+    setIsSavingName(true);
+    try {
+      const response = await authenticatedFetch(`/api/apps/${currentAppId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName }),
+      });
+
+      const data = await response.json();
+      if (!data.success) {
+        throw new Error(data.message || "Failed to rename app");
+      }
+
+      originalNameRef.current = newName;
+      setAppName(newName); // Update immediately
+      toast({
+        title: "App renamed",
+        description: `App renamed to "${newName}"`,
+      });
+    } catch (error: any) {
+      console.error("❌ [HEADER] Failed to save app name:", error);
+      // Restore original name on error
+      setAppName(originalNameRef.current);
+      toast({
+        title: "Error",
+        description: error?.message || "Failed to rename app",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSavingName(false);
+      setIsEditingName(false);
+    }
+  };
 
   const handleClick = () => {
     if(splitButtonName === "Split Screen") {
@@ -84,15 +172,28 @@ export function WorkflowHeader({
                 type="text"
                 value={appName}
                 onChange={(e) => setAppName(e.target.value)}
-                onBlur={() => setIsEditingName(false)}
-                onKeyDown={(e) => e.key === "Enter" && setIsEditingName(false)}
-                className="text-lg font-semibold bg-transparent border-none outline-none dark:text-gray-100"
+                onBlur={handleSaveName}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleSaveName();
+                  } else if (e.key === "Escape") {
+                    setAppName(originalNameRef.current);
+                    setIsEditingName(false);
+                  }
+                }}
+                disabled={isSavingName}
+                className="text-lg font-semibold bg-transparent border-none outline-none dark:text-gray-100 min-w-[200px]"
                 autoFocus
               />
             ) : (
               <h1
-                className="text-lg font-semibold cursor-pointer dark:text-gray-100"
-                onClick={() => setIsEditingName(true)}
+                className="text-lg font-semibold cursor-pointer dark:text-gray-100 hover:opacity-80 transition-opacity"
+                onClick={() => {
+                  originalNameRef.current = appName;
+                  setIsEditingName(true);
+                }}
+                title="Click to edit app name"
               >
                 {appName}
               </h1>

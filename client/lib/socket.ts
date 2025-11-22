@@ -199,6 +199,8 @@ const registerSocketListeners = (socket: Socket) => {
   socket.off("app-user:created");
   socket.off("app-user:updated");
   socket.off("app-user:deleted");
+  
+  console.log("🔧 [SOCKET] Registering app-user event listeners");
 
   // 🔥 Real-time database events - Match backend event names
   socket.on("database:data-updated", (payload) => {
@@ -236,27 +238,41 @@ const registerSocketListeners = (socket: Socket) => {
     );
   });
 
-  // App User events - dispatch as window events
+  // App User events - dispatch as window events (CRITICAL: Must be registered)
   socket.on("app-user:created", (payload) => {
-    console.log("🟢 [SOCKET] App User Created:", payload);
-    window.dispatchEvent(
-      new CustomEvent("app_user_created", { detail: payload })
-    );
+    console.log("🟢🟢🟢 [SOCKET] App User Created event received:", JSON.stringify(payload, null, 2));
+    try {
+      const event = new CustomEvent("app_user_created", { detail: payload });
+      window.dispatchEvent(event);
+      console.log("✅✅✅ [SOCKET] Window event 'app_user_created' dispatched successfully");
+    } catch (e) {
+      console.error("❌❌❌ [SOCKET] Error dispatching app_user_created:", e);
+    }
   });
 
   socket.on("app-user:updated", (payload) => {
-    console.log("🟢 [SOCKET] App User Updated:", payload);
-    window.dispatchEvent(
-      new CustomEvent("app_user_updated", { detail: payload })
-    );
+    console.log("🟢🟢🟢 [SOCKET] App User Updated event received:", JSON.stringify(payload, null, 2));
+    try {
+      const event = new CustomEvent("app_user_updated", { detail: payload });
+      window.dispatchEvent(event);
+      console.log("✅✅✅ [SOCKET] Window event 'app_user_updated' dispatched successfully");
+    } catch (e) {
+      console.error("❌❌❌ [SOCKET] Error dispatching app_user_updated:", e);
+    }
   });
 
   socket.on("app-user:deleted", (payload) => {
-    console.log("🟢 [SOCKET] App User Deleted:", payload);
-    window.dispatchEvent(
-      new CustomEvent("app_user_deleted", { detail: payload })
-    );
+    console.log("🟢🟢🟢 [SOCKET] App User Deleted event received:", JSON.stringify(payload, null, 2));
+    try {
+      const event = new CustomEvent("app_user_deleted", { detail: payload });
+      window.dispatchEvent(event);
+      console.log("✅✅✅ [SOCKET] Window event 'app_user_deleted' dispatched successfully");
+    } catch (e) {
+      console.error("❌❌❌ [SOCKET] Error dispatching app_user_deleted:", e);
+    }
   });
+  
+  console.log("✅ [SOCKET] App-user event listeners registered successfully");
 };
 
 export const initializeSocket = (): Socket => {
